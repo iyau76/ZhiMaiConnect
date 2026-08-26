@@ -1,0 +1,400 @@
+import { Loader2, Plus, Sparkles, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  addTemplateField,
+  loadTemplate,
+  removeTemplateField,
+  type CustomField,
+} from "@/lib/card-template";
+import { PhotoNotes } from "@/components/photo-notes";
+import { facesDb, type PersonProfile, type PersonRecord, type PhotoNote } from "@/lib/face-db";
+import { askModel } from "@/lib/vision-client";
+import type { ProviderPreset } from "@/lib/vision-providers";
+import { t } from "@/lib/i18n";
+import { PRESET_TAGS, autoTagsOf } from "@/lib/circle-tags";
+
+interface Props {
+  person: PersonRecord | null;
+  preset: ProviderPreset;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}
+
+const EXTRACT_PROMPT = `你是个人人脉助手。用户会给你一段关于身边某个人的自由描述，请整理成 JSON。
+只输出 JSON，不要任何解释、不要代码块标记。字段如下（没有信息就省略该字段，不要编造）：
+{"age":"年龄","gender":"性别","birthday":"生日 MM-DD 或 YYYY-MM-DD","circle":"圈子：家人/亲戚/朋友/同学/同事/邻居/其它","closeness":3,"relation":"和我的关系，如大学同学","likes":["喜好1","喜好2"],"dislikes":["忌口或不喜欢"],"gifts":["以前送过的礼物"],"metAt":"在哪认识的","title":"职业/职位","org":"单位/学校","tags":["简短标签"],"contact":"联系方式","address":"常住地","note":"其它补充说明，一句话","extra":{"自定义字段名":"值"}}`;
+
+function parseJson(text: string) {
+  const cleaned = text
+    .replace(/^\s*```(?:json)?/i, "")
+    .replace(/```\s*$/, "")
+    .trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error(t("AI 没有返回可解析的资料"));
+  return JSON.parse(cleaned.slice(start, end + 1)) as PersonProfile & { note?: string };
+}
+
+const toList = (value: unknown) =>
+  Array.isArray(value) ? value.map(String).filter(Boolean) : undefined;
+
+export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props) {
+  const [raw, setRaw] = useState("");
+  const [profile, setProfile] = useState<PersonProfile>({});
+  const [note, setNote] = useState("");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [template, setTemplate] = useState<CustomField[]>([]);
+  const [newField, setNewField] = useState("");
+  const [photos, setPhotos] = useState<PhotoNote[]>([]);
+
+  useEffect(() => {
+    if (!person) return;
+    setRaw(person.rawProfileText ?? "");
+    setProfile(person.profile ?? {});
+    setNote(person.note ?? "");
+    setName(person.name);
+    setPhotos(person.photos ?? []);
+    setTemplate(loadTemplate());
+  }, [person]);
+
+  const organize = async () => {
+    const text = raw.trim();
+    if (!text) {
+      toast.error(t("先写一段关于 TA 的描述"));
+      return;
+    }
+    setBusy(true);
+    let buffer = "";
+    try {
+      await askModel(
+        preset,
+        `${EXTRACT_PROMPT}\n\n姓名：${name}\n描述：${text}`,
+        null,
+        [],
+        (chunk) => {
+          buffer += chunk;
+        },
+        new AbortController().signal,
+      );
+      const parsed = parseJson(buffer);
+      const str = (value: unknown) => (value ? String(value) : undefined);
+      setProfile((prev) => ({
+        ...prev,
+        age: str(parsed.age) ?? prev.age,
+        gender: str(parsed.gender) ?? prev.gender,
+        relation: str(parsed.relation) ?? prev.relation,
+        birthday: str(parsed.birthday) ?? prev.birthday,
+        circle: str(parsed.circle) ?? prev.circle,
+        closeness:
+          typeof parsed.closeness === "number" ? parsed.closeness : prev.closeness,
+        likes: toList(parsed.likes) ?? prev.likes,
+        dislikes: toList(parsed.dislikes) ?? prev.dislikes,
+        gifts: toList(parsed.gifts) ?? prev.gifts,
+        metAt: str(parsed.metAt) ?? prev.metAt,
+        title: str(parsed.title) ?? prev.title,
+        org: str(parsed.org) ?? prev.org,
+        address: str(parsed.address) ?? prev.address,
+        tags: toList(parsed.tags) ?? prev.tags,
+        contact: str(parsed.contact) ?? prev.contact,
+        extra:
+          parsed.extra && typeof parsed.extra === "object"
+            ? {
+                ...(prev.extra ?? {}),
+                ...Object.fromEntries(
+                  Object.entries(parsed.extra).map(([key, value]) => [key, String(value)]),
+                ),
+              }
+            : prev.extra,
+      }));
+      if (parsed.note) setNote(String(parsed.note));
+      toast.success(t("AI 已整理好，可再手动微调"));
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = async () => {
+    if (!person) return;
+    setSaving(true);
+    try {
+      await facesDb.putPerson({
+        ...person,
+        name: name.trim() || person.name,
+        note,
+        profile,
+        rawProfileText: raw,
+        photos,
+      });
+      await onSaved();
+      toast.success(t("资料已保存"));
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /** 标签分组：手填的标签 + 从档案文字自动识别的固定身份 */
+  const manualTags = (profile.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
+  const autoTags = autoTagsOf({ ...(person ?? ({} as PersonRecord)), note, profile });
+  const allTags = [...new Set([...manualTags, ...autoTags])];
+
+  /** 点一下加/去标签；自动识别出来的取消后写入排除，不再显示 */
+  const toggleTag = (label: string) => {
+    setProfile((prev) => {
+      const list = (prev.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
+      const on = list.includes(label);
+      return { ...prev, tags: on ? list.filter((tag) => tag !== label) : [...list, label] };
+    });
+  };
+
+
+  const field = (key: keyof PersonProfile, label: string) => (
+    <div className="space-y-1.5">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Input
+        value={(profile[key] as string) ?? ""}
+        onChange={(event) => setProfile((prev) => ({ ...prev, [key]: event.target.value }))}
+        className="h-8 text-xs"
+      />
+    </div>
+  );
+
+  const listField = (
+    key: "projects" | "tags" | "likes" | "dislikes" | "gifts",
+    label: string,
+  ) => (
+    <div className="space-y-1.5">
+      <Label className="text-xs text-muted-foreground">{label}（逗号分隔）</Label>
+      <Input
+        value={(profile[key] ?? []).join("、")}
+        onChange={(event) =>
+          setProfile((prev) => ({
+            ...prev,
+            [key]: event.target.value
+              .split(/[、,，]/)
+              .map((item) => item.trim())
+              .filter(Boolean),
+          }))
+        }
+        className="h-8 text-xs"
+      />
+    </div>
+  );
+
+  const extraField = (key: string, removable: boolean) => (
+    <div key={key} className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <Label className="truncate text-xs text-muted-foreground">{key}</Label>
+        {removable && (
+          <button
+            type="button"
+            title={t("从模板删除该栏")}
+            className="text-muted-foreground transition-colors hover:text-destructive"
+            onClick={() => setTemplate(removeTemplateField(key))}
+          >
+            <X className="size-3" aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      <Input
+        value={profile.extra?.[key] ?? ""}
+        onChange={(event) =>
+          setProfile((prev) => ({
+            ...prev,
+            extra: { ...(prev.extra ?? {}), [key]: event.target.value },
+          }))
+        }
+        className="h-8 text-xs"
+      />
+    </div>
+  );
+
+  return (
+    <Dialog open={!!person} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{t("编辑人员资料")}</DialogTitle>
+          <DialogDescription>{t("写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、圈子、喜好、送礼记录等字段。")}</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">{t("姓名")}</Label>
+            <Input value={name} onChange={(event) => setName(event.target.value)} className="h-8 text-xs" />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">{t("随便写一段（AI 会整理）")}</Label>
+            <Textarea
+              value={raw}
+              onChange={(event) => setRaw(event.target.value)}
+              rows={4}
+              placeholder={t("例如：张伟，我大学室友，3 月 12 日生日，爱打篮球、怕辣，现在在杭州做产品经理，去年生日送过他一副耳机。")}
+              className="text-xs"
+            />
+            <Button size="sm" variant="outline" onClick={() => void organize()} disabled={busy}>
+              {busy ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Sparkles className="size-3.5" aria-hidden="true" />
+              )}
+              {t("AI 自动整理")}
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {field("birthday", t("生日（MM-DD）"))}
+            {field("circle", t("圈子"))}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">{t("亲密度 1-5")}</Label>
+              <Input
+                type="number"
+                min={1}
+                max={5}
+                value={profile.closeness ?? ""}
+                onChange={(event) =>
+                  setProfile((prev) => ({
+                    ...prev,
+                    closeness: event.target.value ? Number(event.target.value) : undefined,
+                  }))
+                }
+                className="h-8 text-xs"
+              />
+            </div>
+            {field("relation", t("和我的关系"))}
+            {field("metAt", t("在哪认识的"))}
+            {field("contact", t("联系方式"))}
+            {field("title", t("职业 / 职位"))}
+            {field("org", t("单位 / 学校"))}
+            {field("address", t("常住地"))}
+            {field("age", t("年龄"))}
+            {field("gender", t("性别"))}
+            {listField("likes", t("喜好"))}
+            {listField("dislikes", t("忌口 / 不喜欢"))}
+            {listField("gifts", t("送礼记录"))}
+          </div>
+
+          <div className="space-y-2 rounded-lg border border-border p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs text-muted-foreground">{t("标签分组")}</Label>
+              {allTags.length === 0 && (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                  {t("未分组")}
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {t("固定身份（同学、同事、老师、亲戚等）会自动识别；朋友这类会变的关系需要自己点。")}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {PRESET_TAGS.map((raw) => {
+                const label = t(raw);
+                const auto = autoTags.includes(label);
+                const on = manualTags.includes(label) || auto;
+                return (
+                  <button
+                    key={raw}
+                    type="button"
+                    onClick={() => toggleTag(label)}
+                    title={auto ? t("自动识别") : undefined}
+                    className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                      on
+                        ? "border-primary bg-primary/10 text-foreground"
+                        : "border-border text-muted-foreground hover:bg-accent/50"
+                    }`}
+                  >
+                    {label}
+                    {auto && <span className="ml-1 text-primary">·{t("自动")}</span>}
+                  </button>
+                );
+              })}
+            </div>
+            {listField("tags", t("其它标签"))}
+          </div>
+
+
+
+          <div className="space-y-2 rounded-lg border border-border p-2.5">
+            <p className="text-xs text-muted-foreground">{t("自定义栏位（对所有人物卡生效）")}</p>
+            <div className="grid grid-cols-2 gap-3">
+              {template.map((item) => extraField(item.name, true))}
+              {Object.keys(profile.extra ?? {})
+                .filter((key) => !template.some((item) => item.name === key))
+                .map((key) => extraField(key, false))}
+            </div>
+            <div className="flex gap-2">
+              <Input
+                value={newField}
+                onChange={(event) => setNewField(event.target.value)}
+                placeholder={t("新栏位名称，如分管条线")}
+                className="h-8 text-xs"
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  if (!newField.trim()) return;
+                  setTemplate(addTemplateField(newField));
+                  setNewField("");
+                }}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                onClick={() => {
+                  if (!newField.trim()) {
+                    toast.error(t("先填栏位名称"));
+                    return;
+                  }
+                  setTemplate(addTemplateField(newField));
+                  setNewField("");
+                }}
+              >
+                <Plus className="size-3.5" aria-hidden="true" />
+                {t("添加栏位")}
+              </Button>
+            </div>
+          </div>
+
+
+          <PhotoNotes photos={photos} onChange={setPhotos} />
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">{t("备注")}</Label>
+            <Textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              rows={2}
+              className="text-xs"
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>{t("取消")}</Button>
+          <Button onClick={() => void save()} disabled={saving}>
+            {saving && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+            {t("保存")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
