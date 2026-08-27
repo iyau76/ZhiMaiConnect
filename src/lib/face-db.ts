@@ -236,6 +236,8 @@ export interface LifeEventRecord {
   /** 图片备注 */
   photos?: PhotoNote[];
   createdAt: number;
+  /** 最近一次人工编辑或确认更新时间；旧数据缺省回退到 createdAt。 */
+  updatedAt?: number;
   source?: Provenance;
 }
 

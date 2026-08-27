@@ -1,6 +1,15 @@
 /** 个人版：日历 —— 记得住的写到天，记不清的记到月/年或一段时间，都在时间轴上排好 */
 
-import { CalendarDays, ChevronLeft, ChevronRight, ListTree, Plus, Trash2 } from "lucide-react";
+import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  ListTree,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { PhotoNotes } from "@/components/photo-notes";
@@ -56,6 +65,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
 
   const [withIds, setWithIds] = useState<string[]>([]);
   const [photos, setPhotos] = useState<PhotoNote[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [p, e] = await Promise.all([facesDb.listPersons(), facesDb.listLifeEvents()]);
@@ -136,8 +146,31 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
 
   const [saving, setSaving] = useState(false);
 
+  const resetForm = () => {
+    setEditingId(null);
+    setTitle("");
+    setWithIds([]);
+    setPhotos([]);
+    setFuzzyText("");
+    setFuzzyHint("");
+  };
+
+  const edit = (event: LifeEventRecord) => {
+    setEditingId(event.id);
+    setPrecision(precisionOf(event) === "day" ? "day" : "month");
+    setSelected(event.date);
+    setYear(Number(event.date.slice(0, 4)));
+    setMonth(Number(event.date.slice(5, 7)) - 1);
+    setFuzzyText(precisionOf(event) === "day" ? "" : formatFuzzy(event));
+    setFuzzyHint("");
+    setTitle([event.title, event.detail].filter(Boolean).join("\n"));
+    setWithIds(event.personIds ?? []);
+    setPhotos(event.photos ?? []);
+  };
+
   const add = async () => {
     if (!title.trim() || saving) return;
+    const previous = editingId ? events.find((event) => event.id === editingId) : undefined;
     let date = selected;
     let dateEnd: string | undefined;
     let stored: DatePrecision = precision;
@@ -149,7 +182,14 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
         return;
       }
       setSaving(true);
-      let parsed = parseFuzzyLocal(text);
+      let parsed =
+        previous && text === formatFuzzy(previous)
+          ? {
+              date: previous.date,
+              dateEnd: previous.dateEnd,
+              precision: precisionOf(previous),
+            }
+          : parseFuzzyLocal(text);
       if (!parsed && preset) {
         // 本地猜不出来的说法交给 AI 理解
         try {
@@ -177,7 +217,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
     const body = rest.join("\n").trim();
 
     await facesDb.putLifeEvent({
-      id: crypto.randomUUID(),
+      id: previous?.id ?? crypto.randomUUID(),
       date,
       dateEnd,
       precision: stored,
@@ -185,13 +225,11 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
       detail: body || undefined,
       personIds: withIds,
       photos: photos.length ? photos : undefined,
-      createdAt: Date.now(),
+      createdAt: previous?.createdAt ?? Date.now(),
+      updatedAt: previous ? Date.now() : undefined,
+      source: previous?.source,
     });
-    setTitle("");
-    setWithIds([]);
-    setPhotos([]);
-    setFuzzyText("");
-    setFuzzyHint("");
+    resetForm();
     await load();
   };
 
@@ -247,14 +285,24 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
           <p className="mt-1 text-[11px] text-muted-foreground">和：{names(event.personIds)}</p>
         )}
       </div>
-      <button
-        type="button"
-        onClick={() => void remove(event.id)}
-        aria-label={t("删除")}
-        className="text-muted-foreground transition-colors hover:text-destructive"
-      >
-        <Trash2 className="size-3.5" aria-hidden="true" />
-      </button>
+      <div className="flex shrink-0 gap-1">
+        <button
+          type="button"
+          onClick={() => edit(event)}
+          aria-label={t("编辑事件")}
+          className="text-muted-foreground transition-colors hover:text-primary"
+        >
+          <Pencil className="size-3.5" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          onClick={() => void remove(event.id)}
+          aria-label={t("删除")}
+          className="text-muted-foreground transition-colors hover:text-destructive"
+        >
+          <Trash2 className="size-3.5" aria-hidden="true" />
+        </button>
+      </div>
     </li>
   );
 
@@ -400,7 +448,15 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
       )}
 
       <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
-        <h3 className="text-sm font-medium">记一件事</h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">{editingId ? "编辑这件事" : "记一件事"}</h3>
+          {editingId && (
+            <Button size="sm" variant="ghost" onClick={resetForm}>
+              <X className="size-3.5" aria-hidden="true" />
+              取消编辑
+            </Button>
+          )}
+        </div>
         <p className="mt-1 text-xs text-muted-foreground">
           记不清哪天没关系，选「不记得具体哪天」，随手写句「去年夏天」，AI 会自己放到时间轴上。
         </p>
@@ -499,7 +555,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
           <div className="flex justify-end">
             <Button onClick={() => void add()} disabled={!title.trim() || saving}>
               <Plus className="size-4" aria-hidden="true" />
-              {saving ? "整理中…" : "记下来"}
+              {saving ? "整理中…" : editingId ? "保存修改" : "记下来"}
             </Button>
           </div>
         </div>

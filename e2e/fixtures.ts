@@ -47,6 +47,29 @@ function visionReply(body: Record<string, unknown>) {
   if (body.action === "test") return "连接正常";
   const prompt = typeof body.prompt === "string" ? body.prompt : "";
   if (prompt.includes("结构化 JSON") || prompt.includes("structured JSON")) {
+    if (prompt.includes("团队聚餐改到 9 月 2 日")) {
+      if (!prompt.includes('"tool":"search_events"')) {
+        return JSON.stringify({
+          type: "tool",
+          summary: "先查找已录入的聚餐事件",
+          tool: "search_events",
+          args: { query: "团队聚餐" },
+        });
+      }
+      if (!prompt.includes('"tool":"stage_event_update"')) {
+        return JSON.stringify({
+          type: "tool",
+          summary: "暂存日期修改，等待用户确认",
+          tool: "stage_event_update",
+          args: { eventId: "event-update-agent", changes: { date: "2026-09-02" } },
+        });
+      }
+      return JSON.stringify({
+        type: "final",
+        summary: "事件更新已暂存",
+        draft: { summary: "将已有团队聚餐调整到 9 月 2 日。" },
+      });
+    }
     return JSON.stringify(intakeDraft);
   }
   if (prompt.includes("以下候选及排序由本地确定性规则产生")) {
@@ -87,6 +110,18 @@ function visionReply(body: Record<string, unknown>) {
     });
   }
   if (prompt.includes("通用问答智能体")) {
+    if (prompt.includes("把合成测试人物的职位改成品牌总监")) {
+      return JSON.stringify({
+        type: "tool",
+        summary: "准备职位修改提案",
+        tool: "update_person",
+        args: {
+          personId: "person-update-agent",
+          reason: "用户明确要求修改职位",
+          changes: { title: "品牌总监" },
+        },
+      });
+    }
     if (!prompt.includes('"call":{"tool":"search_web"')) {
       return JSON.stringify({
         type: "tool",

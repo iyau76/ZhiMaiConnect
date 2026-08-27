@@ -1,4 +1,4 @@
-import { facesDb, type PersonRecord } from "./face-db";
+import { facesDb, type LifeEventRecord, type PersonRecord } from "./face-db";
 
 export interface IntakeUndoBatch {
   id: string;
@@ -10,6 +10,8 @@ export interface IntakeUndoBatch {
   createdReminderIds: string[];
   /** Only structured records that existed before the intake are retained. */
   previousPeople: PersonRecord[];
+  /** Events overwritten by an approved update, kept for one-step rollback. */
+  previousEvents?: LifeEventRecord[];
 }
 
 let latestBatch: IntakeUndoBatch | null = null;
@@ -44,6 +46,7 @@ export async function undoLatestIntakeBatch(): Promise<IntakeUndoBatch | null> {
   await Promise.all(batch.createdReminderIds.map((id) => facesDb.deleteReminder(id)));
   await Promise.all(batch.createdPersonIds.map((id) => facesDb.deletePerson(id)));
   await Promise.all(batch.previousPeople.map((person) => facesDb.putPerson(person)));
+  await Promise.all((batch.previousEvents ?? []).map((event) => facesDb.putLifeEvent(event)));
 
   latestBatch = null;
   return structuredClone(batch);

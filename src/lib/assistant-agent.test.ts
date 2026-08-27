@@ -95,4 +95,100 @@ describe("assistant agent", () => {
 
     expect(result.answer).toContain("启用本机资料访问");
   });
+
+  it("returns a person update proposal without writing anything", async () => {
+    askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const onChunk = args[4] as (chunk: string) => void;
+      onChunk(
+        JSON.stringify({
+          type: "tool",
+          summary: "准备更新职位",
+          tool: "update_person",
+          args: {
+            personId: "person-1",
+            reason: "用户明确说职位变更",
+            changes: { title: "品牌总监" },
+          },
+        }),
+      );
+    });
+    const person = {
+      id: "person-1",
+      name: "小雨",
+      note: "",
+      profile: { title: "品牌经理" },
+      descriptors: [],
+      thumb: "",
+      createdAt: 10,
+    };
+
+    const result = await runAssistantAgent({
+      preset,
+      question: "把小雨的职位改成品牌总监",
+      persons: [person],
+      relations: [],
+      events: [],
+      includeArchive: true,
+    });
+
+    expect(result.pendingApproval).toMatchObject({
+      personId: "person-1",
+      changes: { profile: { title: "品牌总监" } },
+    });
+    expect(result.answer).toContain("尚未执行");
+    expect(person.profile.title).toBe("品牌经理");
+  });
+
+  it("does not treat one empty keyword search as proof that the archive has no record", async () => {
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "tool",
+            tool: "search_profiles",
+            args: { query: "拍照" },
+          }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "final",
+            answer: "当前本地人物档案中没有与拍照直接关联的记录。",
+          }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        expect(String(args[1])).toContain("一次关键词检索为空不能证明");
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({ type: "tool", tool: "list_profiles", args: { limit: 12 } }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({ type: "final", answer: "索引中有小雨，建议再查看她的详细档案。" }),
+        );
+      });
+
+    const result = await runAssistantAgent({
+      preset,
+      question: "谁会拍照？",
+      persons: [
+        {
+          id: "p1",
+          name: "小雨",
+          note: "喜欢摄影",
+          descriptors: [],
+          thumb: "",
+          createdAt: 1,
+        },
+      ],
+      relations: [],
+      events: [],
+      includeArchive: true,
+    });
+
+    expect(result.rounds).toBe(4);
+    expect(result.answer).toContain("小雨");
+  });
 });

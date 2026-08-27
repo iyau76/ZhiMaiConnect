@@ -61,6 +61,12 @@ describe("latest intake rollback", () => {
       personIds: [before.id, created.id],
       createdAt: 2,
     };
+    const previousEvent: LifeEventRecord = {
+      id: "previous-event",
+      date: "2026-08-25",
+      title: "before event",
+      createdAt: 1,
+    };
     const reminder: ReminderRecord = {
       id: "reminder",
       title: "reminder",
@@ -74,6 +80,7 @@ describe("latest intake rollback", () => {
     await facesDb.putRelation(relation);
     await facesDb.putEvidence(evidence);
     await facesDb.putLifeEvent(event);
+    await facesDb.putLifeEvent({ ...previousEvent, title: "after event", updatedAt: 2 });
     await facesDb.putReminder(reminder);
     rememberIntakeBatch({
       id: "batch",
@@ -84,6 +91,7 @@ describe("latest intake rollback", () => {
       createdEventIds: [event.id],
       createdReminderIds: [reminder.id],
       previousPeople: [before],
+      previousEvents: [previousEvent],
     });
 
     expect(getLatestIntakeBatch()?.id).toBe("batch");
@@ -91,7 +99,7 @@ describe("latest intake rollback", () => {
     await expect(facesDb.listPersons()).resolves.toEqual([before]);
     await expect(facesDb.listRelations()).resolves.toEqual([]);
     await expect(facesDb.listEvidence()).resolves.toEqual([]);
-    await expect(facesDb.listLifeEvents()).resolves.toEqual([]);
+    await expect(facesDb.listLifeEvents()).resolves.toEqual([previousEvent]);
     await expect(facesDb.listReminders()).resolves.toEqual([]);
     expect(getLatestIntakeBatch()).toBeNull();
   });

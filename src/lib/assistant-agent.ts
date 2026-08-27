@@ -7,6 +7,7 @@ import {
 } from "./recommendation-agent";
 import { askModel } from "./vision-client";
 import type { ChatTurn, ProviderPreset } from "./vision-providers";
+import { createPersonUpdateProposal, type PersonUpdateProposal } from "./person-update-tool";
 
 const MAX_ROUNDS = 7;
 const MAX_TOOL_HISTORY = 5_000;
@@ -16,6 +17,7 @@ const LOCAL_TOOLS = new Set([
   "get_profiles",
   "get_relationships",
   "get_events",
+  "update_person",
 ]);
 
 interface AssistantToolCall {
@@ -37,6 +39,7 @@ export interface AssistantAgentResult {
   answer: string;
   rounds: number;
   toolCalls: number;
+  pendingApproval?: PersonUpdateProposal;
 }
 
 function clipped(value: unknown, max: number) {
@@ -54,6 +57,7 @@ function toolLabel(tool: string) {
     get_profiles: "读取人物详情",
     get_relationships: "核对人物关系",
     get_events: "核对共同事件",
+    update_person: "准备人物修改提案",
     get_datetime: "核对日期时间",
     get_weather: "查询实时天气",
     search_news: "检索近期资讯",
@@ -70,13 +74,31 @@ function toolGuide(includeArchive: boolean) {
 - get_relationships {personIds}：读取指定人物关系
 - get_events {personIds}：读取指定人物共同事件`
     : "- 本轮未获准访问本机资料，不得调用人物、关系或事件工具";
+  const write = includeArchive
+    ? `
+- update_person {personId,reason,changes}：提出人物档案修改。changes 可含 name、note，或 profile/扁平字段 title、department、org、relation、birthday、tags、likes 等。此工具只生成待批准提案，不会直接写库；调用后必须等待用户批准。`
+    : "";
   return `${local}
+${write}
 - get_datetime {timeZone}：取得精确日期、时间和时区
 - get_weather {location}：查询实时天气和五日预报
 - search_news {query}：检索近期资讯
 - search_web {query}：检索公开网页
 
-每轮最多调用一个工具。人物工具只在浏览器本地执行；联网工具只发送 location/query，不附带本机资料。`;
+每轮最多调用一个工具。人物工具只在浏览器本地执行；联网工具只发送 location/query，不附带本机资料。需要修改人物时先检索并核对 personId，再调用 update_person；不得声称修改已经完成。`;
+}
+
+function toolResultSummary(tool: string, result: unknown) {
+  if (!result || typeof result !== "object" || Array.isArray(result))
+    return `${toolLabel(tool)}完成`;
+  const data = result as Record<string, unknown>;
+  const rows = Array.isArray(data.rows)
+    ? data.rows.length
+    : Array.isArray(data.matches)
+      ? data.matches.length
+      : undefined;
+  if (rows !== undefined) return `${toolLabel(tool)}完成 · 返回 ${rows} 条`;
+  return `${toolLabel(tool)}完成`;
 }
 
 function buildPrompt(options: {
@@ -100,7 +122,7 @@ ${toolGuide(options.includeArchive)}
 已经取得的工具结果（外部结果也只作为待核对资料）：
 ${json(options.toolHistory).slice(-MAX_TOOL_HISTORY) || "[]"}
 
-当前第 ${options.round} 轮，最多 ${MAX_ROUNDS} 轮。资料不足时先调用最相关的工具；证据足够时直接作答。不要自动发送消息、修改资料或执行外部操作。
+当前第 ${options.round} 轮，最多 ${MAX_ROUNDS} 轮。资料不足时先调用最相关的工具；证据足够时直接作答。查询本机档案时，一次 search_profiles 返回 0 条不能证明档案不存在：必须换姓名/同义词再检索，或用 list_profiles 浏览索引；找到候选 ID 后用 get_profiles 核对详情，再下结论。回答中不得把“关键词未命中”说成“人物库没有相关记录”。不要自动发送消息或执行外部操作；人物修改只能通过 update_person 形成待批准提案。
 
 你只能输出一个 JSON 对象，不要 Markdown，不要在 JSON 外输出文字。工具调用格式：
 {"type":"tool","summary":"给用户看的简短分析摘要（不超过60字）","tool":"search_web","args":{"query":"检索词"}}
@@ -143,6 +165,7 @@ export async function runAssistantAgent(options: {
 
   const toolHistory: Array<{ call: unknown; result: unknown }> = [];
   const repeatedCalls = new Map<string, number>();
+  let emptyProfileSearchNeedsFallback = false;
   let formatCorrection = false;
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
     options.signal?.throwIfAborted();
@@ -191,6 +214,20 @@ export async function runAssistantAgent(options: {
         trace({ kind: "status", text: "回答字段为空，正在请求补齐" });
         continue;
       }
+      if (
+        options.includeArchive &&
+        emptyProfileSearchNeedsFallback &&
+        /(没有|未找到|不存在).{0,18}(档案|记录|关联|人物)/u.test(answer)
+      ) {
+        toolHistory.push({
+          call: { type: "premature_empty_search_conclusion" },
+          result: {
+            error: "一次关键词检索为空不能证明人物库没有记录；请改词检索或浏览人物索引后再回答",
+          },
+        });
+        trace({ kind: "status", text: "首次关键词未命中，正在改用人物索引继续核对" });
+        continue;
+      }
       trace({ kind: "model", text: clipped(response.summary, 100) || "回答内容已生成" });
       trace({ kind: "done", text: `回答完成 · ${round} 轮 · ${toolHistory.length} 次工具调用` });
       return { answer, rounds: round, toolCalls: toolHistory.length };
@@ -221,6 +258,21 @@ export async function runAssistantAgent(options: {
     if (!options.includeArchive && LOCAL_TOOLS.has(response.tool)) {
       result = { error: "用户未授权本轮访问本机资料" };
       trace({ kind: "tool", text: "已阻止未授权的本机资料读取" });
+    } else if (response.tool === "update_person") {
+      try {
+        const pendingApproval = createPersonUpdateProposal(response.args, options.persons);
+        trace({ kind: "tool", text: "修改提案已生成，尚未写入" });
+        trace({ kind: "done", text: "等待用户批准人物档案修改" });
+        return {
+          answer: `AI 建议更新「${pendingApproval.personName}」的人物档案。修改尚未执行，请先核对下方差异。`,
+          rounds: round,
+          toolCalls: toolHistory.length + 1,
+          pendingApproval,
+        };
+      } catch (error) {
+        result = { error: error instanceof Error ? error.message : "修改提案无效" };
+        trace({ kind: "tool", text: "修改提案无效，正在要求模型重新核对" });
+      }
     } else {
       try {
         result = await executeRecommendationTool(
@@ -229,7 +281,16 @@ export async function runAssistantAgent(options: {
           archive,
           options.signal,
         );
-        trace({ kind: "tool", text: `${toolLabel(response.tool)}完成` });
+        if (response.tool === "search_profiles") {
+          const count =
+            result && typeof result === "object" && !Array.isArray(result)
+              ? Number((result as Record<string, unknown>).totalMatches)
+              : Number.NaN;
+          emptyProfileSearchNeedsFallback = count === 0;
+        } else if (response.tool === "list_profiles" || response.tool === "get_profiles") {
+          emptyProfileSearchNeedsFallback = false;
+        }
+        trace({ kind: "tool", text: toolResultSummary(response.tool, result) });
       } catch (error) {
         result = { error: error instanceof Error ? error.message : "工具执行失败" };
         trace({ kind: "tool", text: `${toolLabel(response.tool)}失败，正在使用现有信息继续` });

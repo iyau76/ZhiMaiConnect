@@ -534,6 +534,107 @@ test("AI 助理问一问会展示流式轨迹并调用受控网页检索工具",
   expect(mockNetwork.visionRequests).toHaveLength(2);
 });
 
+test("AI 助理修改人物时必须先批准，批准前人物库保持不变", async ({ page }) => {
+  await openApp(page);
+  await seedIndexedDb(page, {
+    persons: [
+      {
+        id: "person-update-agent",
+        name: "合成测试人物",
+        note: "",
+        profile: { title: "品牌经理" },
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW,
+      },
+    ],
+  });
+  await openApp(page);
+  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  const questionCard = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await questionCard.getByRole("textbox").fill("把合成测试人物的职位改成品牌总监");
+  await questionCard.getByRole("button", { name: "发送问题" }).click();
+
+  const approval = questionCard.getByRole("region", { name: "待批准的人物修改" });
+  await expect(approval).toContainText("品牌经理");
+  await expect(approval).toContainText("品牌总监");
+  let people = await readIndexedDbStore<{ profile?: { title?: string } }>(page, "persons");
+  expect(people[0].profile?.title).toBe("品牌经理");
+
+  await approval.getByRole("button", { name: "批准并执行" }).click();
+  await expect(approval).toHaveCount(0);
+  people = await readIndexedDbStore<{ profile?: { title?: string } }>(page, "persons");
+  expect(people[0].profile?.title).toBe("品牌总监");
+});
+
+test("AI 录入可检索并更新已有事件，确认前不覆盖原记录", async ({ page, mockNetwork }) => {
+  await openApp(page);
+  await seedIndexedDb(page, {
+    lifeEvents: [
+      {
+        id: "event-update-agent",
+        title: "团队聚餐",
+        date: "2026-09-01",
+        precision: "day",
+        createdAt: NOW,
+      },
+    ],
+  });
+  await openApp(page);
+  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
+  await intake.getByRole("textbox").fill("把团队聚餐改到 9 月 2 日");
+  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+
+  const eventDraft = page.locator('[data-draft-kind="event"]');
+  await expect(eventDraft.getByRole("combobox", { name: "事件写入方式" })).toHaveValue(
+    "event-update-agent",
+  );
+  await expect(eventDraft.getByRole("textbox", { name: "事件日期" })).toHaveValue("2026-09-02");
+  let events = await readIndexedDbStore<{ id: string; date: string }>(page, "lifeEvents");
+  expect(events).toEqual([
+    expect.objectContaining({ id: "event-update-agent", date: "2026-09-01" }),
+  ]);
+
+  await eventDraft.getByRole("button", { name: "接受此项" }).click();
+  await page.getByRole("button", { name: "确认入库" }).click();
+  events = await readIndexedDbStore<{ id: string; date: string }>(page, "lifeEvents");
+  expect(events).toEqual([
+    expect.objectContaining({ id: "event-update-agent", date: "2026-09-02" }),
+  ]);
+  expect(mockNetwork.visionRequests).toHaveLength(3);
+});
+
+test("日历中的既有事件可以原位编辑而不是重复新建", async ({ page }) => {
+  await openApp(page);
+  const today = new Date().toISOString().slice(0, 10);
+  await seedIndexedDb(page, {
+    lifeEvents: [
+      {
+        id: "event-direct-edit",
+        title: "旧事件标题",
+        detail: "旧细节",
+        date: today,
+        precision: "day",
+        createdAt: NOW,
+      },
+    ],
+  });
+  await openApp(page);
+  await clickVisible(page, page.getByRole("button", { name: /^日历/ }));
+  await page.getByRole("button", { name: "编辑事件" }).click();
+  const editor = page.getByRole("heading", { name: "编辑这件事" }).locator("..").locator("..");
+  await editor.getByRole("textbox").last().fill("新事件标题\n新细节");
+  await editor.getByRole("button", { name: "保存修改" }).click();
+
+  const events = await readIndexedDbStore<{ id: string; title: string; detail?: string }>(
+    page,
+    "lifeEvents",
+  );
+  expect(events).toEqual([
+    expect.objectContaining({ id: "event-direct-edit", title: "新事件标题", detail: "新细节" }),
+  ]);
+});
+
 test("资料不足时祝福与礼物建议明确提示缺口且保持可编辑", async ({ page }) => {
   await openApp(page);
   const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);

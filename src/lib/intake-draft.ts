@@ -146,6 +146,12 @@ export interface IngestEvent extends IngestAuditFields {
   place?: string;
   people?: string[];
   kind?: string;
+  /** Client-side update decision; never accepted directly from the model schema. */
+  targetEventId?: string;
+  _eventCandidateIds?: string[];
+  _eventReason?: string;
+  _eventChecked?: boolean;
+  _draftId?: string;
   /** True only when every populated event field was located in this input. */
   _groundingVerified?: boolean;
 }

@@ -1,4 +1,5 @@
 import {
+  Check,
   CheckCircle2,
   Eye,
   Loader2,
@@ -8,6 +9,7 @@ import {
   Send,
   Trash2,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -27,6 +29,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { runAssistantAgent, type AssistantAgentResult } from "@/lib/assistant-agent";
 import { facesDb } from "@/lib/face-db";
 import { t } from "@/lib/i18n";
+import {
+  applyPersonUpdateProposal,
+  personUpdateDiff,
+  type PersonUpdateProposal,
+} from "@/lib/person-update-tool";
 import type { AgentTraceEvent } from "@/lib/recommendation-agent";
 
 import { cn } from "@/lib/utils";
@@ -67,6 +74,11 @@ export function ModelsPanel({
 
   const [busy, setBusy] = useState(false);
   const [assistantTrace, setAssistantTrace] = useState<AgentTraceEvent[]>([]);
+  const [pendingApproval, setPendingApproval] = useState<PersonUpdateProposal | null>(null);
+  const [approvalRows, setApprovalRows] = useState<
+    Array<{ field: string; before: string; after: string }>
+  >([]);
+  const [approving, setApproving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [auditing, setAuditing] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
@@ -121,7 +133,7 @@ export function ModelsPanel({
 
   const handleSend = async () => {
     const prompt = input.trim();
-    if (!prompt || busy) return;
+    if (!prompt || busy || pendingApproval) return;
     const preset = editing;
     if (!preset.model.trim()) {
       toast.error(t("请先填写模型名称"));
@@ -175,6 +187,11 @@ export function ModelsPanel({
         next[next.length - 1] = { ...last, text: result.answer };
         return next;
       });
+      if (result.pendingApproval) {
+        const person = archive.persons.find((item) => item.id === result.pendingApproval?.personId);
+        setPendingApproval(result.pendingApproval);
+        setApprovalRows(person ? personUpdateDiff(result.pendingApproval, person) : []);
+      }
     } catch (error) {
       toast.error((error as Error).message);
       setAssistantTrace((prev) => [
@@ -190,6 +207,36 @@ export function ModelsPanel({
     } finally {
       setBusy(false);
     }
+  };
+
+  const approvePersonUpdate = async () => {
+    if (!pendingApproval || approving) return;
+    setApproving(true);
+    try {
+      const updated = await applyPersonUpdateProposal(pendingApproval);
+      toast.success(t("人物档案修改已执行"));
+      setTurns((prev) => [
+        ...prev,
+        { role: "assistant", text: `已按你的批准更新「${updated.name}」的人物档案。` },
+      ]);
+      setPendingApproval(null);
+      setApprovalRows([]);
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const rejectPersonUpdate = () => {
+    if (!pendingApproval) return;
+    const name = pendingApproval.personName;
+    setPendingApproval(null);
+    setApprovalRows([]);
+    setTurns((prev) => [
+      ...prev,
+      { role: "assistant", text: `已取消对「${name}」的修改，人物库没有发生变化。` },
+    ]);
   };
 
   return (
@@ -442,14 +489,68 @@ export function ModelsPanel({
           </div>
         )}
 
+        {pendingApproval && (
+          <div
+            className="mt-3 rounded-xl border border-amber-500/60 bg-amber-500/10 p-3"
+            role="region"
+            aria-label={t("待批准的人物修改")}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium">
+                  {t("AI 请求修改人物档案")}：{pendingApproval.personName}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">{pendingApproval.reason}</p>
+              </div>
+              <span className="shrink-0 rounded-full border border-amber-500/50 px-2 py-0.5 text-[10px] text-amber-600 dark:text-amber-300">
+                {t("尚未写入")}
+              </span>
+            </div>
+            <dl className="mt-3 space-y-2 text-xs">
+              {approvalRows.map((row) => (
+                <div
+                  key={row.field}
+                  className="grid gap-1 rounded-lg bg-background/60 p-2 md:grid-cols-[5rem_1fr_1fr]"
+                >
+                  <dt className="font-medium">{row.field}</dt>
+                  <dd className="text-muted-foreground line-through">{row.before}</dd>
+                  <dd className="text-foreground">{row.after}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              {t("批准前不会写入本机人物库；档案若已被其他操作修改，本提案会自动失效。")}
+            </p>
+            <div className="mt-3 flex justify-end gap-2">
+              <Button size="sm" variant="outline" onClick={rejectPersonUpdate} disabled={approving}>
+                <X className="size-3.5" aria-hidden="true" />
+                {t("拒绝")}
+              </Button>
+              <Button size="sm" onClick={() => void approvePersonUpdate()} disabled={approving}>
+                {approving ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Check className="size-3.5" aria-hidden="true" />
+                )}
+                {t("批准并执行")}
+              </Button>
+            </div>
+          </div>
+        )}
+
         <div className="mt-3 flex gap-2">
           <Textarea
             value={input}
             rows={2}
             placeholder={t("问点什么，比如：这周该联系谁？")}
             onChange={(e) => setInput(e.target.value)}
+            disabled={Boolean(pendingApproval)}
           />
-          <Button onClick={handleSend} disabled={busy} aria-label={t("发送问题")}>
+          <Button
+            onClick={handleSend}
+            disabled={busy || Boolean(pendingApproval)}
+            aria-label={t("发送问题")}
+          >
             {busy ? (
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             ) : (
