@@ -1,0 +1,193 @@
+== q1-tie-strength.json (1)
+  [2009] c=1382 | Predicting tie strength with social media |  | 10.1145/1518701.1518736
+== q10-tsp.json (2)
+  [2002] c=1548 | Topic-sensitive PageRank |  | 10.1145/511446.511513
+  [2003] c=1075 | Topic-sensitive pagerank: A context-sensitive ranking algorithm for web search | IEEE Transactions on Knowledge and Data Engi | 10.1109/tkde.2003.1208999
+== q11-doi-focus.json (8)
+  [1986] c=1640 | Generalized fisheye views | ACM SIGCHI Bulletin | 10.1145/22339.22342
+  [1986] c=888 | Generalized fisheye views |  | 10.1145/22627.22342
+  [1996] c=21 | Generalized fisheye views of graphs | Lecture notes in computer science | 10.1007/bfb0021808
+  [2006] c=92 | A fisheye follow-up |  | 10.1145/1124772.1124921
+  [1996] c=233 | Navigating hierarchically clustered networks through fisheye and full-zoom methods | ACM Transactions on Computer-Human Interacti | 10.1145/230562.230577
+  [2023] c=110 | Surround-View Fisheye Camera Perception for Automated Driving: Overview, Survey & Challenges | IEEE Transactions on Intelligent Transportat | 10.1109/tits.2023.3235057
+  [2002] c=27 | Layout-independent fisheye views of nested graphs |  | 10.1109/vl.1993.269620
+  [2014] c=119 | Planar bifunctional Luneburg-fisheye lens made of an anisotropic metasurface | Laser & Photonics Review | 10.1002/lpor.201400023
+== q12-network-simplify.json (8)
+  [2012] c=10630 | Avogadro: an advanced semantic chemical editor, visualization, and analysis platform | Journal of Cheminformatics | 10.1186/1758-2946-4-17
+  [2018] c=2512 | Cytoscape StringApp: Network Analysis and Visualization of Proteomics Data | Journal of Proteome Research | 10.1021/acs.jproteome.8b00702
+  [2014] c=3009 | ForceAtlas2, a Continuous Graph Layout Algorithm for Handy Network Visualization Designed for the Ge | PLoS ONE | 10.1371/journal.pone.0098679
+  [2017] c=5983 | UCSF ChimeraX: Meeting modern challenges in visualization and analysis | Protein Science | 10.1002/pro.3235
+  [2013] c=5737 | Intriguing properties of neural networks | arXiv (Cornell University) | 10.48550/arxiv.1312.6199
+  [2007] c=557 | NodeTrix: a Hybrid Visualization of Social Networks | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2007.70582
+  [2003] c=6363 | An automated method for finding molecular complexes in large protein interaction networks | BMC Bioinformatics | 10.1186/1471-2105-4-2
+  [2020] c=8746 | The STRING database in 2021: customizable protein–protein networks, and functional characterization  | Nucleic Acids Research | 10.1093/nar/gkaa1074
+== q13-expert-finding.json (8)
+  [2018] c=42900 | PRISMA Extension for Scoping Reviews (PRISMA-ScR): Checklist and Explanation | Annals of Internal Medicine | 10.7326/m18-0850
+  [2014] c=19063 | Grey Wolf Optimizer | Advances in Engineering Software | 10.1016/j.advengsoft.2013.12.007
+  [2009] c=15250 | Fostering implementation of health services research findings into practice: a consolidated framewor | Implementation Science | 10.1186/1748-5908-4-50
+  [2008] c=7596 | Exploring Network Structure, Dynamics, and Function using NetworkX | Proceedings of the Python in Science Confere | 10.25080/tcwv9851
+  [2010] c=7308 | Social Relationships and Mortality Risk: A Meta-analytic Review | PLoS Medicine | 10.1371/journal.pmed.1000316
+  [2020] c=5121 | Using social and behavioural science to support COVID-19 pandemic response | Nature Human Behaviour | 10.1038/s41562-020-0884-z
+  [2000] c=3561 | Creating and managing a high-performance knowledge-sharing network: the Toyota case | Strategic Management Journal | 10.1002/(sici)1097-0266(200003)21:3<345::aid-smj96>3.0.co;2-n
+  [1992] c=3529 | A Bayesian Method for the Induction of Probabilistic Networks from Data | Machine Learning | 10.1023/a:1022649401552
+== q14-path-ranking.json (8)
+  [2012] c=4925 | qgraph : Network Visualizations of Relationships in Psychometric Data | Journal of Statistical Software | 10.18637/jss.v048.i04
+  [2000] c=7840 | Increasing Returns, Path Dependence, and the Study of Politics | American Political Science Review | 10.2307/2586011
+  [2003] c=3145 | A survey of socially interactive robots | Robotics and Autonomous Systems | 10.1016/s0921-8890(02)00372-x
+  [2018] c=2865 | A tutorial on regularized partial correlation networks. | Psychological Methods | 10.1037/met0000167
+  [2007] c=3580 | Near linear time algorithm to detect community structures in large-scale networks | Physical Review E | 10.1103/physreve.76.036106
+  [2005] c=839 | Computing and applying trust in web-based social networks | University Libraries (University of Maryland | None
+  [1999] c=9097 | Authoritative sources in a hyperlinked environment | Journal of the ACM | 10.1145/324133.324140
+  [2009] c=2551 | The use of partial least squares path modeling in international marketing | Advances in international marketing | 10.1108/s1474-7979(2009)0000020014
+== q15-pkg.json (8)
+  [2021] c=1739 | Knowledge Graphs | ACM Computing Surveys | 10.1145/3447772
+  [2023] c=668 | Knowledge Graphs: Opportunities and Challenges | Artificial Intelligence Review | 10.1007/s10462-023-10465-9
+  [2021] c=2792 | 1D convolutional neural networks and applications: A survey | Qatar University QSpace (Qatar University) | 10.1016/j.ymssp.2020.107398
+  [2018] c=1448 | Graph Neural Networks: A Review of Methods and Applications | arXiv (Cornell University) | 10.48550/arxiv.1812.08434
+  [2018] c=1915 | Deep learning for sentiment analysis: A survey | Wiley Interdisciplinary Reviews Data Mining  | 10.1002/widm.1253
+  [2023] c=724 | A Survey of Graph Neural Networks for Recommender Systems: Challenges, Methods, and Directions | ACM Transactions on Recommender Systems | 10.1145/3568022
+  [2021] c=282 | Knowledge graphs as tools for explainable machine learning: A survey | Artificial Intelligence | 10.1016/j.artint.2021.103627
+  [2021] c=577 | Learning Intents behind Interactions with Knowledge Graph for Recommendation |  | 10.1145/3442381.3450133
+== q16-granovetter-exact.json (8)
+  [1973] c=38831 | The Strength of Weak Ties | American Journal of Sociology | 10.1086/225469
+  [1983] c=8213 | The Strength of Weak Ties: A Network Theory Revisited | Sociological Theory | 10.2307/202051
+  [2004] c=2737 | The Strength of Weak Ties You Can Trust: The Mediating Role of Trust in Effective Knowledge Transfer | Management Science | 10.1287/mnsc.1030.0136
+  [1977] c=382 | 33. The Strength of Weak Ties | Social Networks | 10.1016/b978-0-12-442450-0.50025-0
+  [1992] c=459 | Job Search and Network Composition: Implications of the Strength-Of-Weak-Ties Hypothesis | American Sociological Review | 10.2307/2095914
+  [2010] c=399 | The strength-of-weak-ties perspective on creativity: A comprehensive examination and extension. | Journal of Applied Psychology | 10.1037/a0018761
+  [1980] c=296 | A test of structural features of granovetter's strength of weak ties theory | Social Networks | 10.1016/0378-8733(80)90006-4
+  [2022] c=211 | A causal test of the strength of weak ties | Science | 10.1126/science.abl4476
+== q17-betweenness.json (8)
+  [1977] c=10388 | A Set of Measures of Centrality Based on Betweenness | Sociometry | 10.2307/3033543
+  [1998] c=59372 | Gradient-based learning applied to document recognition | Proceedings of the IEEE | 10.1109/5.726791
+  [2000] c=353396 | R: A Language and Environment for Statistical Computing |  | 10.32614/r.manuals
+  [2001] c=4988 | A faster algorithm for betweenness centrality* | Journal of Mathematical Sociology | 10.1080/0022250x.2001.9990249
+  [2015] c=14964 | The Molecular Signatures Database Hallmark Gene Set Collection | Cell Systems | 10.1016/j.cels.2015.12.004
+  [2012] c=10916 | NCBI GEO: archive for functional genomics data sets—update | Nucleic Acids Research | 10.1093/nar/gks1193
+  [2013] c=12111 | CBTRUS Statistical Report: Primary Brain and Central Nervous System Tumors Diagnosed in the United S | Neuro-Oncology | 10.1093/neuonc/not151
+  [2018] c=3201 | DNA methylation-based classification of central nervous system tumours | Nature | 10.1038/nature26000
+== q18-pagerank.json (8)
+  [1999] c=12680 | The PageRank Citation Ranking : Bringing Order to the Web |  | None
+  [2011] c=192 | Graph-based term weighting for information retrieval | Information Retrieval | 10.1007/s10791-011-9172-x
+  [2017] c=4538 | Inductive Representation Learning on Large Graphs | arXiv (Cornell University) | 10.48550/arxiv.1706.02216
+  [2020] c=369 | Scaling Graph Neural Networks with Approximate PageRank |  | 10.1145/3394486.3403296
+  [2018] c=435 | Predict then Propagate: Graph Neural Networks meet Personalized PageRank | arXiv (Cornell University) | 10.48550/arxiv.1810.05997
+  [2004] c=278 | Adaptive methods for the computation of PageRank | Linear Algebra and its Applications | 10.1016/j.laa.2003.12.008
+  [2009] c=136 | FutureRank: Ranking Scientific Articles by Predicting their Future PageRank |  | 10.1137/1.9781611972795.46
+  [2014] c=4713 | A variational eigenvalue solver on a photonic quantum processor | Nature Communications | 10.1038/ncomms5213
+== q19-ppr-proximity.json (8)
+  [2010] c=637 | Relational retrieval using a combination of path-constrained random walks | Machine Learning | 10.1007/s10994-010-5205-8
+  [2020] c=414 | LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation | arXiv (Cornell University) | 10.48550/arxiv.2002.02126
+  [2019] c=412 | Graph embedding on biomedical networks: methods, applications and evaluations | Bioinformatics | 10.1093/bioinformatics/btz718
+  [2020] c=283 | Social Media and Democracy | Cambridge University Press eBooks | 10.1017/9781108890960
+  [2018] c=253 | Attention-based Graph Neural Network for Semi-supervised Learning | arXiv (Cornell University) | 10.48550/arxiv.1803.03735
+  [2013] c=220 | Multiplex PageRank | PLoS ONE | 10.1371/journal.pone.0078293
+  [2017] c=205 | Scalable Graph Embedding for Asymmetric Proximity | Proceedings of the AAAI Conference on Artifi | 10.1609/aaai.v31i1.10878
+  [2012] c=189 | An overview of social network analysis | Wiley Interdisciplinary Reviews Data Mining  | 10.1002/widm.1048
+== q2-motif.json (8)
+  [2016] c=71 | Towards Unambiguous Edge Bundling: Investigating Confluent Drawings for Network Visualization | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2016.2598958
+  [2021] c=9 | Airline Network Structure: Motifs and Airports’ Role in Cliques | Sustainability | 10.3390/su13179573
+  [2019] c=71 | Analyzing Dynamic Hypergraphs with Parallel Aggregated Ordered Hypergraph Visualization | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2019.2933196
+  [2018] c=272 | Graph Summarization Methods and Applications | ACM Computing Surveys | 10.1145/3186727
+  [2020] c=39 | The State of the Art in Empirical User Evaluation of Graph Visualizations | IEEE Access | 10.1109/access.2020.3047616
+  [2023] c=15 | ViMO - Visual Analysis of Neuronal Connectivity Motifs | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2023.3327388
+  [2019] c=29 | Pattern-Driven Navigation in 2D Multiscale Visualizations with Scalable Insets | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2019.2934555
+  [2025] c=1 | Motif Simplification for BioFabric Network Visualizations: Improving Pattern Recognition and Interpr | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2025.3634266
+== q20-motif-exact.json (6)
+  [2016] c=71 | Towards Unambiguous Edge Bundling: Investigating Confluent Drawings for Network Visualization | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2016.2598958
+  [2019] c=71 | Analyzing Dynamic Hypergraphs with Parallel Aggregated Ordered Hypergraph Visualization | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2019.2933196
+  [2021] c=9 | Airline Network Structure: Motifs and Airports’ Role in Cliques | Sustainability | 10.3390/su13179573
+  [2018] c=272 | Graph Summarization Methods and Applications | ACM Computing Surveys | 10.1145/3186727
+  [2019] c=110 | ImaCytE: Visual Exploration of Cellular Micro-Environments for Imaging Mass Cytometry Data | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2019.2931299
+  [2020] c=39 | The State of the Art in Empirical User Evaluation of Graph Visualizations | IEEE Access | 10.1109/access.2020.3047616
+== q21-force-bundling.json (6)
+  [2009] c=534 | Force‐Directed Edge Bundling for Graph Visualization | Computer Graphics Forum | 10.1111/j.1467-8659.2009.01450.x
+  [2017] c=5983 | UCSF ChimeraX: Meeting modern challenges in visualization and analysis | Protein Science | 10.1002/pro.3235
+  [2014] c=2579 | UpSet: Visualization of Intersecting Sets | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2014.2346248
+  [2011] c=131 | Divided Edge Bundling for Directional Network Data | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2011.190
+  [2011] c=159 | Skeleton-Based Edge Bundling for Graph Visualization | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2011.233
+  [2021] c=46735 | Highly accurate protein structure prediction with AlphaFold | Nature | 10.1038/s41586-021-03819-2
+== q22-smallblue.json (6)
+  [2009] c=92 | SmallBlue: Social Network Analysis for Expertise Search and Collective Intelligence | Proceedings - International Conference on Da | 10.1109/icde.2009.140
+  [2010] c=108 | Optimal Social Trust Path Selection in Complex Social Networks | Proceedings of the AAAI Conference on Artifi | 10.1609/aaai.v24i1.7509
+  [2011] c=79 | Trust Transitivity in Complex Social Networks | Proceedings of the AAAI Conference on Artifi | 10.1609/aaai.v25i1.8087
+  [2016] c=126 | A Survey on Visual Analytics of Social Media Data | IEEE Transactions on Multimedia | 10.1109/tmm.2016.2614220
+  [2013] c=39 | Cloud-based design and manufacturing systems: A social network analysis | The University of Bath Online Publications S | None
+  [2015] c=26 | Trust Calculation with Ant Colony Optimization in Online Social Networks | Procedia Computer Science | 10.1016/j.procs.2015.06.021
+== q23-link-pred.json (6)
+  [2007] c=3037 | The link‐prediction problem for social networks | Journal of the American Society for Informat | 10.1002/asi.20591
+  [2003] c=1624 | The link prediction problem for social networks |  | 10.1145/956863.956972
+  [2003] c=187 | The link prediction problem for social networks |  | 10.1145/956958.956972
+  [2007] c=125 | The link-prediction problem for social networks | Journal of the American Society for Informat | 10.5555/1241540.1241551
+  [2021] c=46735 | Highly accurate protein structure prediction with AlphaFold | Nature | 10.1038/s41586-021-03819-2
+  [2016] c=2842 | Structural Deep Network Embedding |  | 10.1145/2939672.2939753
+== q24-trust.json (6)
+  [2005] c=839 | Computing and applying trust in web-based social networks | University Libraries (University of Maryland | None
+  [2007] c=208 | SUNNY: a new algorithm for trust inference in social networks using probabilistic confidence models |  | None
+  [2010] c=98 | Using probabilistic confidence models for trust inference in Web-based social networks | ACM Transactions on Internet Technology | 10.1145/1754393.1754397
+  [2009] c=163 | Operators for propagating trust and their evaluation in social networks |  | 10.65109/wihe7071
+  [2017] c=61 | OpinionWalk: An efficient solution to massive trust assessment in online social networks |  | 10.1109/infocom.2017.8057106
+  [2009] c=60 | FUZZY TRUST AGGREGATION AND PERSONALIZED TRUST INFERENCE IN VIRTUAL SOCIAL NETWORKS | Computational Intelligence | 10.1111/j.1467-8640.2009.00334.x
+== q25-graph-readability.json (6)
+  [2000] c=125 | Effective information visualisation: a study of graph drawing aesthetics and algorithms | Interacting with Computers | 10.1016/s0953-5438(00)00032-1
+  [2018] c=95 | Exploring the limits of complexity: A survey of empirical studies on graph visualisation | Visual Informatics | 10.1016/j.visinf.2018.12.006
+  [2011] c=98 | Drawing graphs with right angle crossings | Theoretical Computer Science | 10.1016/j.tcs.2011.05.025
+  [2020] c=285 | A Guide to Conquer the Biological Network Era Using Graph Theory | Frontiers in Bioengineering and Biotechnolog | 10.3389/fbioe.2020.00034
+  [2002] c=22 | The effects of graph layout |  | 10.1109/ozchi.1998.732199
+  [2016] c=55 | Recognizing and drawing IC-planar graphs | Theoretical Computer Science | 10.1016/j.tcs.2016.04.026
+== q3-doi.json (8)
+  [2009] c=232 | “Search, Show Context, Expand on Demand”: Supporting Large Graph Exploration with Degree-of-Interest | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2009.108
+  [2000] c=1248 | An exploration towards a production theory and its application to construction | Aaltodoc (Aalto University) | None
+  [2013] c=1064 | The paradox of openness: Appropriability, external search and collaboration | Research Policy | 10.1016/j.respol.2013.10.004
+  [2009] c=9257 | CHARMM: The biomolecular simulation program | Journal of Computational Chemistry | 10.1002/jcc.21287
+  [2013] c=735 | Computer Science Curricula 2013: Curriculum Guidelines for Undergraduate Degree Programs in Computer |  | 10.1145/2534860
+  [2018] c=329 | Disentangling the antecedents of ambidexterity: Exploration and exploitation | Research Policy | 10.1016/j.respol.2017.12.003
+  [2016] c=791 | A facility to search for hidden particles at the CERN SPS: the SHiP physics case | Reports on Progress in Physics | 10.1088/0034-4885/79/12/124201
+  [2021] c=356 | Monte Carlo Tree Search: A Review of Recent Modifications and Applications | arXiv (Cornell University) | 10.1007/s10462-022-10228-y
+== q4-ppr.json (8)
+  [2006] c=853 | Information Retrieval in Folksonomies: Search and Ranking | Lecture notes in computer science | 10.1007/11762256_31
+  [2012] c=753 | Recommender systems: from algorithms to user experience | User Modeling and User-Adapted Interaction | 10.1007/s11257-011-9112-x
+  [2010] c=637 | Relational retrieval using a combination of path-constrained random walks | Machine Learning | 10.1007/s10994-010-5205-8
+  [2020] c=519 | Microsoft Academic Graph: When experts are not enough | Quantitative Science Studies | 10.1162/qss_a_00021
+  [2008] c=116 | Modeling multi-step relevance propagation for expert finding |  | 10.1145/1458082.1458232
+  [2019] c=102 | Invisible Search and Online Search Engines |  | 10.4324/9780429448546
+  [2017] c=83 | An Influence Propagation View of PageRank | ACM Transactions on Knowledge Discovery from | 10.1145/3046941
+  [2004] c=82 | Enterprise Search: Tough Stuff | Queue | 10.1145/988392.988406
+== q5-edge-bundling.json (1)
+  [2006] c=987 | Hierarchical Edge Bundles: Visualization of Adjacency Relations in Hierarchical Data | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2006.147
+== q6-readability.json (8)
+  [2003] c=6363 | An automated method for finding molecular complexes in large protein interaction networks | BMC Bioinformatics | 10.1186/1471-2105-4-2
+  [2014] c=3009 | ForceAtlas2, a Continuous Graph Layout Algorithm for Handy Network Visualization Designed for the Ge | PLoS ONE | 10.1371/journal.pone.0098679
+  [2012] c=2661 | Temporal networks | Physics Reports | 10.1016/j.physrep.2012.03.001
+  [2011] c=818 | Using graph theory to analyze biological networks | BioData Mining | 10.1186/1756-0381-4-10
+  [2017] c=566 | Protein interface prediction using graph convolutional networks | Digital Collections of Colorado (Colorado St | 10.25675/3.021826
+  [2007] c=557 | NodeTrix: a Hybrid Visualization of Social Networks | IEEE Transactions on Visualization and Compu | 10.1109/tvcg.2007.70582
+  [2006] c=531 | VANTED: A system for advanced data analysis and visualization in the context of biological networks | BMC Bioinformatics | 10.1186/1471-2105-7-109
+  [2014] c=382 | MuxViz: a tool for multilayer analysis and visualization of networks | Journal of Complex Networks | 10.1093/comnet/cnu038
+== q7-socialnet-viz-survey.json (8)
+  [2019] c=144 | The State of the Art in Visualizing Multivariate Networks | Computer Graphics Forum | 10.1111/cgf.13728
+  [2018] c=4909 | Deep learning in agriculture: A survey | Computers and Electronics in Agriculture | 10.1016/j.compag.2018.02.016
+  [2019] c=4937 | A survey of methods for explaining black box models | ISTI Open Portal | 10.1145/3236009
+  [2023] c=1300 | A survey of uncertainty in deep neural networks | Artificial Intelligence Review | 10.1007/s10462-023-10562-9
+  [2019] c=2628 | A survey on semi-supervised learning | Machine Learning | 10.1007/s10994-019-05855-6
+  [2019] c=2931 | Attention Based Spatial-Temporal Graph Convolutional Networks for Traffic Flow Forecasting | Proceedings of the AAAI Conference on Artifi | 10.1609/aaai.v33i01.3301922
+  [2022] c=949 | Human-in-the-loop machine learning: a state of the art | Artificial Intelligence Review | 10.1007/s10462-022-10246-w
+  [2018] c=1063 | DEMATEL Technique: A Systematic Review of the State-of-the-Art Literature on Methodologies and Appli | Mathematical Problems in Engineering | 10.1155/2018/3696457
+== q8-referral-chain.json (8)
+  [2003] c=888 | An Experimental Study of Search in Global Social Networks | Science | 10.1126/science.1081058
+  [2016] c=4752 | Sharing and community curation of mass spectrometry data with Global Natural Products Social Molecul | Nature Biotechnology | 10.1038/nbt.3597
+  [2021] c=7945 | Global, regional, and national burden of stroke and its risk factors, 1990–2019: a systematic analys | The Lancet Neurology | 10.1016/s1474-4422(21)00252-0
+  [2016] c=7443 | Global, regional, and national incidence, prevalence, and years lived with disability for 310 diseas | The Lancet | 10.1016/s0140-6736(16)31678-6
+  [2021] c=46735 | Highly accurate protein structure prediction with AlphaFold | Nature | 10.1038/s41586-021-03819-2
+  [2012] c=12026 | A comparative risk assessment of burden of disease and injury attributable to 67 risk factors and ri | The Lancet | 10.1016/s0140-6736(12)61766-8
+  [2014] c=6932 | cytoHubba: identifying hub objects and sub-networks from complex interactome | BMC Systems Biology | 10.1186/1752-0509-8-s4-s11
+  [2010] c=7308 | Social Relationships and Mortality Risk: A Meta-analytic Review | PLoS Medicine | 10.1371/journal.pmed.1000316
+== q9-granovetter.json (8)
+  [2011] c=1598 | On Network Theory | Organization Science | 10.1287/orsc.1100.0641
+  [2003] c=1374 | The Strength of Strong Ties : The Importance of Philos in Organizations | Oxford University Press eBooks | 10.1093/oso/9780195159509.003.0008
+  [1984] c=1269 | Measuring Tie Strength | Social Forces | 10.1093/sf/63.2.482
+  [2010] c=429 | The strength of strong ties in the creation of innovation | Research Policy | 10.1016/j.respol.2010.12.001
+  [2005] c=351 | Weak Ties, Information, and Influence: How Workers Find Jobs in a Local Russian Labor Market | American Sociological Review | 10.1177/000312240507000303
+  [1980] c=296 | A test of structural features of granovetter's strength of weak ties theory | Social Networks | 10.1016/0378-8733(80)90006-4
+  [2016] c=228 | Social Networks and Labor Markets: How Strong Ties Relate to Job Finding on Facebook’s Social Networ | Journal of Labor Economics | 10.1086/686225
+  [2012] c=206 | Reflections on Conceptualizing and Measuring Tie Strength | Social Forces | 10.1093/sf/sos112

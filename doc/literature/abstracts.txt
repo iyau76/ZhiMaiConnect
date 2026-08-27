@@ -1,0 +1,51 @@
+### 10.1007/s10994-010-5205-8
+(no abstract)
+
+### 10.1086/225469
+Analysis of social networks is suggested as a tool for linking micro and macro levels of sociological theory. The procedure is illustrated by elaboration of the macro implications of one aspect of small-scale interaction: the strength of dyadic ties. It is argued that the degree of overlap of two individuals' friendship networks varies directly with the strength of their tie to one another. The impact of this principle on diffusion of influence and information, mobility opportunity, and communit
+
+### 10.1093/sf/63.2.482
+Little attention has been given to the measurement of the concept of tie strength. Using survey data on friendship ties, we apply multiple indicator techniques to construct and validate measures of tie strength. Vie conclude that: (1) there may be two distinct aspects of tie strength, having to do with the time spent in a relationship and the depth of the relationship; (2) a measure of “closeness” or intensity is the best indicator of strength; (3) there are difficulties with frequency and durat
+
+### 10.1109/ICDE.2009.140
+SmallBlue is a social networking application that unlocks the valuable business intelligence of 'who knows what?', 'who knows whom?' and 'who knows what about whom' within an organization, without requiring explicit involvement of individuals. The aim of SmallBlue is to locate knowledgeable colleagues, communities, and knowledge networks in companies. The suite also helps users manage their personal networks, and reach out to their extended network (the friends of their friends) to find and access expertise and information.
+
+### 10.1109/TVCG.2006.147
+A compound graph is a frequently encountered type of data set. Relations are given between items, and a hierarchy is defined on the items as well. We present a new method for visualizing such compound graphs. Our approach is based on visually bundling the adjacency edges, i.e., non-hierarchical edges, together. We realize this as follows. We assume that the hierarchy is shown via a standard tree visualization method. Next, we bend each adjacency edge, modeled as a B-spline curve, toward the polyline defined by the path via the inclusion edges from one node to another. This hierarchical bundling reduces visual clutter and also visualizes implicit adjacency edges between parent nodes that are the result of explicit adjacency edges between their respective child nodes. Furthermore, hierarchical edge bundling is a generic method which can be used in conjunction with existing tree visualizati
+
+### 10.1109/TVCG.2009.108
+A common goal in graph visualization research is the design of novel techniques for displaying an overview of an entire graph. However, there are many situations where such an overview is not relevant or practical for users, as analyzing the global structure may not be related to the main task of the users that have semi-specific information needs. Furthermore, users accessing large graph databases through an online connection or users running on less powerful (mobile) hardware simply do not have the resources needed to compute these overviews. In this paper, we advocate an interaction model that allows users to remotely browse the immediate context graph around a specific node of interest. We show how Furnas' original degree of interest function can be adapted from trees to graphs and how we can use this metric to extract useful contextual subgraphs, control the complexity of the genera
+
+### 10.1111/cgf.13728
+Abstract Multivariate networks are made up of nodes and their relationships (links), but also data about those nodes and links as attributes. Most real‐world networks are associated with several attributes, and many analysis tasks depend on analyzing both, relationships and attributes. Visualization of multivariate networks, however, is challenging, especially when both the topology of the network and the attributes need to be considered concurrently. In this state‐of‐the‐art report, we analyze 
+
+### 10.1111/j.1467-8659.2009.01450.x
+Abstract Graphs depicted as node‐link diagrams are widely used to show relationships between entities. However, node‐link diagrams comprised of a large number of nodes and edges often suffer from visual clutter. The use of edge bundling remedies this and reveals high‐level edge patterns. Previous methods require the graph to contain a hierarchy for this, or they construct a control mesh to guide the edge bundling process, which often results in bundles that show considerable variation in curvatu
+
+### 10.1126/science.1081058
+We report on a global social-search experiment in which more than 60,000 e-mail users attempted to reach one of 18 target persons in 13 countries by forwarding messages to acquaintances. We find that successful social search is conducted primarily through intermediate to weak strength ties, does not require highly connected "hubs" to succeed, and, in contrast to unsuccessful social search, disproportionately relies on professional relationships. By accounting for the attrition of message chains,
+
+### 10.1145/1458082.1458232
+An expert finding system allows a user to type a simple text query and retrieve names and contact information of individuals that possess the expertise expressed in the query. This paper proposes a novel approach to expert finding in large enterprises or intranets by modeling candidate experts (persons), web documents and various relations among them with so-called expertise graphs. As distinct from the state of-the-art approaches estimating personal expertise through one-step propagation of rel
+
+### 10.1145/1518701.1518736
+Social media treats all users the same: trusted friend or total stranger, with little or nothing in between. In reality, relationships fall everywhere along this spectrum, a topic social science has investigated for decades under the theme of tie strength. Our work bridges this gap between theory and practice. In this paper, we present a predictive model that maps social media data to tie strength. The model builds on a dataset of over 2,000 social media ties and performs quite well, distinguish
+
+### 10.1145/22339.22342
+In many contexts, humans often represent their own “neighborhood” in great detail, yet only major landmarks further away. This suggests that such views (“fisheye views”) might be useful for the computer display of large information structures like programs, data bases, online text, etc. This paper explores fisheye views presenting, in turn, naturalistic studies, a general formalism, a specific instantiation, a resulting computer program, example displays and an evaluation.
+
+### 10.1145/245108.245123
+1 Note that by "social network" we explicitly include groups of people linked by professional activities.
+
+### 10.1145/2470654.2466444
+Analyzing networks involves understanding the complex relationships between entities, as well as any attributes they may have. The widely used node-link diagrams excel at this task, but many are difficult to extract meaning from because of the inherent complexity of the relationships and limited screen space. To help address this problem we introduce a technique called motif simplification, in which common patterns of nodes and links are replaced with compact and meaningful glyphs. Well-designed glyphs have several benefits: they (1) require less screen space and layout effort, (2) are easier to understand in the context of the network, (3) can reveal otherwise hidden relationships, and (4) preserve as much underlying information as possible. We tackle three frequently occurring and high-payoff motifs: fans of nodes with a single neighbor, connectors that link a set of anchor nodes, and 
+
+### 10.1145/3186727
+While advances in computing resources have made processing enormous amounts of data possible, human ability to identify patterns in such data has not scaled accordingly. Efficient computational methods for condensing and simplifying data are thus becoming vital for extracting actionable insights. In particular, while data summarization techniques have been studied extensively, only recently has summarizing interconnected data, or graphs , become popular. This survey is a structured, comprehensiv
+
+### 10.1145/511446.511513
+In the original PageRank algorithm for improving the ranking of search-query results, a single PageRank vector is computed, using the link structure of the Web, to capture the relative "importance" of Web pages, independent of any particular search query. To yield more accurate search results, we propose computing a set of PageRank vectors, biased using a set of representative topics, to capture more accurately the notion of importance with respect to a particular topic. By using these (precompu
+
+### 10.2307/3033543
+A family of new measures of point and graph centrality based on early intuitions of Bavelas (1948) is introduced. These measures define centrality in terms of the degree to which a point falls on the shortest path between others and there fore has a potential for control of communication. They may be used to index centrality in any large or small network of symmetrical relations, whether connected or unconnected.
+

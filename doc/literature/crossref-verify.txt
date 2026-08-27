@@ -1,0 +1,111 @@
+DOI 10.1145/2470654.2466444
+  TITLE: Motif simplification
+  AUTHORS: Dunne Cody, Shneiderman Ben
+  VENUE: Proceedings of the SIGCHI Conference on Human Factors in Com | v i p3247-3256 | 2013
+
+DOI 10.1109/TVCG.2009.108
+  TITLE: “Search, Show Context, Expand on Demand”: Supporting Large Graph Exploration with Degree-of-Interest
+  AUTHORS: van Ham F., Perer A.
+  VENUE: IEEE Transactions on Visualization and Computer Graphics | v15 i6 p953-960 | 2009
+
+DOI 10.1145/245108.245123
+  TITLE: Referral Web
+  AUTHORS: Kautz Henry, Selman Bart, Shah Mehul
+  VENUE: Communications of the ACM | v40 i3 p63-65 | 1997
+
+DOI 10.1145/1518701.1518736
+  TITLE: Predicting tie strength with social media
+  AUTHORS: Gilbert Eric, Karahalios Karrie
+  VENUE: Proceedings of the SIGCHI Conference on Human Factors in Com | v i p211-220 | 2009
+
+DOI 10.1086/225469
+  TITLE: The Strength of Weak Ties
+  AUTHORS: Granovetter Mark S.
+  VENUE: American Journal of Sociology | v78 i6 p1360-1380 | 1973
+
+DOI 10.1093/sf/63.2.482
+  TITLE: Measuring Tie Strength
+  AUTHORS: Marsden Peter V., Campbell Karen E.
+  VENUE: Social Forces | v63 i2 p482 | 1984
+
+DOI 10.1145/511446.511513
+  TITLE: Topic-sensitive PageRank
+  AUTHORS: Haveliwala Taher H.
+  VENUE: Proceedings of the 11th international conference on World Wi | v i p517-526 | 2002
+
+DOI 10.2307/3033543
+  TITLE: A Set of Measures of Centrality Based on Betweenness
+  AUTHORS: Freeman Linton C.
+  VENUE: Sociometry | v40 i1 p35 | 1977
+
+DOI 10.1145/22339.22342
+  TITLE: Generalized fisheye views
+  AUTHORS: Furnas G. W.
+  VENUE: ACM SIGCHI Bulletin | v17 i4 p16-23 | 1986
+
+DOI 10.1126/science.1081058
+  TITLE: An Experimental Study of Search in Global Social Networks
+  AUTHORS: Dodds Peter Sheridan, Muhamad Roby, Watts Duncan J.
+  VENUE: Science | v301 i5634 p827-829 | 2003
+
+DOI 10.1109/TVCG.2006.147
+  TITLE: Hierarchical Edge Bundles: Visualization of Adjacency Relations in Hierarchical Data
+  AUTHORS: Holten D.
+  VENUE: IEEE Transactions on Visualization and Computer Graphics | v12 i5 p741-748 | 2006
+
+DOI 10.1111/j.1467-8659.2009.01450.x
+  TITLE: Force‐Directed Edge Bundling for Graph Visualization
+  AUTHORS: Holten Danny, Van Wijk Jarke J.
+  VENUE: Computer Graphics Forum | v28 i3 p983-990 | 2009
+
+DOI 10.1109/TVCG.2007.70582
+  TITLE: NodeTrix: a Hybrid Visualization of Social Networks
+  AUTHORS: Henry Nathalie, Fekete Jean-Daniel, McGuffin Michael J.
+  VENUE: IEEE Transactions on Visualization and Computer Graphics | v13 i6 p1302-1309 | 2007
+
+DOI 10.1145/3186727
+  TITLE: Graph Summarization Methods and Applications
+  AUTHORS: Liu Yike, Safavi Tara, Dighe Abhilash, Koutra Danai
+  VENUE: ACM Computing Surveys | v51 i3 p1-34 | 2019
+
+DOI 10.1111/cgf.13728
+  TITLE: The State of the Art in Visualizing Multivariate Networks
+  AUTHORS: Nobre C., Meyer M., Streit M., Lex A.
+  VENUE: Computer Graphics Forum | v38 i3 p807-832 | 2019
+
+DOI 10.1007/s10994-010-5205-8
+  TITLE: Relational retrieval using a combination of path-constrained random walks
+  AUTHORS: Lao Ni, Cohen William W.
+  VENUE: Machine Learning | v81 i1 p53-67 | 2010
+
+DOI 10.1145/1458082.1458232
+  TITLE: Modeling multi-step relevance propagation for expert finding
+  AUTHORS: Serdyukov Pavel, Rode Henning, Hiemstra Djoerd
+  VENUE: Proceedings of the 17th ACM conference on Information and kn | v i p1133-1142 | 2008
+
+DOI 10.1109/ICDE.2009.140
+  TITLE: SmallBlue: Social Network Analysis for Expertise Search and Collective Intelligence
+  AUTHORS: Lin Ching-Yung, Cao Nan, Liu Shi Xia, Papadimitriou Spiros, Sun Jimeng, Yan Xifeng
+  VENUE: 2009 IEEE 25th International Conference on Data Engineering | v i p1483-1486 | 2009
+
+DOI 10.1002/asi.20591
+  TITLE: The link‐prediction problem for social networks
+  AUTHORS: Liben‐Nowell David, Kleinberg Jon
+  VENUE: Journal of the American Society for Information Science and  | v58 i7 p1019-1031 | 2007
+
+DOI 10.1016/S0953-5438(00)00032-1
+  TITLE: Effective information visualisation: a study of graph drawing aesthetics and algorithms
+  AUTHORS: Purchase H.C
+  VENUE: Interacting with Computers | v13 i2 p147-162 | 2000
+
+DOI 10.1016/j.visinf.2018.12.006
+  TITLE: Exploring the limits of complexity: A survey of empirical studies on graph visualisation
+  AUTHORS: Yoghourdjian Vahan, Archambault Daniel, Diehl Stephan, Dwyer Tim, Klein Karsten, Purchase Helen C.
+  VENUE: Visual Informatics | v2 i4 p264-282 | 2018
+
+BIBLIO SEARCH 'motif simplification':
+  [2013] Motif simplification | Proceedings of the SIGCHI Conference on Human Factors in Com | DOI 10.1145/2470654.2466444 | Dunne, Shneiderman
+  [None] Motif Simplification for BioFabric Network Visualizations: Improving Pattern Recognition and Interpretation_supp1-3634266.mp4 |  | DOI 10.1109/tvcg.2025.3634266/mm1 | Fuchs
+  [None] Motif Simplification for BioFabric Network Visualizations: Improving Pattern Recognition and Interpretation_supp2-3634266.pdf |  | DOI 10.1109/tvcg.2025.3634266/mm2 | Fuchs
+  [2026] Motif Simplification for BioFabric Network Visualizations: Improving Pattern Recognition and Interpretation | IEEE Transactions on Visualization and Computer Graphics | DOI 10.1109/tvcg.2025.3634266 | Fuchs, Dunne, Heinle, Keim, Di Bartolomeo
+  [2022] Improving Text Simplification with Factuality Error Detection | Proceedings of the Workshop on Text Simplification, Accessib | DOI 10.18653/v1/2022.tsar-1.16 | Ma, Seneviratne, Daskalaki

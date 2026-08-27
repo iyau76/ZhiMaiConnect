@@ -1,0 +1,51 @@
+== q2-motif.json (8)
+  [2016] c=71 | Towards Unambiguous Edge Bundling: Investigating Confluent Drawings for Network Visualization | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2016.2598958 | Benjamin Bach, Nathalie Henry Riche, Christophe Hurter, Kim Marriott
+  [2021] c=9 | Airline Network Structure: Motifs and Airports’ Role in Cliques | Sustainability | 10.3390/su13179573 | Huijuan Yang, Meilong Le, Di Wang
+  [2019] c=71 | Analyzing Dynamic Hypergraphs with Parallel Aggregated Ordered Hypergraph Visualization | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2019.2933196 | Paola Valdivia, Paolo Buono, Catherine Plaisant, Nicole Dufournaud
+  [2018] c=272 | Graph Summarization Methods and Applications | ACM Computing Surveys | 10.1145/3186727 | Yike Liu, Tara Safavi, Abhilash Dighe, Danai Koutra
+  [2020] c=39 | The State of the Art in Empirical User Evaluation of Graph Visualizations | IEEE Access | 10.1109/access.2020.3047616 | Michael Burch, Weidong Huang, Mathew Wakefield, Helen C. Purchase
+  [2023] c=15 | ViMO - Visual Analysis of Neuronal Connectivity Motifs | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2023.3327388 | Jakob Troidl, Simon Warchol, Jinhan Choi, Jordan Matelsky
+  [2019] c=29 | Pattern-Driven Navigation in 2D Multiscale Visualizations with Scalable Insets | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2019.2934555 | Fritz Lekschas, Michael Behrisch, Benjamin Bach, Peter Kerpedjiev
+  [2025] c=1 | Motif Simplification for BioFabric Network Visualizations: Improving Pattern Recognition and Interpretation | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2025.3634266 | Johannes Fuchs, Cody Dunne, Maria-Viktoria Heinle, Daniel A. Keim
+== q20-motif-exact.json (6)
+  [2016] c=71 | Towards Unambiguous Edge Bundling: Investigating Confluent Drawings for Network Visualization | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2016.2598958 | Benjamin Bach, Nathalie Henry Riche, Christophe Hurter, Kim Marriott
+  [2019] c=71 | Analyzing Dynamic Hypergraphs with Parallel Aggregated Ordered Hypergraph Visualization | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2019.2933196 | Paola Valdivia, Paolo Buono, Catherine Plaisant, Nicole Dufournaud
+  [2021] c=9 | Airline Network Structure: Motifs and Airports’ Role in Cliques | Sustainability | 10.3390/su13179573 | Huijuan Yang, Meilong Le, Di Wang
+  [2018] c=272 | Graph Summarization Methods and Applications | ACM Computing Surveys | 10.1145/3186727 | Yike Liu, Tara Safavi, Abhilash Dighe, Danai Koutra
+  [2019] c=110 | ImaCytE: Visual Exploration of Cellular Micro-Environments for Imaging Mass Cytometry Data | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2019.2931299 | Antonios Somarakis, Vincent van Unen, Frits Koning, Boudewijn P. F. Lelieveldt
+  [2020] c=39 | The State of the Art in Empirical User Evaluation of Graph Visualizations | IEEE Access | 10.1109/access.2020.3047616 | Michael Burch, Weidong Huang, Mathew Wakefield, Helen C. Purchase
+== q21-force-bundling.json (6)
+  [2009] c=534 | Force‐Directed Edge Bundling for Graph Visualization | Computer Graphics Forum | 10.1111/j.1467-8659.2009.01450.x | Danny Holten, Jarke J. van Wijk
+  [2017] c=5983 | UCSF ChimeraX: Meeting modern challenges in visualization and analysis | Protein Science | 10.1002/pro.3235 | Thomas D. Goddard, Conrad C. Huang, Elaine C. Meng, Eric F. Pettersen
+  [2014] c=2579 | UpSet: Visualization of Intersecting Sets | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2014.2346248 | Alexander Lex, Nils Gehlenborg, Hendrik Strobelt, Romain Vuillemot
+  [2011] c=131 | Divided Edge Bundling for Directional Network Data | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2011.190 | D. Selassie, Brandon Heller, Jeffrey Heer
+  [2011] c=159 | Skeleton-Based Edge Bundling for Graph Visualization | IEEE Transactions on Visualization and Compute | 10.1109/tvcg.2011.233 | Ozan Ersoy, Christophe Hurter, Fernando V. Paulovich, G. Cantareiro
+  [2021] c=46735 | Highly accurate protein structure prediction with AlphaFold | Nature | 10.1038/s41586-021-03819-2 | John Jumper, Richard Evans, Alexander Pritzel, Tim Green
+== q22-smallblue.json (6)
+  [2009] c=92 | SmallBlue: Social Network Analysis for Expertise Search and Collective Intelligence | Proceedings - International Conference on Data | 10.1109/icde.2009.140 | Ching‐Yung Lin, Nan Cao, Shi Xia Liu, Spiros Papadimitriou
+  [2010] c=108 | Optimal Social Trust Path Selection in Complex Social Networks | Proceedings of the AAAI Conference on Artifici | 10.1609/aaai.v24i1.7509 | Guanfeng Liu, Yan Wang, Mehmet A. Orgun
+  [2011] c=79 | Trust Transitivity in Complex Social Networks | Proceedings of the AAAI Conference on Artifici | 10.1609/aaai.v25i1.8087 | Guanfeng Liu, Yan Wang, Mehmet A. Orgun
+  [2016] c=126 | A Survey on Visual Analytics of Social Media Data | IEEE Transactions on Multimedia | 10.1109/tmm.2016.2614220 | Yingcai Wu, Nan Cao, David Gotz, Yap‐Peng Tan
+  [2013] c=39 | Cloud-based design and manufacturing systems: A social network analysis | The University of Bath Online Publications Sto | None | Dazhong Wu, Dirk Schaefer, David W. Rosen
+  [2015] c=26 | Trust Calculation with Ant Colony Optimization in Online Social Networks | Procedia Computer Science | 10.1016/j.procs.2015.06.021 | Shashvat Sanadhya, Shailendra Singh
+== q23-link-pred.json (6)
+  [2007] c=3037 | The link‐prediction problem for social networks | Journal of the American Society for Informatio | 10.1002/asi.20591 | David Liben‐Nowell, Jon Kleinberg
+  [2003] c=1624 | The link prediction problem for social networks |  | 10.1145/956863.956972 | David Liben‐Nowell, Jon Kleinberg
+  [2003] c=187 | The link prediction problem for social networks |  | 10.1145/956958.956972 | David Liben‐Nowell, Jon Kleinberg
+  [2007] c=125 | The link-prediction problem for social networks | Journal of the American Society for Informatio | 10.5555/1241540.1241551 | Liben-NowellDavid, KleinbergJon
+  [2021] c=46735 | Highly accurate protein structure prediction with AlphaFold | Nature | 10.1038/s41586-021-03819-2 | John Jumper, Richard Evans, Alexander Pritzel, Tim Green
+  [2016] c=2842 | Structural Deep Network Embedding |  | 10.1145/2939672.2939753 | Daixin Wang, Peng Cui, Wenwu Zhu
+== q24-trust.json (6)
+  [2005] c=839 | Computing and applying trust in web-based social networks | University Libraries (University of Maryland) | None | Jennifer Golbeck, James Hendler
+  [2007] c=208 | SUNNY: a new algorithm for trust inference in social networks using probabilistic confidence models |  | None | Ugur Kuter, Jennifer Golbeck
+  [2010] c=98 | Using probabilistic confidence models for trust inference in Web-based social networks | ACM Transactions on Internet Technology | 10.1145/1754393.1754397 | Ugur Kuter, Jennifer Golbeck
+  [2009] c=163 | Operators for propagating trust and their evaluation in social networks |  | 10.65109/wihe7071 | Chung-Wei Hang, Yonghong Wang, Munindar P. Singh
+  [2017] c=61 | OpinionWalk: An efficient solution to massive trust assessment in online social networks |  | 10.1109/infocom.2017.8057106 | Guangchi Liu, Qi Chen, Qing Yang, Binhai Zhu
+  [2009] c=60 | FUZZY TRUST AGGREGATION AND PERSONALIZED TRUST INFERENCE IN VIRTUAL SOCIAL NETWORKS | Computational Intelligence | 10.1111/j.1467-8640.2009.00334.x | Mohsen Lesani, Niloufar Montazeri
+== q25-graph-readability.json (6)
+  [2000] c=125 | Effective information visualisation: a study of graph drawing aesthetics and algorithms | Interacting with Computers | 10.1016/s0953-5438(00)00032-1 | Helen C. Purchase
+  [2018] c=95 | Exploring the limits of complexity: A survey of empirical studies on graph visualisation | Visual Informatics | 10.1016/j.visinf.2018.12.006 | Vahan Yoghourdjian, Daniel Archambault, Stephan Diehl, Tim Dwyer
+  [2011] c=98 | Drawing graphs with right angle crossings | Theoretical Computer Science | 10.1016/j.tcs.2011.05.025 | Walter Didimo, Peter Eades, Giuseppe Liotta
+  [2020] c=285 | A Guide to Conquer the Biological Network Era Using Graph Theory | Frontiers in Bioengineering and Biotechnology | 10.3389/fbioe.2020.00034 | Mikaela Koutrouli, Evangelos Karatzas, David Páez-Espino, Georgios A. Pavlopoulos
+  [2002] c=22 | The effects of graph layout |  | 10.1109/ozchi.1998.732199 | Helen C. Purchase
+  [2016] c=55 | Recognizing and drawing IC-planar graphs | Theoretical Computer Science | 10.1016/j.tcs.2016.04.026 | Franz J. Brandenburg, Walter Didimo, William Evans, Philipp Kindermann
