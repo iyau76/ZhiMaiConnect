@@ -4,6 +4,7 @@ export interface MockNetworkState {
   blockedExternalUrls: string[];
   unhandledApiUrls: string[];
   transcriptionRequests: unknown[];
+  webToolRequests: Array<Record<string, unknown>>;
   visionRequests: Array<Record<string, unknown>>;
 }
 
@@ -50,6 +51,56 @@ function visionReply(body: Record<string, unknown>) {
   }
   if (prompt.includes("以下候选及排序由本地确定性规则产生")) {
     return "首选陈安：人物档案明确记录了合同审阅经验。为什么不是赵宇：赵宇更擅长网站开发，缺少合同证据。\n\n可编辑话术：陈安你好，方便时能否帮我看一下租房合同中的违约条款？不用着急，我会先隐去无关个人信息。";
+  }
+  if (prompt.includes("人际协作推荐智能体")) {
+    if (!prompt.includes('"call":{"tool":"search_profiles"')) {
+      return JSON.stringify({
+        type: "tool",
+        summary: "先检索具备合同与法律经验的人选",
+        tool: "search_profiles",
+        args: { query: "合同 法律", limit: 8 },
+      });
+    }
+    return JSON.stringify({
+      type: "final",
+      summary: "已结合档案与共同事件完成比较",
+      recommendations: [
+        {
+          personId: "person-lawyer-agent",
+          score: 92,
+          confidence: "高",
+          reasons: ["法律职业与合同审阅经历直接匹配"],
+          evidence: ["档案记录：律师；共同事件：一起审核租房合同"],
+          risks: ["联系前仍需确认时间与意愿"],
+        },
+        {
+          personId: "person-dev-agent",
+          score: 35,
+          confidence: "低",
+          reasons: ["关系较熟悉"],
+          evidence: ["档案记录：前端工程师"],
+          risks: ["没有合同审阅证据"],
+        },
+      ],
+      answer:
+        "首选陈安：法律和合同经验最直接。为什么不是赵宇：现有档案只有开发经验。\n\n可编辑话术：陈安你好，方便时能否帮我看一下租房合同中的违约条款？",
+    });
+  }
+  if (prompt.includes("通用问答智能体")) {
+    if (!prompt.includes('"call":{"tool":"search_web"')) {
+      return JSON.stringify({
+        type: "tool",
+        summary: "需要检索公开网页核对最新资料",
+        tool: "search_web",
+        args: { query: "Open-Meteo 官方文档" },
+      });
+    }
+    return JSON.stringify({
+      type: "final",
+      summary: "已结合公开检索结果完成回答",
+      answer:
+        "Open-Meteo 提供无需密钥的天气预报接口；正式使用前仍应核对官方文档中的参数与额度说明。",
+    });
   }
   if (prompt.includes("明确写出“资料不足”")) {
     return "资料不足：目前只知道生日日期，缺少喜好、忌口和既往送礼记录。\n\n祝福：生日快乐，愿你新的一岁顺心。\n\n礼物建议：先询问近期需要，再决定礼物，不补写未知喜好。";
@@ -100,6 +151,31 @@ async function handleRoute(route: Route, state: MockNetworkState) {
     return;
   }
 
+  if (url.pathname === "/api/web-tools") {
+    const body = (request.postDataJSON() ?? {}) as Record<string, unknown>;
+    state.webToolRequests.push(body);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Cache-Control": "no-store" },
+      body: JSON.stringify({
+        ok: true,
+        result: {
+          provider: "Playwright Search",
+          query: body.query,
+          items: [
+            {
+              title: "Open-Meteo Documentation",
+              link: "https://open-meteo.com/en/docs",
+              snippet: "Weather Forecast API",
+            },
+          ],
+        },
+      }),
+    });
+    return;
+  }
+
   if (url.pathname.startsWith("/api/")) {
     state.unhandledApiUrls.push(url.href);
     await route.fulfill({
@@ -126,6 +202,7 @@ export const test = base.extend<{ mockNetwork: MockNetworkState }>({
         blockedExternalUrls: [],
         unhandledApiUrls: [],
         transcriptionRequests: [],
+        webToolRequests: [],
         visionRequests: [],
       };
       await page.route("**/*", (route) => handleRoute(route, state));

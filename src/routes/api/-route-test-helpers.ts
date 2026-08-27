@@ -24,7 +24,7 @@ export async function apiSessionHeaders(): Promise<Headers> {
 }
 
 export async function routeRequest(
-  path: "vision" | "transcribe",
+  path: "vision" | "transcribe" | "web-tools",
   body: BodyInit,
   options: {
     authenticated?: boolean;

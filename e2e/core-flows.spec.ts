@@ -22,11 +22,20 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
 
   await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
-  await expect(page.getByText("已拦截缺少原文证据的敏感值 · 2")).toBeVisible();
+  const intakeTrace = intake.getByRole("status");
+  await expect(intakeTrace).toContainText("整理轨迹");
+  await expect(intakeTrace).toContainText("整理完成");
+  await expect(intakeTrace).toContainText(/\d+ 步/);
+  await expect(page.getByText("AI 推断值待核验 · 2")).toBeVisible();
+  const warningDetails = page.locator("details").filter({ hasText: "AI 推断值待核验" });
+  await expect(warningDetails).not.toHaveAttribute("open", "");
+  await warningDetails.locator("summary").click();
+  await expect(warningDetails).toHaveAttribute("open", "");
+  await expect(warningDetails.getByText(/手冲咖啡/)).toBeVisible();
   const name = page.getByPlaceholder("姓名");
   await expect(name).toHaveValue("唐悦");
   await page.getByRole("combobox", { name: "亲密度", exact: true }).selectOption("4");
-  await expect(page.getByText("已拦截缺少原文证据的敏感值 · 1")).toBeVisible();
+  await expect(page.getByText("AI 推断值待核验 · 1")).toBeVisible();
 
   await page.getByRole("button", { name: "确认入库" }).click();
   await expect(page.getByText("仍有待确认条目：3")).toBeVisible();
@@ -77,7 +86,7 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
       contact: "微信 tangyue_photo",
       birthday: "03-12",
       closeness: 4,
-      likes: ["人像摄影"],
+      likes: ["人像摄影", "手冲咖啡"],
       fieldSources: {
         name: { kind: "manual" },
         contact: { kind: "manual" },
@@ -104,6 +113,20 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
   await expect(page.getByText("唐悦（摄影社）", { exact: true })).toBeVisible();
   expect(mockNetwork.visionRequests).toHaveLength(1);
   expect(String(mockNetwork.visionRequests[0].prompt)).toContain("唐悦");
+});
+
+test("待确认条目会阻止入库，并可经二次确认一键全部接受", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "离线演示草稿" }).click();
+  await expect(page.getByText(/待确认 \d+/, { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "确认入库" }).click();
+  await expect(page.getByText(/仍有待确认条目：\d+/)).toBeVisible();
+
+  const acceptAll = page.getByRole("button", { name: /一键接受全部待确认/ });
+  await acceptAll.click();
+  await expect(page.getByText("待确认 0", { exact: true })).toBeVisible();
+  await expect(acceptAll).toHaveCount(0);
 });
 
 test("人物改名会传播到 Fact、关系、事件和提醒的持久化引用", async ({ page }) => {
@@ -431,6 +454,84 @@ test("本地候选排序后才请求 AI，并产出可编辑求助话术", async
   await editable.fill("陈安你好，方便时帮我看一下合同吗？");
   await expect(editable).toHaveValue("陈安你好，方便时帮我看一下合同吗？");
   expect(mockNetwork.visionRequests).toHaveLength(1);
+});
+
+test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过程", async ({ page, mockNetwork }) => {
+  await openApp(page);
+  await seedIndexedDb(page, {
+    persons: [
+      {
+        id: "person-lawyer-agent",
+        name: "陈安",
+        note: "可以协助合同审阅",
+        profile: {
+          title: "律师",
+          likes: ["合同审阅", "法律咨询"],
+          contact: "private-lawyer@example.invalid",
+          closeness: 4,
+        },
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW,
+      },
+      {
+        id: "person-dev-agent",
+        name: "赵宇",
+        note: "擅长网站开发",
+        profile: { title: "前端工程师", contact: "private-dev@example.invalid", closeness: 5 },
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW - 1,
+      },
+    ],
+    lifeEvents: [
+      {
+        id: "event-contract-agent",
+        date: "2026-08-12",
+        title: "一起审核租房合同",
+        personIds: ["person-lawyer-agent"],
+        kind: "帮忙",
+        createdAt: NOW,
+      },
+    ],
+  });
+
+  await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
+  const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+  await recommendation.getByRole("textbox").fill("帮我看一下租房合同中的违约条款");
+  await recommendation.getByRole("switch", { name: /AI 全库分析/ }).click();
+  await recommendation.getByRole("button", { name: "AI 全库分析", exact: true }).click();
+
+  const trace = recommendation.getByRole("status");
+  await expect(trace).toContainText("分析完成");
+  await expect(trace).toContainText(/\d+ 步/);
+  await expect(recommendation.locator("ol li").first()).toContainText("陈安");
+  await expect(recommendation.locator("ol li").first()).toContainText("92 AI建议分");
+  await expect(
+    recommendation.getByRole("textbox", { name: "可编辑的候选比较与求助话术" }),
+  ).toContainText("为什么不是赵宇");
+
+  expect(mockNetwork.visionRequests).toHaveLength(2);
+  const prompts = mockNetwork.visionRequests.map((request) => String(request.prompt));
+  expect(prompts[0]).toContain("已授权访问完整决策档案");
+  expect(prompts[1]).toContain('"tool":"search_profiles"');
+  expect(prompts.join("\n")).not.toContain("private-lawyer@example.invalid");
+});
+
+test("AI 助理问一问会展示流式轨迹并调用受控网页检索工具", async ({ page, mockNetwork }) => {
+  await openApp(page);
+  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  const questionCard = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await questionCard.getByRole("textbox").fill("Open-Meteo 现在适合做无密钥天气查询吗？");
+  await questionCard.getByRole("button", { name: "发送问题" }).click();
+
+  const trace = questionCard.getByRole("status");
+  await expect(trace).toContainText("问答轨迹");
+  await expect(trace).toContainText("回答完成");
+  await expect(questionCard).toContainText("Open-Meteo 提供无需密钥的天气预报接口");
+
+  expect(mockNetwork.webToolRequests).toEqual([{ tool: "search", query: "Open-Meteo 官方文档" }]);
+  expect(mockNetwork.visionRequests).toHaveLength(2);
 });
 
 test("资料不足时祝福与礼物建议明确提示缺口且保持可编辑", async ({ page }) => {

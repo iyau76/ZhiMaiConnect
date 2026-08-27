@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -23,11 +24,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { buildAdviceContext, withAdvicePrompt } from "@/lib/advice-context";
+import { runAssistantAgent, type AssistantAgentResult } from "@/lib/assistant-agent";
+import { facesDb } from "@/lib/face-db";
 import { t } from "@/lib/i18n";
+import type { AgentTraceEvent } from "@/lib/recommendation-agent";
 
 import { cn } from "@/lib/utils";
-import { askModel, auditVision, testConnection } from "@/lib/vision-client";
+import { auditVision, testConnection } from "@/lib/vision-client";
 import {
   KIND_LABEL,
   LOVABLE_MODELS,
@@ -63,6 +66,7 @@ export function ModelsPanel({
   const [useData, setUseData] = useState(true);
 
   const [busy, setBusy] = useState(false);
+  const [assistantTrace, setAssistantTrace] = useState<AgentTraceEvent[]>([]);
   const [testing, setTesting] = useState(false);
   const [auditing, setAuditing] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
@@ -125,15 +129,6 @@ export function ModelsPanel({
     }
     const sentFrame = frame;
     const history = turns;
-    let sentPrompt = prompt;
-    if (useData) {
-      try {
-        const context = await buildAdviceContext();
-        sentPrompt = withAdvicePrompt(context.text, prompt);
-      } catch {
-        toast.error(t("读不到本机资料，这次按普通提问发送"));
-      }
-    }
     setTurns([
       ...history,
       { role: "user", text: prompt, image: sentFrame ?? undefined },
@@ -143,26 +138,55 @@ export function ModelsPanel({
     setInput("");
     if (sentFrame) onFrameUsed();
     setBusy(true);
+    setAssistantTrace([]);
     try {
-      await askModel(
+      let archive: Pick<
+        Parameters<typeof runAssistantAgent>[0],
+        "persons" | "relations" | "events"
+      > = {
+        persons: [],
+        relations: [],
+        events: [],
+      };
+      if (useData) {
+        try {
+          const [persons, relations, events] = await Promise.all([
+            facesDb.listPersons(),
+            facesDb.listRelations(),
+            facesDb.listLifeEvents(),
+          ]);
+          archive = { persons, relations, events };
+        } catch {
+          toast.error(t("读不到本机资料，这次按普通提问发送"));
+        }
+      }
+      const result: AssistantAgentResult = await runAssistantAgent({
         preset,
-        sentPrompt,
-
-        sentFrame,
+        question: prompt,
+        ...archive,
+        includeArchive: useData && archive.persons.length > 0,
         history,
-        (chunk) => {
-          setTurns((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            next[next.length - 1] = { ...last, text: last.text + chunk };
-            return next;
-          });
-        },
-        new AbortController().signal,
-      );
+        image: sentFrame,
+        onTrace: (event) => setAssistantTrace((prev) => [...prev.slice(-23), event]),
+      });
+      setTurns((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        next[next.length - 1] = { ...last, text: result.answer };
+        return next;
+      });
     } catch (error) {
       toast.error((error as Error).message);
-      setTurns((prev) => prev.slice(0, -2));
+      setAssistantTrace((prev) => [
+        ...prev.slice(-23),
+        { kind: "done", text: (error as Error).message || t("请求失败") },
+      ]);
+      setTurns((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        next[next.length - 1] = { ...last, text: t("请求失败") };
+        return next;
+      });
     } finally {
       setBusy(false);
     }
@@ -405,6 +429,19 @@ export function ModelsPanel({
           ))}
         </div>
 
+        {assistantTrace.length > 0 && (
+          <div className="mt-2">
+            <ReasoningDisclosure
+              label={t("问答轨迹")}
+              current={assistantTrace.at(-1)?.text ?? t("正在准备回答")}
+              steps={assistantTrace.length}
+              running={busy}
+              history={assistantTrace.map((item) => item.text)}
+              stepLabel={t("步")}
+            />
+          </div>
+        )}
+
         <div className="mt-3 flex gap-2">
           <Textarea
             value={input}
@@ -412,7 +449,7 @@ export function ModelsPanel({
             placeholder={t("问点什么，比如：这周该联系谁？")}
             onChange={(e) => setInput(e.target.value)}
           />
-          <Button onClick={handleSend} disabled={busy}>
+          <Button onClick={handleSend} disabled={busy} aria-label={t("发送问题")}>
             {busy ? (
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             ) : (

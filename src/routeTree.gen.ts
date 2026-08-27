@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiStatusRouteImport } from './routes/api/status'
 import { Route as ApiTranscribeRouteImport } from './routes/api/transcribe'
 import { Route as ApiVisionRouteImport } from './routes/api/vision'
+import { Route as ApiWebToolsRouteImport } from './routes/api/web-tools'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -34,18 +35,25 @@ const ApiVisionRoute = ApiVisionRouteImport.update({
   path: '/api/vision',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiWebToolsRoute = ApiWebToolsRouteImport.update({
+  id: '/api/web-tools',
+  path: '/api/web-tools',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/status': typeof ApiStatusRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/api/vision': typeof ApiVisionRoute
+  '/api/web-tools': typeof ApiWebToolsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/status': typeof ApiStatusRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/api/vision': typeof ApiVisionRoute
+  '/api/web-tools': typeof ApiWebToolsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +61,21 @@ export interface FileRoutesById {
   '/api/status': typeof ApiStatusRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/api/vision': typeof ApiVisionRoute
+  '/api/web-tools': typeof ApiWebToolsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/status' | '/api/transcribe' | '/api/vision'
+  fullPaths:
+    '/' | '/api/status' | '/api/transcribe' | '/api/vision' | '/api/web-tools'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/status' | '/api/transcribe' | '/api/vision'
-  id: '__root__' | '/' | '/api/status' | '/api/transcribe' | '/api/vision'
+  to: '/' | '/api/status' | '/api/transcribe' | '/api/vision' | '/api/web-tools'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/status'
+    | '/api/transcribe'
+    | '/api/vision'
+    | '/api/web-tools'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -67,6 +83,7 @@ export interface RootRouteChildren {
   ApiStatusRoute: typeof ApiStatusRoute
   ApiTranscribeRoute: typeof ApiTranscribeRoute
   ApiVisionRoute: typeof ApiVisionRoute
+  ApiWebToolsRoute: typeof ApiWebToolsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -99,6 +116,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiVisionRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/web-tools': {
+      id: '/api/web-tools'
+      path: '/api/web-tools'
+      fullPath: '/api/web-tools'
+      preLoaderRoute: typeof ApiWebToolsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -107,6 +131,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiStatusRoute: ApiStatusRoute,
   ApiTranscribeRoute: ApiTranscribeRoute,
   ApiVisionRoute: ApiVisionRoute,
+  ApiWebToolsRoute: ApiWebToolsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

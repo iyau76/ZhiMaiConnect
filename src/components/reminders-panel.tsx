@@ -1,6 +1,7 @@
 /** 个人版：提醒 —— 生日、节日、待办，以及「这事该拜托谁」 */
 
 import {
+  BrainCircuit,
   Cake,
   Check,
   Clipboard,
@@ -13,18 +14,21 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { SourceBadge } from "@/components/source-badge";
+import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { askText } from "@/lib/ai-text";
 import {
   facesDb,
   type LifeEventRecord,
   type PersonRecord,
+  type RelationRecord,
   type ReminderRecord,
 } from "@/lib/face-db";
 import { t } from "@/lib/i18n";
@@ -35,12 +39,14 @@ import {
   staleContacts,
   type CandidateRecommendation,
 } from "@/lib/recommendation";
+import { runRecommendationAgent, type AgentTraceEvent } from "@/lib/recommendation-agent";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   const [persons, setPersons] = useState<PersonRecord[]>([]);
   const [reminders, setReminders] = useState<ReminderRecord[]>([]);
   const [events, setEvents] = useState<LifeEventRecord[]>([]);
+  const [relations, setRelations] = useState<RelationRecord[]>([]);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -49,20 +55,28 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   const [askBusy, setAskBusy] = useState(false);
   const [askAnswer, setAskAnswer] = useState("");
   const [candidates, setCandidates] = useState<CandidateRecommendation[]>([]);
+  const [candidateMode, setCandidateMode] = useState<"local" | "agent">("local");
+  const [aiArchiveMode, setAiArchiveMode] = useState(false);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentTrace, setAgentTrace] = useState<AgentTraceEvent[]>([]);
+  const agentAbortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
-    const [p, r, e] = await Promise.all([
+    const [p, r, e, rel] = await Promise.all([
       facesDb.listPersons(),
       facesDb.listReminders(),
       facesDb.listLifeEvents(),
+      facesDb.listRelations(),
     ]);
     setPersons(p);
     setReminders(r);
     setEvents(e);
+    setRelations(rel);
   }, []);
 
   useEffect(() => {
     void load();
+    return () => agentAbortRef.current?.abort();
   }, [load]);
 
   const items = useMemo(() => upcoming(persons, 60), [persons]);
@@ -139,6 +153,8 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     if (!ask.trim()) return;
     const ranked = rankCandidates(ask.trim(), persons, events).slice(0, 3);
     setCandidates(ranked);
+    setCandidateMode("local");
+    setAgentTrace([]);
     setAskAnswer("");
     if (!ranked.length) toast.error("人物库还是空的，请先录入人物资料");
   };
@@ -148,6 +164,8 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     const ranked = rankCandidates(question, persons, events).slice(0, 3);
     setAsk(question);
     setCandidates(ranked);
+    setCandidateMode("local");
+    setAgentTrace([]);
     setAskAnswer("");
     if (ranked.length) {
       toast.success("已用本地规则生成演示候选；人物与结果均须使用合成演示数据");
@@ -167,6 +185,43 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       toast.error(error instanceof Error ? error.message : "AI 请求失败");
     } finally {
       setAskBusy(false);
+    }
+  };
+
+  const analyzeFullArchive = async () => {
+    if (!ask.trim() || agentBusy) return;
+    agentAbortRef.current?.abort();
+    const controller = new AbortController();
+    agentAbortRef.current = controller;
+    setAgentBusy(true);
+    setAskAnswer("");
+    setCandidates([]);
+    setAgentTrace([]);
+    try {
+      const result = await runRecommendationAgent({
+        preset,
+        task: ask.trim(),
+        persons,
+        relations,
+        events,
+        signal: controller.signal,
+        onTrace: (event) => setAgentTrace((current) => [...current.slice(-19), event]),
+      });
+      setCandidates(result.candidates);
+      setCandidateMode("agent");
+      setAskAnswer(result.answer);
+      toast.success(
+        result.disclosureMode === "full"
+          ? `AI 已完成全档案分析（${result.rounds} 轮）`
+          : `AI 已通过渐进披露完成分析（${result.rounds} 轮）`,
+      );
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        toast.error(error instanceof Error ? error.message : "AI 全库分析失败");
+      }
+    } finally {
+      if (agentAbortRef.current === controller) agentAbortRef.current = null;
+      setAgentBusy(false);
     }
   };
 
@@ -365,7 +420,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
         </ul>
       </section>
 
-      {/* 这事拜托谁：先本地确定性召回，再让 AI 解释和润色 */}
+      {/* 这事拜托谁：本地确定性召回，或用户主动授权 AI 按需读取全库 */}
       <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Users className="size-4 text-primary" aria-hidden="true" />
@@ -374,24 +429,58 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
         <Textarea
           value={ask}
           onChange={(event) => {
+            agentAbortRef.current?.abort();
             setAsk(event.target.value);
             setCandidates([]);
             setAskAnswer("");
+            setAgentTrace([]);
           }}
           rows={3}
           placeholder="例如：我想找人帮忙看一下租房合同，谁比较合适？"
           className="mt-3"
         />
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/45 px-3 py-2.5">
+          <label
+            htmlFor="ai-archive-mode"
+            className="flex min-w-0 cursor-pointer items-center gap-3"
+          >
+            <Switch
+              id="ai-archive-mode"
+              checked={aiArchiveMode}
+              onCheckedChange={setAiArchiveMode}
+              disabled={agentBusy}
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium">AI 全库分析</span>
+              <span className="block text-[11px] leading-relaxed text-muted-foreground">
+                小档案一次提交；档案较多时由 AI 多轮按需读取人物、关系与事件
+              </span>
+            </span>
+          </label>
+          <span className="text-[10px] text-muted-foreground">
+            不提交照片、人脸特征、联系方式原文；天气与资讯查询不携带人物档案
+          </span>
+        </div>
         <div className="mt-2 flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={loadOfflineRecommendationDemo}>
             <Sparkles className="size-4" aria-hidden="true" />
             离线演示问题（合成数据）
           </Button>
-          <Button variant="outline" onClick={findWho} disabled={!ask.trim()}>
+          <Button variant="outline" onClick={findWho} disabled={!ask.trim() || agentBusy}>
             <Users className="size-4" aria-hidden="true" />
             本地筛选候选
           </Button>
-          {candidates.length > 0 && (
+          {aiArchiveMode && (
+            <Button onClick={() => void analyzeFullArchive()} disabled={!ask.trim() || agentBusy}>
+              {agentBusy ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <BrainCircuit className="size-4" aria-hidden="true" />
+              )}
+              AI 全库分析
+            </Button>
+          )}
+          {candidateMode === "local" && candidates.length > 0 && (
             <Button onClick={() => void explainCandidates()} disabled={askBusy}>
               {askBusy ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -402,6 +491,18 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
             </Button>
           )}
         </div>
+        {agentTrace.length > 0 && (
+          <div className="mt-3">
+            <ReasoningDisclosure
+              label={t("分析轨迹")}
+              current={agentTrace.at(-1)?.text ?? t("正在准备")}
+              steps={agentTrace.length}
+              running={agentBusy}
+              history={agentTrace.map((event) => event.text)}
+              stepLabel={t("步")}
+            />
+          </div>
+        )}
         {candidates.length > 0 && (
           <ol className="mt-3 grid gap-2 lg:grid-cols-3">
             {candidates.map((candidate, index) => (
@@ -414,7 +515,8 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                     {index + 1}. {candidate.person.name}
                   </span>
                   <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
-                    {candidate.score} 分 · {candidate.confidence}置信度
+                    {candidate.score} {candidateMode === "agent" ? "AI建议分" : "本地分"} ·{" "}
+                    {candidate.confidence}置信度
                   </span>
                 </div>
                 <p className="mt-2 leading-relaxed">

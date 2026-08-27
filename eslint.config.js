@@ -16,6 +16,8 @@ export default tseslint.config(
       ".vinxi",
       ".wrangler",
       ".codex/skills",
+      "release",
+      "videos",
     ],
   },
   {

@@ -2,6 +2,8 @@
 
 export interface IntakeJobState {
   busy: boolean;
+  /** 面向用户的单行处理轨迹；不保存模型原始 JSON。 */
+  trace: IntakeJobTrace[];
   /** 整理完但还没被界面认领的结果 */
   result: unknown | null;
   error: string | null;
@@ -11,9 +13,25 @@ export interface IntakeJobState {
   text: string | null;
 }
 
-const IDLE: IntakeJobState = { busy: false, result: null, error: null, extra: null, text: null };
+export interface IntakeJobTrace {
+  kind: "status" | "model" | "check" | "done" | "error";
+  text: string;
+  at: number;
+}
+
+export type IntakeJobReporter = (text: string, kind?: IntakeJobTrace["kind"]) => void;
+
+const IDLE: IntakeJobState = {
+  busy: false,
+  trace: [],
+  result: null,
+  error: null,
+  extra: null,
+  text: null,
+};
 
 let state: IntakeJobState = IDLE;
+let activeRunId = 0;
 const listeners = new Set<() => void>();
 
 function set(next: IntakeJobState) {
@@ -35,27 +53,54 @@ export function subscribeIntakeJob(fn: () => void) {
 /** 界面拿走结果后清空，避免重复应用 */
 export function claimIntakeJob() {
   if (state.result === null && state.error === null) return;
-  set({ ...IDLE, busy: state.busy });
+  set({ ...IDLE, busy: state.busy, trace: state.trace });
 }
 
 /** 启动一次整理；已经在跑就忽略 */
 export function startIntakeJob(options: {
   text: string;
   extra: string | null;
-  run: () => Promise<unknown>;
+  initialTrace: string;
+  run: (report: IntakeJobReporter) => Promise<unknown>;
 }) {
   if (state.busy) return;
-  set({ busy: true, result: null, error: null, extra: options.extra, text: options.text });
+  activeRunId += 1;
+  const runId = activeRunId;
+  const runStartedAt = Date.now();
+  const report: IntakeJobReporter = (text, kind = "status") => {
+    if (!state.busy || activeRunId !== runId) return;
+    set({
+      ...state,
+      trace: [...state.trace.slice(-23), { kind, text, at: Date.now() }],
+    });
+  };
+  set({
+    busy: true,
+    trace: [{ kind: "status", text: options.initialTrace, at: runStartedAt }],
+    result: null,
+    error: null,
+    extra: options.extra,
+    text: options.text,
+  });
   options
-    .run()
+    .run(report)
     .then((result) => {
-      set({ busy: false, result, error: null, extra: options.extra, text: options.text });
-    })
-    .catch((error: unknown) => {
       set({
         busy: false,
+        trace: state.trace,
+        result,
+        error: null,
+        extra: options.extra,
+        text: options.text,
+      });
+    })
+    .catch((error: unknown) => {
+      const message = (error as Error)?.message || "整理失败";
+      set({
+        busy: false,
+        trace: [...state.trace.slice(-23), { kind: "error", text: message, at: Date.now() }],
         result: null,
-        error: (error as Error)?.message || "整理失败",
+        error: message,
         extra: options.extra,
         text: options.text,
       });

@@ -6,6 +6,7 @@ const MIB = 1024 * KIB;
 export const API_LIMITS = {
   visionRequestBytes: 9 * MIB,
   transcribeRequestBytes: 21 * MIB,
+  webToolRequestBytes: 8 * KIB,
   promptCharacters: 12_000,
   historyTurns: 8,
   historyTurnCharacters: 6_000,
@@ -509,6 +510,7 @@ export async function startUpstreamRequest(
   options: {
     timeoutMs: number;
     timeoutMessage?: string;
+    unavailableMessage?: string;
     requestSignal?: AbortSignal;
     fetcher?: typeof fetch;
   },
@@ -558,7 +560,11 @@ export async function startUpstreamRequest(
         options.timeoutMessage ?? "上游服务连接或首包响应超时",
       );
     }
-    throw new SafeApiError(502, "UPSTREAM_UNAVAILABLE", "无法连接上游 AI 服务");
+    throw new SafeApiError(
+      502,
+      "UPSTREAM_UNAVAILABLE",
+      options.unavailableMessage ?? "无法连接上游 AI 服务",
+    );
   }
 }
 

@@ -7,6 +7,8 @@ dist
 coverage
 playwright-report
 test-results
+release
+videos
 .lovable
 .codex/skills
 doc
@@ -15,3 +17,4 @@ pnpm-lock.yaml
 package-lock.json
 bun.lock
 routeTree.gen.ts
+video-spec.md

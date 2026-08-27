@@ -25,7 +25,7 @@ test("模型失败、切换页面和刷新后，未提交材料仍保留", async
   const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
   await intake.getByRole("textbox").fill(material);
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
-  await expect(page.getByText("模拟模型不可用")).toBeVisible();
+  await expect(page.getByLabel("Notifications alt+T").getByText("模拟模型不可用")).toBeVisible();
   await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
   await expect(intake.getByRole("textbox")).toHaveValue(material);
 
@@ -281,6 +281,32 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
   const graph = page.locator("svg").filter({ has: page.locator("#relation-arrow") });
   await expect(graph.getByRole("button", { name: /点选看关系/ })).toHaveCount(50);
   await expect(graph.getByRole("button", { name: /查看关系详情/ })).toHaveCount(80);
+
+  await graph.scrollIntoViewIfNeeded();
+  const transformBeforeWheel = await graph.locator(":scope > g").getAttribute("transform");
+  const scrollBeforeWheel = await page.evaluate(() => window.scrollY);
+  const wheelWasPrevented = await graph.evaluate(
+    (element) =>
+      !element.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -400, bubbles: true, cancelable: true }),
+      ),
+  );
+  expect(wheelWasPrevented).toBe(true);
+  await expect
+    .poll(() => graph.locator(":scope > g").getAttribute("transform"))
+    .not.toBe(transformBeforeWheel);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scrollBeforeWheel);
+
+  await page.getByRole("button", { name: "全屏查看关系图" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.fullscreenElement?.getAttribute("data-relation-graph-frame") ?? null,
+      ),
+    )
+    .toBe("true");
+  await page.getByRole("button", { name: "退出全屏" }).click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
 
   await graph
     .getByRole("button", { name: /点选看关系/ })

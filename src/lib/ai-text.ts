@@ -4,7 +4,12 @@ import { askModel } from "./vision-client";
 import type { ProviderPreset } from "./vision-providers";
 
 /** 一次性拿到完整回答（非流式使用场景） */
-export async function askText(preset: ProviderPreset, prompt: string) {
+export async function askText(
+  preset: ProviderPreset,
+  prompt: string,
+  onChunk?: (chunk: string) => void,
+  signal?: AbortSignal,
+) {
   let answer = "";
   await askModel(
     preset,
@@ -13,8 +18,9 @@ export async function askText(preset: ProviderPreset, prompt: string) {
     [],
     (chunk) => {
       answer += chunk;
+      onChunk?.(chunk);
     },
-    new AbortController().signal,
+    signal ?? new AbortController().signal,
   );
   return answer;
 }

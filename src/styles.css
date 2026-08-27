@@ -417,3 +417,95 @@
     -webkit-font-smoothing: antialiased;
   }
 }
+
+/* DSH-style compact reasoning disclosure: one line, status dot, restrained sweep. */
+.reasoning-disclosure {
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--primary) 22%, var(--border));
+  border-radius: 0.65rem;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--card) 92%, transparent),
+    color-mix(in oklch, var(--primary) 5%, var(--card)) 72%,
+    color-mix(in oklch, var(--card) 82%, transparent)
+  );
+  backdrop-filter: blur(2px);
+}
+
+.reasoning-disclosure-row {
+  position: relative;
+  display: flex;
+  min-height: 2.25rem;
+  align-items: center;
+  gap: 0.5rem;
+  overflow: hidden;
+  padding: 0.45rem 0.7rem;
+}
+
+.reasoning-state-dot {
+  position: relative;
+  z-index: 10;
+  width: 0.42rem;
+  height: 0.42rem;
+  flex: none;
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.reasoning-disclosure[data-state="running"] .reasoning-state-dot {
+  filter: drop-shadow(0 0 6px color-mix(in oklch, var(--primary) 75%, transparent));
+  animation: reasoning-state-pulse 1.4s ease-in-out infinite;
+}
+
+.reasoning-disclosure[data-state="running"] .reasoning-disclosure-row::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -15rem;
+  width: 15rem;
+  content: "";
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklch, var(--primary) 16%, transparent) 46%,
+    color-mix(in oklch, var(--accent) 24%, transparent) 62%,
+    transparent
+  );
+  animation: reasoning-disclosure-sweep 2.8s ease-in-out infinite;
+}
+
+@keyframes reasoning-disclosure-sweep {
+  0% {
+    left: -15rem;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes reasoning-state-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-disclosure[data-state="running"] .reasoning-disclosure-row::after,
+  .reasoning-disclosure[data-state="running"] .reasoning-state-dot {
+    animation: none;
+  }
+}

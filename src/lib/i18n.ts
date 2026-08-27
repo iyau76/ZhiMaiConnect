@@ -64,6 +64,22 @@ export function useLang(): Lang {
 const EN: Record<string, string> = {
   "AI 助理": "AI assistant",
   "AI 正在整理": "AI is organising",
+  分析轨迹: "Analysis trace",
+  整理轨迹: "Organisation trace",
+  正在准备: "Preparing",
+  正在准备整理材料: "Preparing the material",
+  已准备待整理材料: "Material ready",
+  模型正在梳理人物档案: "The model is organising profiles",
+  模型正在提取人物事实: "The model is extracting facts",
+  模型正在梳理人物关系: "The model is organising relationships",
+  模型正在整理事件与日期: "The model is organising events and dates",
+  模型正在识别待办提醒: "The model is identifying reminders",
+  模型持续输出: "The model is still streaming",
+  "模型输出完成，正在解析结构化草稿": "Model output complete; parsing the structured draft",
+  正在核对人物字段与原文证据: "Checking profile fields against source evidence",
+  整理完成: "Organisation complete",
+  步: "steps",
+  个事件: "events",
   "ESP32 摄像头实时画面": "ESP32 camera live view",
   一段话写下身边的人: "Write about people in a sentence",
   "上传一张合照，会框出里面所有人脸并逐个标名字；也可以点「识别当前画面」从摄像头抓一帧。":
@@ -205,12 +221,18 @@ const EN: Record<string, string> = {
   "每个顶层草稿条目都要接受或拒绝；编辑已接受条目后会重新变为待确认。":
     "Accept or reject every top-level draft item. Editing an accepted item returns it to pending review.",
   批量接受低风险高置信事件: "Batch-accept low-risk, high-confidence events",
+  一键接受全部待确认: "Accept all pending items",
+  "确定接受全部待确认条目吗？请先核对 AI 推断值和人物身份。":
+    "Accept every pending item? Review AI-inferred values and person identities first.",
+  "已接受全部待确认条目；确认入库前仍会检查人物身份和日期格式":
+    "All pending items accepted; person identity and date validation still run before saving.",
   "已批量接受未编辑、日期有效的高置信度本地事件；其余顶层条目仍需逐条确认":
     "Accepted unedited, high-confidence local events with valid dates; every other top-level item still requires individual review",
   已拦截缺少原文证据的敏感值: "Blocked sensitive values without source evidence",
   "这些值已从 AI 草稿清空，不会以 AI 来源入库；确认属实后可在人物字段中手动填写，并会标记为人工来源。":
     "These values were cleared from the AI draft and cannot be saved as AI-sourced facts. If verified, enter them manually; they will be labelled as manual input.",
   "AI 推断值待核验": "AI-inferred values need review",
+  查看待核验项: "View items",
   "这些值会保留在 AI 草稿中，感叹号表示未找到充分原文证据；请辨别真伪，编辑后会标记为人工来源。":
     "These values remain in the AI draft. An exclamation mark means sufficient source evidence was not found; verify them before saving. Editing marks them as manual input.",
   "AI 推断，待核验": "AI-inferred, needs review",
@@ -283,6 +305,9 @@ const EN: Record<string, string> = {
   部门信息已保存: "Group info saved",
   部门名称: "Group name",
   问一问: "Ask",
+  问答轨迹: "Answer trace",
+  正在准备回答: "Preparing answer",
+  发送问题: "Send question",
   "问点什么，比如：这周该联系谁？": "Ask something, e.g. who should I reach out to this week?",
   项: "items",
   高: "High",
@@ -404,6 +429,9 @@ const EN: Record<string, string> = {
   轮询快照: "Snapshot polling",
   重连: "Reconnect",
   全屏: "Fullscreen",
+  全屏查看关系图: "View relationship graph in fullscreen",
+  退出全屏: "Exit fullscreen",
+  无法切换全屏: "Unable to toggle fullscreen",
   抓取当前帧: "Capture frame",
   在线: "Online",
   连接中: "Connecting",

@@ -19,6 +19,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { DraftGraph } from "@/components/draft-graph";
+import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { Button } from "@/components/ui/button";
 
 import { Input } from "@/components/ui/input";
@@ -645,13 +646,50 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     startIntakeJob({
       text: fullText,
       extra: extra ?? null,
-      run: async () => {
-        const parsed = parseIngestCandidate(await askText(preset, builtPrompt.prompt));
-        return decorateDraft(
+      initialTrace: t("正在准备整理材料"),
+      run: async (report) => {
+        report(
+          `${t("已准备待整理材料")} · ${builtPrompt.materialCharacters.toLocaleString()} ${t("个字符")}`,
+        );
+        let streamed = "";
+        let nextSizeReport = 600;
+        const announced = new Set<string>();
+        const phases = [
+          ['"people"', t("模型正在梳理人物档案")],
+          ['"facts"', t("模型正在提取人物事实")],
+          ['"relations"', t("模型正在梳理人物关系")],
+          ['"events"', t("模型正在整理事件与日期")],
+          ['"reminders"', t("模型正在识别待办提醒")],
+        ] as const;
+        const answer = await askText(preset, builtPrompt.prompt, (chunk) => {
+          streamed += chunk;
+          for (const [marker, message] of phases) {
+            if (!announced.has(marker) && streamed.includes(marker)) {
+              announced.add(marker);
+              report(message, "model");
+            }
+          }
+          if (streamed.length >= nextSizeReport) {
+            report(
+              `${t("模型持续输出")} · ${streamed.length.toLocaleString()} ${t("个字符")}`,
+              "model",
+            );
+            nextSizeReport += 800;
+          }
+        });
+        report(t("模型输出完成，正在解析结构化草稿"), "check");
+        const parsed = parseIngestCandidate(answer);
+        report(t("正在核对人物字段与原文证据"), "check");
+        const result = decorateDraft(
           base ? carryManualState(parsed, base) : parsed,
           sourceSummary,
           fullText,
         );
+        report(
+          `${t("整理完成")} · ${result.people?.length ?? 0} ${t("人")} · ${result.relations?.length ?? 0} ${t("条关系")} · ${result.events?.length ?? 0} ${t("个事件")}`,
+          "done",
+        );
+        return result;
       },
     });
   };
@@ -968,6 +1006,30 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       };
     });
     toast.success(t("已批量接受未编辑、日期有效的高置信度本地事件；其余顶层条目仍需逐条确认"));
+  };
+
+  const acceptAllPendingItems = () => {
+    if (!draft || !window.confirm(t("确定接受全部待确认条目吗？请先核对 AI 推断值和人物身份。"))) {
+      return;
+    }
+    const accept = <T extends DraftAuditFields>(item: T): T => ({
+      ...item,
+      _audit: acceptedAudit(item._audit),
+    });
+    setDraft((previous) =>
+      previous
+        ? {
+            ...previous,
+            people: (previous.people ?? []).map(accept),
+            facts: (previous.facts ?? []).map(accept),
+            relations: (previous.relations ?? []).map(accept),
+            events: (previous.events ?? []).map(accept),
+            reminders: (previous.reminders ?? []).map(accept),
+            evidence: (previous.evidence ?? []).map(accept),
+          }
+        : previous,
+    );
+    toast.success(t("已接受全部待确认条目；确认入库前仍会检查人物身份和日期格式"));
   };
 
   const commit = async () => {
@@ -1616,12 +1678,16 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             </p>
           </div>
         )}
-        {busy && !reading && (
-          <div className="mt-2 space-y-1">
-            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-              <div className="h-full w-1/3 animate-[pulse_1.2s_ease-in-out_infinite] rounded-full bg-primary" />
-            </div>
-            <p className="text-[11px] text-muted-foreground">{t("AI 正在整理")}…</p>
+        {!reading && job.trace.length > 0 && (
+          <div className="mt-2">
+            <ReasoningDisclosure
+              label={t("整理轨迹")}
+              current={job.trace.at(-1)?.text ?? t("正在准备")}
+              steps={job.trace.length}
+              running={busy}
+              history={job.trace.map((item) => item.text)}
+              stepLabel={t("步")}
+            />
           </div>
         )}
       </div>
@@ -1636,34 +1702,46 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           )}
 
           {(draft._groundingWarnings?.length ?? 0) > 0 && (
-            <div
-              className="rounded-xl border border-amber-500/50 bg-amber-500/10 p-3 text-xs"
+            <details
+              className="group rounded-xl border border-amber-500/50 bg-amber-500/10 text-xs"
               role="alert"
             >
-              <p className="font-medium text-amber-800 dark:text-amber-200">
-                {t("AI 推断值待核验")} · {draft._groundingWarnings?.length}
-              </p>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                {t(
-                  "这些值会保留在 AI 草稿中，感叹号表示未找到充分原文证据；请辨别真伪，编辑后会标记为人工来源。",
-                )}
-              </p>
-              <ul className="mt-2 space-y-1 text-[11px]">
-                {draft._groundingWarnings?.map((item, index) => (
-                  <li key={`${item.personDraftId}-${item.field}-${index}`}>
-                    {item.personName} · {sensitiveFieldLabel(item.field)}：
-                    <span>{item.rejectedValue}</span>{" "}
-                    <span
-                      className="font-bold text-amber-700 dark:text-amber-300"
-                      title={t("AI 推断，待核验")}
-                      aria-label={t("AI 推断，待核验")}
-                    >
-                      !
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 font-medium text-amber-800 marker:content-none dark:text-amber-200">
+                <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+                <span>
+                  {t("AI 推断值待核验")} · {draft._groundingWarnings?.length}
+                </span>
+                <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+                  {t("查看待核验项")}
+                </span>
+                <ArrowRight
+                  className="size-3.5 shrink-0 transition-transform group-open:rotate-90"
+                  aria-hidden="true"
+                />
+              </summary>
+              <div className="border-t border-amber-500/25 px-3 pb-3 pt-2">
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {t(
+                    "这些值会保留在 AI 草稿中，感叹号表示未找到充分原文证据；请辨别真伪，编辑后会标记为人工来源。",
+                  )}
+                </p>
+                <ul className="mt-2 space-y-1 text-[11px]">
+                  {draft._groundingWarnings?.map((item, index) => (
+                    <li key={`${item.personDraftId}-${item.field}-${index}`}>
+                      {item.personName} · {sensitiveFieldLabel(item.field)}：
+                      <span>{item.rejectedValue}</span>{" "}
+                      <span
+                        className="font-bold text-amber-700 dark:text-amber-300"
+                        title={t("AI 推断，待核验")}
+                        aria-label={t("AI 推断，待核验")}
+                      >
+                        !
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </details>
           )}
 
           <div className="rounded-xl border border-border bg-background/60 p-3">
@@ -1727,18 +1805,32 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               <span className="rounded-full border border-border px-2 py-0.5">
                 {t("待确认")} {pendingReviewCount}
               </span>
-              {lowRiskBatchCount > 0 && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="ml-auto h-7 rounded-full px-3 text-[10px]"
-                  onClick={acceptLowRiskItems}
-                >
-                  <Check className="size-3" aria-hidden="true" />
-                  {t("批量接受低风险高置信事件")} · {lowRiskBatchCount}
-                </Button>
-              )}
+              <span className="ml-auto flex flex-wrap items-center gap-2">
+                {lowRiskBatchCount > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 rounded-full px-3 text-[10px]"
+                    onClick={acceptLowRiskItems}
+                  >
+                    <Check className="size-3" aria-hidden="true" />
+                    {t("批量接受低风险高置信事件")} · {lowRiskBatchCount}
+                  </Button>
+                )}
+                {pendingReviewCount > 0 && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-7 rounded-full px-3 text-[10px]"
+                    onClick={acceptAllPendingItems}
+                  >
+                    <Check className="size-3" aria-hidden="true" />
+                    {t("一键接受全部待确认")} · {pendingReviewCount}
+                  </Button>
+                )}
+              </span>
             </div>
           </div>
 

@@ -2,6 +2,8 @@ import {
   ArrowLeftRight,
   ArrowRight,
   Loader2,
+  Maximize2,
+  Minimize2,
   Network,
   Search,
   Sparkles,
@@ -106,7 +108,10 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   });
   /** 画布缩放 / 平移 */
   const [viewport, setViewport] = useState({ scale: 1, tx: 0, ty: 0 });
+  const [graphFullscreen, setGraphFullscreen] = useState(false);
+  const graphFrameRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const wheelListenerRef = useRef<((event: WheelEvent) => void) | null>(null);
   const dragRef = useRef<{
     id: string;
     x: number;
@@ -709,6 +714,8 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   );
 
   const viewSize = graph.size;
+  const viewSizeRef = useRef(viewSize);
+  viewSizeRef.current = viewSize;
 
   /** 屏幕坐标 → SVG 画布坐标的比例（含缩放） */
   const svgScale = () => {
@@ -731,9 +738,56 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
   const resetView = () => setViewport({ scale: 1, tx: 0, ty: 0 });
 
-  const onWheel = (event: React.WheelEvent<SVGSVGElement>) => {
-    event.preventDefault();
-    zoomBy(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+  /**
+   * React 在根节点注册的 wheel 监听器可能是 passive，单靠 onWheel.preventDefault()
+   * 无法稳定阻止页面滚动。这里直接给实际 SVG 绑定 non-passive 监听器，确保图内滚轮
+   * 只改变画布缩放，不再把同一滚轮动作传给页面。
+   */
+  const bindSvgRef = useCallback((node: SVGSVGElement | null) => {
+    const previous = svgRef.current;
+    const previousListener = wheelListenerRef.current;
+    if (previous && previousListener) previous.removeEventListener("wheel", previousListener);
+
+    svgRef.current = node;
+    wheelListenerRef.current = null;
+    if (!node) return;
+
+    const listener = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setViewport((prev) => {
+        const scale = Math.min(4, Math.max(0.4, prev.scale * factor));
+        const center = viewSizeRef.current / 2;
+        return {
+          scale,
+          tx: center - (center - prev.tx) * (scale / prev.scale),
+          ty: center - (center - prev.ty) * (scale / prev.scale),
+        };
+      });
+    };
+    node.addEventListener("wheel", listener, { passive: false });
+    wheelListenerRef.current = listener;
+  }, []);
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      setGraphFullscreen(document.fullscreenElement === graphFrameRef.current);
+    };
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
+  }, []);
+
+  const toggleGraphFullscreen = async () => {
+    try {
+      if (document.fullscreenElement === graphFrameRef.current) {
+        await document.exitFullscreen();
+      } else {
+        await graphFrameRef.current?.requestFullscreen();
+      }
+    } catch {
+      toast.error(t("无法切换全屏"));
+    }
   };
 
   const focusPerson = (id: string) => {
@@ -1453,12 +1507,37 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             </div>
           )}
 
-          <div className="overflow-hidden rounded-xl border border-border bg-muted/20">
+          <div
+            ref={graphFrameRef}
+            data-relation-graph-frame="true"
+            className={cn(
+              "relative overflow-hidden rounded-xl border border-border bg-muted/20",
+              graphFullscreen &&
+                "flex h-screen w-screen items-center rounded-none border-0 bg-background p-4",
+            )}
+          >
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              className="absolute right-3 top-3 z-20 size-9 bg-background/90 shadow-sm backdrop-blur"
+              onClick={() => void toggleGraphFullscreen()}
+              aria-label={t(graphFullscreen ? "退出全屏" : "全屏查看关系图")}
+              title={t(graphFullscreen ? "退出全屏" : "全屏查看关系图")}
+            >
+              {graphFullscreen ? (
+                <Minimize2 className="size-4" aria-hidden="true" />
+              ) : (
+                <Maximize2 className="size-4" aria-hidden="true" />
+              )}
+            </Button>
             <svg
-              ref={svgRef}
+              ref={bindSvgRef}
               viewBox={`0 0 ${viewSize} ${viewSize}`}
-              className="h-auto w-full cursor-grab touch-none select-none active:cursor-grabbing"
-              onWheel={onWheel}
+              className={cn(
+                "w-full cursor-grab touch-none select-none active:cursor-grabbing",
+                graphFullscreen ? "h-full max-h-[calc(100vh-2rem)]" : "h-auto",
+              )}
               onPointerDown={onPanPointerDown}
               onPointerMove={onPanPointerMove}
               onPointerUp={onPanPointerUp}
