@@ -3,6 +3,10 @@ import { readFile, writeFile } from "node:fs/promises";
 const configPath = new URL("../.output/server/wrangler.json", import.meta.url);
 const config = JSON.parse(await readFile(configPath, "utf8"));
 
+// Keep deployments on the existing public Worker instead of Nitro's generated
+// package-derived name (which would create a second workers.dev hostname).
+config.name = "zhimai-connect";
+
 // Stable namespace IDs intentionally live in source control. They are identifiers,
 // not credentials; keeping them stable preserves counters across deployments.
 config.ratelimits = [
