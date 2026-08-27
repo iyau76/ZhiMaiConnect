@@ -141,7 +141,6 @@
   --sidebar-ring: oklch(0.68 0.225 12 / 55%);
 }
 
-
 /* ---- 可切换主题（色卡衍生） ---- */
 .theme-magenta {
   --background: oklch(0.975 0.008 120);
@@ -397,15 +396,15 @@
   font-size: 112.5%;
 }
 
-
-
-
 @layer base {
   * {
     border-color: var(--color-border);
   }
 
-  h1, h2, h3, h4 {
+  h1,
+  h2,
+  h3,
+  h4 {
     font-family: var(--font-display);
     font-weight: 700;
     letter-spacing: -0.02em;
@@ -417,5 +416,4 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
-
 }

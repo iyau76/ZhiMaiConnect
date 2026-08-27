@@ -70,7 +70,7 @@ function melFilterbank(bins: number) {
   const points = new Array(MELS + 2)
     .fill(0)
     .map((_, i) => melToHz(low + ((high - low) * i) / (MELS + 1)))
-    .map((hz) => Math.floor(((bins * 2) * hz) / SAMPLE_RATE));
+    .map((hz) => Math.floor((bins * 2 * hz) / SAMPLE_RATE));
 
   const filters: Array<{ start: number; end: number; peak: number }> = [];
   for (let m = 1; m <= MELS; m += 1) {
@@ -82,7 +82,8 @@ function melFilterbank(bins: number) {
 async function decodeToMono(blob: Blob): Promise<Float32Array> {
   const buffer = await blob.arrayBuffer();
   const Ctx: typeof AudioContext =
-    window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new Ctx();
   let decoded: AudioBuffer;
   try {
@@ -114,7 +115,8 @@ export async function extractVoiceEmbedding(blob: Blob): Promise<VoiceEmbedding>
   if (samples.length < FRAME * 8) throw new Error("录音太短，至少需要 1 秒有效语音");
 
   const window = new Float32Array(FRAME);
-  for (let i = 0; i < FRAME; i += 1) window[i] = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (FRAME - 1));
+  for (let i = 0; i < FRAME; i += 1)
+    window[i] = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (FRAME - 1));
 
   const filters = melFilterbank(FRAME >> 1);
   const acc: number[][] = [];
@@ -151,7 +153,8 @@ export async function extractVoiceEmbedding(blob: Blob): Promise<VoiceEmbedding>
   const mean = new Array(MELS).fill(0);
   for (const row of acc) for (let i = 0; i < MELS; i += 1) mean[i] += row[i] / acc.length;
   const std = new Array(MELS).fill(0);
-  for (const row of acc) for (let i = 0; i < MELS; i += 1) std[i] += (row[i] - mean[i]) ** 2 / acc.length;
+  for (const row of acc)
+    for (let i = 0; i < MELS; i += 1) std[i] += (row[i] - mean[i]) ** 2 / acc.length;
 
   const vector = [...mean, ...std.map((value) => Math.sqrt(value))];
   const norm = Math.hypot(...vector) || 1;

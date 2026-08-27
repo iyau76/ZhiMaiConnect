@@ -71,11 +71,16 @@ export async function buildAdviceContext(limit = 60): Promise<AdviceContext> {
     persons.slice(0, limit).map(personLine).join("\n") || "（暂无）",
     "",
     `【人物关系 ${relations.length} 条】`,
-    relations.slice(0, limit).map((relation) => relationLine(relation, nameOf)).join("\n") ||
-      "（暂无）",
+    relations
+      .slice(0, limit)
+      .map((relation) => relationLine(relation, nameOf))
+      .join("\n") || "（暂无）",
     "",
     `【事务 ${projects.length} 项】`,
-    projects.slice(0, limit).map((project) => projectLine(project, nameOf)).join("\n") || "（暂无）",
+    projects
+      .slice(0, limit)
+      .map((project) => projectLine(project, nameOf))
+      .join("\n") || "（暂无）",
   ];
 
   return {
@@ -89,7 +94,7 @@ export async function buildAdviceContext(limit = 60): Promise<AdviceContext> {
 /** 拼出带资料的提问 */
 export function withAdvicePrompt(context: string, question: string) {
   return [
-    "你是「知脉 Connect」里的办公参谋。下面是用户本机的人物档案、关系网和事务清单，请据此回答。",
+    "你是「知脉 Connect」的人际关系记忆与行动助手。下面是用户主动选择提供的人物档案、关系和待办摘要，请仅据此回答。",
     "回答要具体：点名相关的人、说明理由、给出可执行的下一步；资料里没有的不要编造，可以直接指出缺口。",
     "",
     context,

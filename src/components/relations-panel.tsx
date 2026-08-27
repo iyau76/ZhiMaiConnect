@@ -13,12 +13,11 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { DepartmentDialog } from "@/components/department-dialog";
 import { ExportMenu } from "@/components/export-menu";
 import { PageGuide } from "@/components/page-guide";
-
-
 import { PersonProfileDialog } from "@/components/person-profile-dialog";
+import { SourceBadge } from "@/components/source-badge";
+import { TagGroupDialog } from "@/components/tag-group-dialog";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,7 +28,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { makeSource } from "@/lib/provenance";
 import { PRESET_TAGS, presetTagLabels, primaryTagOf, tagsOf } from "@/lib/circle-tags";
 import { inferMutual, isMutualRelation } from "@/lib/relation-kind";
-import { facesDb, type PersonRecord, type RelationRecord } from "@/lib/face-db";
+import {
+  facesDb,
+  type EvidenceRecord,
+  type LifeEventRecord,
+  type PersonRecord,
+  type RelationRecord,
+  type ReminderRecord,
+} from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { askModel } from "@/lib/vision-client";
@@ -37,32 +43,37 @@ import type { ProviderPreset } from "@/lib/vision-providers";
 
 interface Props {
   preset: ProviderPreset;
+  onOpenIntake: () => void;
 }
 
-const EXTRACT_PROMPT = `你是一个人际关系整理助手。用户会给你一段自由描述（可能提到多个人和他们之间的关系）。
-只输出 JSON，不要解释、不要代码块标记，结构如下：
-{"people":[{"name":"姓名","note":"这个人的简要信息"}],"relations":[{"from":"姓名A","to":"姓名B","label":"关系，如同事/室友/母子"}]}
-没有把握的不要编造；关系里出现的人必须也在 people 里。`;
-
-const EXTRACT_PROMPT_EN = `You organise personal relationships. The user gives a free-form description that may mention several people and how they relate.
-Output JSON only, no explanation and no code fences, with this shape:
-{"people":[{"name":"name","note":"short info about this person"}],"relations":[{"from":"name A","to":"name B","label":"relation, e.g. colleague/roommate/mother-son"}]}
-Do not invent facts; every person mentioned in relations must also appear in people. Write all values in English.`;
-
-function parseJson(text: string) {
-  const cleaned = text.replace(/^\s*```(?:json)?/i, "").replace(/```\s*$/, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error(t("AI 没有返回可解析的内容"));
-  return JSON.parse(cleaned.slice(start, end + 1)) as {
-    people?: Array<{ name?: string; note?: string }>;
-    relations?: Array<{ from?: string; to?: string; label?: string }>;
+function graphColor(key: string) {
+  let hash = 0;
+  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) % 360;
+  return {
+    node: `hsl(${hash} 62% 48%)`,
+    fill: `hsl(${hash} 62% 48% / 0.09)`,
+    stroke: `hsl(${hash} 62% 48% / 0.42)`,
   };
 }
 
-export function RelationsPanel({ preset }: Props) {
+/** 兼容旧数据里保存的中文预设标签与当前界面的翻译标签。 */
+function isSameTag(value: string, displayedTag: string) {
+  const normalized = value.trim();
+  return normalized === displayedTag || t(normalized) === displayedTag;
+}
+
+function displayCircleTag(value: string) {
+  const normalized = value.trim();
+  if (normalized === "未分组" || normalized === "Untagged") return t("未分组");
+  return (PRESET_TAGS as readonly string[]).includes(normalized) ? t(normalized) : normalized;
+}
+
+export function RelationsPanel({ preset, onOpenIntake }: Props) {
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [relations, setRelations] = useState<RelationRecord[]>([]);
+  const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
+  const [lifeEvents, setLifeEvents] = useState<LifeEventRecord[]>([]);
+  const [reminders, setReminders] = useState<ReminderRecord[]>([]);
   const [newName, setNewName] = useState("");
   const [newNote, setNewNote] = useState("");
   const [editing, setEditing] = useState<PersonRecord | null>(null);
@@ -71,22 +82,24 @@ export function RelationsPanel({ preset }: Props) {
   const [label, setLabel] = useState("");
   /** auto = 按关系词推断方向；mutual = 双箭头；directed = 单箭头 */
   const [dirMode, setDirMode] = useState<"auto" | "mutual" | "directed">("auto");
-  /** 关系网布局：按标签分圈 / 按部门分簇 / 不分组 */
+  /** 关系网布局：按标签分圈 / 不分组 */
   const [groupBy, setGroupBy] = useState<"none" | "tag">("tag");
+  const [relationFilter, setRelationFilter] = useState("all");
+  const [showEdgeLabels, setShowEdgeLabels] = useState(true);
   /** 档案页：搜索词、标签筛选、批量选中 */
   const [query, setQuery] = useState("");
   const [filterTags, setFilterTags] = useState<string[]>([]);
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [batchTag, setBatchTag] = useState("");
-  const [raw, setRaw] = useState("");
-  const [busy, setBusy] = useState(false);
   const [summary, setSummary] = useState("");
   const [summarizing, setSummarizing] = useState(false);
-  const [deptOpen, setDeptOpen] = useState<string | null>(null);
+  const [tagOpen, setTagOpen] = useState<string | null>(null);
   /** 手动拖拽后的节点位置（覆盖自动布局） */
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   /** 当前选中的节点：高亮它的关系 */
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** 当前选中的关系边：在图与无障碍列表中共享同一详情面板。 */
+  const [selectedRelationId, setSelectedRelationId] = useState<string | null>(null);
   /** 钻取层级：区块总览 → 某个区块里的人 → 某个人和ta的关联人 */
   const [drill, setDrill] = useState<{ mode: "blocks" | "group" | "person"; key?: string }>({
     mode: "blocks",
@@ -94,16 +107,30 @@ export function RelationsPanel({ preset }: Props) {
   /** 画布缩放 / 平移 */
   const [viewport, setViewport] = useState({ scale: 1, tx: 0, ty: 0 });
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const dragRef = useRef<{ id: string; x: number; y: number; ox: number; oy: number; moved: number } | null>(null);
+  const dragRef = useRef<{
+    id: string;
+    x: number;
+    y: number;
+    ox: number;
+    oy: number;
+    moved: number;
+  } | null>(null);
   const panRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
-
-
 
   const refresh = useCallback(async () => {
     await facesDb.pruneOrphanRelations();
-    const [p, r] = await Promise.all([facesDb.listPersons(), facesDb.listRelations()]);
+    const [p, r, events, reminderRows, evidenceRows] = await Promise.all([
+      facesDb.listPersons(),
+      facesDb.listRelations(),
+      facesDb.listLifeEvents(),
+      facesDb.listReminders(),
+      facesDb.listEvidence(),
+    ]);
     setPeople(p);
     setRelations(r);
+    setLifeEvents(events);
+    setReminders(reminderRows);
+    setEvidence(evidenceRows);
   }, []);
 
   useEffect(() => {
@@ -151,134 +178,25 @@ export function RelationsPanel({ preset }: Props) {
     await refresh();
   };
 
-  const membersOf = (department: string) =>
-    people.filter(
-      (person) => (person.profile?.department?.trim() || t("未分部门")) === department,
-    );
-
-  /** 部门弹窗里改名 → 批量把这个部门下所有人换到新部门 */
-  const renameDepartment = async (current: string, next: string) => {
-    const value = next.trim();
-    const members = membersOf(current);
-    for (const person of members) {
-      await facesDb.putPerson({
-        ...person,
-        profile: { ...(person.profile ?? {}), department: value || undefined },
-      });
-    }
-    await refresh();
-    toast.success(`${members.length} ${t("人已归入")}「${value || t("未分部门")}」`);
-  };
-
-  /** 把某个人调入 / 移出部门 */
-  const setPersonDepartment = async (personId: string, department?: string) => {
-    const person = people.find((item) => item.id === personId);
-    if (!person) return;
-    await facesDb.putPerson({
-      ...person,
-      profile: { ...(person.profile ?? {}), department: department?.trim() || undefined },
-    });
-    await refresh();
-    toast.success(
-      department ? `${person.name} → ${department}` : `${person.name} ${t("已移出部门")}`,
-    );
-  };
-
-
   const addRelation = async () => {
     if (!fromId || !toId || fromId === toId) {
       toast.error(t("请选择两个不同的人"));
       return;
     }
+    const now = Date.now();
     await facesDb.putRelation({
       id: crypto.randomUUID(),
       fromId,
       toId,
       label: label.trim() || t("认识"),
-      mutual:
-        dirMode === "auto" ? inferMutual(label.trim() || t("认识")) : dirMode === "mutual",
-      createdAt: Date.now(),
+      mutual: dirMode === "auto" ? inferMutual(label.trim() || t("认识")) : dirMode === "mutual",
+      createdAt: now,
+      updatedAt: now,
+      confirmationStatus: "confirmed",
       source: makeSource("manual"),
     });
     setLabel("");
     await refresh();
-  };
-
-  /** 一段话 → 自动建档 + 建立关系 */
-  const organize = async () => {
-    const text = raw.trim();
-    if (!text) {
-      toast.error(t("先写点关于这些人的描述"));
-      return;
-    }
-    setBusy(true);
-    let answer = "";
-    try {
-      await askModel(
-        preset,
-        getLang() === "en"
-          ? `${EXTRACT_PROMPT_EN}\n\nKnown people: ${people.map((p) => p.name).join(", ") || "none"}\n\nDescription:\n${text}`
-          : `${EXTRACT_PROMPT}\n\n已有的人：${people.map((p) => p.name).join("、") || t("无")}\n\n描述：\n${text}`,
-        null,
-        [],
-        (chunk) => {
-          answer += chunk;
-        },
-        new AbortController().signal,
-      );
-      const parsed = parseJson(answer);
-      const current = await facesDb.listPersons();
-      const byName = new Map(current.map((person) => [person.name, person]));
-      let created = 0;
-      for (const item of parsed.people ?? []) {
-        const name = (item.name ?? "").trim();
-        if (!name) continue;
-        const exist = byName.get(name);
-        if (exist) {
-          if (item.note) {
-            const merged = [exist.note, item.note].filter(Boolean).join("；");
-            await facesDb.putPerson({ ...exist, note: merged });
-          }
-          continue;
-        }
-        const record: PersonRecord = {
-          id: crypto.randomUUID(),
-          name,
-          note: item.note ?? "",
-          rawProfileText: item.note ?? "",
-          descriptors: [],
-          thumb: "",
-          createdAt: Date.now(),
-          source: makeSource("ai", "关系整理"),
-        };
-        await facesDb.putPerson(record);
-        byName.set(name, record);
-        created += 1;
-      }
-      let links = 0;
-      for (const item of parsed.relations ?? []) {
-        const a = byName.get((item.from ?? "").trim());
-        const b = byName.get((item.to ?? "").trim());
-        if (!a || !b || a.id === b.id) continue;
-        await facesDb.putRelation({
-          id: crypto.randomUUID(),
-          fromId: a.id,
-          toId: b.id,
-          label: (item.label ?? "").trim() || t("认识"),
-          mutual: inferMutual((item.label ?? "").trim()),
-          createdAt: Date.now(),
-          source: makeSource("ai", "关系整理"),
-        });
-        links += 1;
-      }
-      await refresh();
-      setRaw("");
-      toast.success(`${t("新建档案")} ${created} · ${t("新增关系")} ${links}`);
-    } catch (error) {
-      toast.error((error as Error).message);
-    } finally {
-      setBusy(false);
-    }
   };
 
   const analyse = async () => {
@@ -291,7 +209,9 @@ export function RelationsPanel({ preset }: Props) {
     const roster = people
       .map((person) => `${person.name}：${person.note || t("暂无备注")}`)
       .join("\n");
-    const links = relations.map((r) => `${nameOf(r.fromId)} —${r.label}→ ${nameOf(r.toId)}`).join("\n");
+    const links = relations
+      .map((r) => `${nameOf(r.fromId)} —${r.label}→ ${nameOf(r.toId)}`)
+      .join("\n");
     try {
       await askModel(
         preset,
@@ -386,15 +306,86 @@ export function RelationsPanel({ preset }: Props) {
     toast.success(`${t("已删除")} ${targets.length} ${t("人")}`);
   };
 
-  /** 一个人属于哪些圈子（可以同时属于多个标签圈） */
-  const groupsOf = useCallback((person: PersonRecord): string[] => {
-    const list = tagsOf(person);
-    return list.length ? list : [t("未分组")];
-  }, []);
+  /** 落位用的主圈子（一个人只画在一个地方）；显式圈层优先于自动识别标签。 */
+  const groupOf = useCallback(
+    (person: PersonRecord) =>
+      person.profile?.circle?.trim()
+        ? displayCircleTag(person.profile.circle)
+        : primaryTagOf(person),
+    [],
+  );
 
-  /** 落位用的主圈子（一个人只画在一个地方） */
-  const groupOf = useCallback((person: PersonRecord) => primaryTagOf(person), []);
+  const tagMembers = useMemo(
+    () => (tagOpen ? people.filter((person) => groupOf(person) === tagOpen) : []),
+    [people, tagOpen, groupOf],
+  );
 
+  const tagCandidates = useMemo(
+    () => (tagOpen ? people.filter((person) => groupOf(person) !== tagOpen) : []),
+    [people, tagOpen, groupOf],
+  );
+
+  /** 重命名圈层：更新成员的显式标签和主圈层，不再借用企业部门字段。 */
+  const renameTagGroup = async (current: string, next: string) => {
+    const value = next.trim();
+    if (!value) return;
+    const members = people.filter((person) => groupOf(person) === current);
+    for (const person of members) {
+      const tags = (person.profile?.tags ?? [])
+        .map((tag) => (isSameTag(tag, current) ? value : tag.trim()))
+        .filter(Boolean);
+      if (value !== t("未分组") && !tags.some((tag) => isSameTag(tag, value))) tags.push(value);
+      await facesDb.putPerson({
+        ...person,
+        updatedAt: Date.now(),
+        profile: {
+          ...(person.profile ?? {}),
+          tags: [...new Set(tags)],
+          circle: value,
+        },
+      });
+    }
+    if (drill.mode === "group" && drill.key === current) {
+      setDrill({ mode: "group", key: value });
+    }
+    setTagOpen(value);
+    await refresh();
+  };
+
+  /** 加入圈层：标签保留多选能力，circle 明确这次关系图使用的主圈层。 */
+  const addPersonToTag = async (personId: string, tag: string) => {
+    const person = people.find((item) => item.id === personId);
+    if (!person) return;
+    const tags = new Set((person.profile?.tags ?? []).map((item) => item.trim()).filter(Boolean));
+    if (tag !== t("未分组") && ![...tags].some((item) => isSameTag(item, tag))) tags.add(tag);
+    await facesDb.putPerson({
+      ...person,
+      updatedAt: Date.now(),
+      profile: { ...(person.profile ?? {}), tags: [...tags], circle: tag },
+    });
+    await refresh();
+  };
+
+  /** 移出圈层：优先落到另一个显式标签，其次回到自动识别标签或“未分组”。 */
+  const removePersonFromTag = async (personId: string, tag: string) => {
+    const person = people.find((item) => item.id === personId);
+    if (!person) return;
+    const tags = (person.profile?.tags ?? [])
+      .map((item) => item.trim())
+      .filter((item) => item && !isSameTag(item, tag));
+    const withoutCurrentCircle: PersonRecord = {
+      ...person,
+      profile: { ...(person.profile ?? {}), tags, circle: undefined },
+    };
+    const detectedFallback = tagsOf(withoutCurrentCircle).find((item) => item !== tag);
+    const nextCircle = tags[0] || detectedFallback || t("未分组");
+    await facesDb.putPerson({
+      ...person,
+      updatedAt: Date.now(),
+      profile: { ...(person.profile ?? {}), tags, circle: nextCircle },
+    });
+    await refresh();
+  };
 
   /** 当前钻取层级下要画哪些人 */
   const visiblePeople = useMemo(() => {
@@ -409,18 +400,23 @@ export function RelationsPanel({ preset }: Props) {
     }
     if (groupBy === "none") return people;
     if (drill.mode === "group")
-      return people.filter((person) => groupsOf(person).includes(drill.key ?? ""));
+      return people.filter((person) => groupOf(person) === (drill.key ?? ""));
     return people;
-  }, [people, relations, groupBy, drill, groupsOf]);
+  }, [people, relations, groupBy, drill, groupOf]);
 
-
-
-  /** 关系网布局：默认一个大圆；按部门分组时每个部门自成一簇。连线长度有下限，避免标签挤在一起 */
+  /** 关系网布局：默认一个大圆；按标签分组时每个圈层自成一簇。 */
   const graph = useMemo(() => {
     const people = visiblePeople;
     /** 两个人之间的最短距离（保证关系词写得下） */
     const MIN_EDGE = 150;
-    type Node = { id: string; x: number; y: number; name: string; group: string };
+    type Node = {
+      id: string;
+      x: number;
+      y: number;
+      name: string;
+      group: string;
+      color: ReturnType<typeof graphColor>;
+    };
     const nodes: Node[] = [];
     const clusters: { name: string; x: number; y: number; r: number }[] = [];
 
@@ -444,7 +440,7 @@ export function RelationsPanel({ preset }: Props) {
         inner: ringFor(members.length),
       }));
       const maxR = Math.max(...groups.map((group) => group.inner + 52), 120);
-      // 多个部门时，各簇均匀分布在一个更大的环上，彼此不重叠
+      // 多个圈层时，各簇均匀分布在一个更大的环上，彼此不重叠
       const ringRadius =
         groups.length > 1
           ? Math.max(maxR * 1.6, (maxR + 30) / Math.sin(Math.PI / groups.length))
@@ -463,6 +459,7 @@ export function RelationsPanel({ preset }: Props) {
             id: person.id,
             name: person.name,
             group: group.name,
+            color: graphColor(group.name),
             x: group.members.length === 1 ? cx : cx + group.inner * Math.cos(a),
             y: group.members.length === 1 ? cy : cy + group.inner * Math.sin(a),
           });
@@ -474,10 +471,12 @@ export function RelationsPanel({ preset }: Props) {
       const center = size / 2;
       people.forEach((person, index) => {
         const angle = (index / Math.max(people.length, 1)) * Math.PI * 2 - Math.PI / 2;
+        const group = groupOf(person);
         nodes.push({
           id: person.id,
           name: person.name,
-          group: person.profile?.department?.trim() || "",
+          group,
+          color: graphColor(group),
           x: center + radius * Math.cos(angle),
           y: center + radius * Math.sin(angle),
         });
@@ -494,7 +493,7 @@ export function RelationsPanel({ preset }: Props) {
 
     const map = new Map(nodes.map((node) => [node.id, node]));
 
-    // 部门圈跟着点走：用该部门所有点的实际位置重新算圆心和半径
+    // 圈层跟着点走：用该圈层所有点的实际位置重新算圆心和半径
     for (const cluster of clusters) {
       const members = nodes.filter((node) => node.group === cluster.name);
       if (!members.length) continue;
@@ -502,29 +501,25 @@ export function RelationsPanel({ preset }: Props) {
       const cy = members.reduce((sum, node) => sum + node.y, 0) / members.length;
       cluster.x = cx;
       cluster.y = cy;
-      cluster.r = Math.max(
-        86,
-        ...members.map((node) => Math.hypot(node.x - cx, node.y - cy) + 52),
-      );
+      cluster.r = Math.max(86, ...members.map((node) => Math.hypot(node.x - cx, node.y - cy) + 52));
     }
 
-    // 互为对向的同一段关系只画一次（例如 A—同事→B 和 B—同事→A）
+    // 只折叠完全相同方向、标签与方向性的重复记录；不同标签必须分别保留。
     const seen = new Set<string>();
     // 聚焦某个人时，只画「和 ta 直接相连」的那一层关系，邻居之间的线不画
     const focusId = drill.mode === "person" ? drill.key : null;
     const edges = relations
+      .filter((relation) => relationFilter === "all" || relation.label === relationFilter)
       .filter((relation) =>
         focusId ? relation.fromId === focusId || relation.toId === focusId : true,
       )
 
       .filter((relation) => {
-        const pair = [relation.fromId, relation.toId].sort().join("|");
-        const key = `${pair}::${relation.label.trim()}`;
-        const mutualKey = `${pair}::mutual`;
+        const key = `${relation.fromId}>${relation.toId}::${relation.label.trim()}::${
+          isMutualRelation(relation) ? "mutual" : "directed"
+        }`;
         if (seen.has(key)) return false;
-        if (isMutualRelation(relation) && seen.has(mutualKey)) return false;
         seen.add(key);
-        if (isMutualRelation(relation)) seen.add(mutualKey);
         return true;
       })
       .map((relation) => {
@@ -534,7 +529,7 @@ export function RelationsPanel({ preset }: Props) {
           id: relation.id,
           label: relation.label,
           mutual: isMutualRelation(relation),
-          /** 跨部门的连线用虚线标出来 */
+          /** 跨圈层的连线用虚线标出来 */
           cross: !!a && !!b && !!a.group && !!b.group && a.group !== b.group,
           pair: [relation.fromId, relation.toId].sort().join("|"),
           a,
@@ -557,7 +552,6 @@ export function RelationsPanel({ preset }: Props) {
       const flip = edge.a!.id === edge.pair.split("|")[0] ? 1 : -1;
       return { ...edge, curve: total === 1 ? 0 : step * 48 * flip };
     });
-
 
     // 标签贴在（可能弯曲的）连线中点附近，必要时沿线微调
     const placed: { x: number; y: number; w: number }[] = [];
@@ -592,8 +586,7 @@ export function RelationsPanel({ preset }: Props) {
         // 和已放好的标签重叠 → 重罚；压到圆点或名字 → 重罚；偏离连线中点 → 轻罚
         const overlap = placed.filter(
           (item) =>
-            Math.abs(item.x - cand.x) < (item.w + item.w) / 2 + 6 &&
-            Math.abs(item.y - cand.y) < 18,
+            Math.abs(item.x - cand.x) < (item.w + item.w) / 2 + 6 && Math.abs(item.y - cand.y) < 18,
         ).length;
         const onNode = nodes.filter(
           (node) => Math.abs(node.x - cand.x) < w / 2 + 18 && Math.abs(node.y - cand.y) < 34,
@@ -609,8 +602,7 @@ export function RelationsPanel({ preset }: Props) {
       return { ...edge, lx: best.x, ly: best.y, lw: w };
     });
 
-
-    // 部门范围画成不规则的平滑外形，形状跟着该部门成员的实际位置流动变形
+    // 圈层范围画成不规则的平滑外形，形状跟着圈层成员的实际位置流动变形
     const blob = (
       cx: number,
       cy: number,
@@ -658,6 +650,7 @@ export function RelationsPanel({ preset }: Props) {
 
     const shaped = clusters.map((cluster) => ({
       ...cluster,
+      color: graphColor(cluster.name),
       path: blob(
         cluster.x,
         cluster.y,
@@ -667,10 +660,13 @@ export function RelationsPanel({ preset }: Props) {
       ),
     }));
 
-
     return { size, nodes, edges: labelled, clusters: shaped };
+  }, [visiblePeople, relations, relationFilter, groupBy, groupOf, positions, drill]);
 
-  }, [visiblePeople, relations, groupBy, groupOf, positions, drill, t]);
+  const relationLabels = useMemo(
+    () => [...new Set(relations.map((relation) => relation.label).filter(Boolean))].sort(),
+    [relations],
+  );
 
   /** 选中的人 + 他/她的所有关系 */
   const selected = useMemo(() => {
@@ -689,11 +685,30 @@ export function RelationsPanel({ preset }: Props) {
           outgoing,
         };
       });
-    return { person, links };
-  }, [selectedId, people, relations, nameOf]);
+    const events = lifeEvents
+      .filter((event) => event.personIds?.includes(person.id))
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 3);
+    const relatedReminders = reminders
+      .filter((reminder) => reminder.personIds?.includes(person.id))
+      .sort((a, b) => (a.due ?? "9999-99-99").localeCompare(b.due ?? "9999-99-99"))
+      .slice(0, 3);
+    const commitments = Object.entries(person.profile?.extra ?? {}).filter(([key]) =>
+      /承诺|约定|promise|commitment/i.test(key),
+    );
+    return { person, links, events, reminders: relatedReminders, commitments };
+  }, [selectedId, people, relations, lifeEvents, reminders, nameOf]);
+
+  const selectedRelation = useMemo(
+    () => relations.find((relation) => relation.id === selectedRelationId) ?? null,
+    [relations, selectedRelationId],
+  );
+  const selectedEvidence = useMemo(
+    () => evidence.find((item) => item.id === selectedRelation?.sourceId) ?? null,
+    [evidence, selectedRelation?.sourceId],
+  );
 
   const viewSize = graph.size;
-
 
   /** 屏幕坐标 → SVG 画布坐标的比例（含缩放） */
   const svgScale = () => {
@@ -734,7 +749,6 @@ export function RelationsPanel({ preset }: Props) {
     setDrill({ mode: "blocks" });
   }, []);
 
-
   /** Esc 退回上一层 */
   useEffect(() => {
     if (drill.mode === "blocks") return;
@@ -744,8 +758,6 @@ export function RelationsPanel({ preset }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [drill.mode, goBack]);
-
-
 
   const onPanPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
     if (dragRef.current) return;
@@ -810,15 +822,14 @@ export function RelationsPanel({ preset }: Props) {
     }
   };
 
-
-
-
   return (
     <section className="flex min-w-0 flex-col gap-5 rounded-2xl border border-border bg-card/60 p-5">
       <header className="flex items-center justify-between gap-3">
         <h2 className="flex items-baseline gap-2.5">
           <span className="font-display text-xl leading-none tracking-tight">{t("人物档案")}</span>
-          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Agent</span>
+          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
+            Agent
+          </span>
         </h2>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-muted-foreground">
@@ -826,23 +837,23 @@ export function RelationsPanel({ preset }: Props) {
           </span>
           <ExportMenu scope="people" />
         </div>
-
       </header>
 
       <Tabs defaultValue="roster">
         <TabsList>
           <TabsTrigger value="roster">{t("档案")}</TabsTrigger>
           <TabsTrigger value="graph">{t("关系网")}</TabsTrigger>
-          
         </TabsList>
 
         <TabsContent value="roster" className="space-y-4 pt-4">
           <PageGuide
             id="relations-roster"
             title="档案页"
-            points={["填名字就能建人，先建人再连关系。", "点一行可以打开人物卡补职位、部门等资料。"]}
+            points={[
+              "填名字就能建人，先建人再连关系。",
+              "点一行可以打开人物卡补职位、部门等资料。",
+            ]}
           />
-
 
           <div className="space-y-2 rounded-xl border border-border p-3">
             <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
@@ -867,7 +878,7 @@ export function RelationsPanel({ preset }: Props) {
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              {t("之后摄像头识别到新面孔时，可以在「人物」里选这个人补上人脸样本。")}
+              {t("建档后可继续补充昵称、联系方式、关系与共同经历。")}
             </p>
           </div>
 
@@ -926,16 +937,16 @@ export function RelationsPanel({ preset }: Props) {
                 type="button"
                 className="text-primary hover:underline"
                 onClick={() =>
-                  setCheckedIds(
-                    allChecked ? [] : filteredPeople.map((person) => person.id),
-                  )
+                  setCheckedIds(allChecked ? [] : filteredPeople.map((person) => person.id))
                 }
               >
                 {allChecked ? t("取消全选") : t("全选本页")}
               </button>
               {checkedIds.length > 0 && (
                 <>
-                  <span>· {t("已选")} {checkedIds.length}</span>
+                  <span>
+                    · {t("已选")} {checkedIds.length}
+                  </span>
                   <select
                     value={batchTag}
                     onChange={(event) => setBatchTag(event.target.value)}
@@ -986,7 +997,10 @@ export function RelationsPanel({ preset }: Props) {
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {filteredPeople.map((person) => (
-                <div key={person.id} className="flex items-start gap-2.5 rounded-xl border border-border p-2.5">
+                <div
+                  key={person.id}
+                  className="flex items-start gap-2.5 rounded-xl border border-border p-2.5"
+                >
                   <Checkbox
                     checked={checkedIds.includes(person.id)}
                     onCheckedChange={(value) =>
@@ -998,7 +1012,11 @@ export function RelationsPanel({ preset }: Props) {
                     className="mt-1"
                   />
                   {person.thumb ? (
-                    <img src={person.thumb} alt={person.name} className="size-12 rounded-lg object-cover" />
+                    <img
+                      src={person.thumb}
+                      alt={person.name}
+                      className="size-12 rounded-lg object-cover"
+                    />
                   ) : (
                     <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">
                       {person.name.slice(0, 1)}
@@ -1022,7 +1040,12 @@ export function RelationsPanel({ preset }: Props) {
                       </div>
                     )}
                     <div className="mt-1.5 flex gap-1">
-                      <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" onClick={() => setEditing(person)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-[11px]"
+                        onClick={() => setEditing(person)}
+                      >
                         {t("编辑")}
                       </Button>
                       <Button
@@ -1043,23 +1066,15 @@ export function RelationsPanel({ preset }: Props) {
 
         <TabsContent value="graph" className="space-y-4 pt-4">
           <div className="space-y-2 rounded-xl border border-border p-3">
-            <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-              {t("说说这些人和他们的关系")}
-            </Label>
-            <Textarea
-              value={raw}
-              onChange={(event) => setRaw(event.target.value)}
-              rows={3}
-              placeholder={t("例如：老王是我同事，他太太李姐在附近开花店，他们的儿子小王和我弟弟同班。")}
-            />
             <div className="flex flex-wrap gap-2">
-              <Button onClick={() => void organize()} disabled={busy} className="rounded-full px-4">
-                {busy ? (
-                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-                ) : (
-                  <Sparkles className="size-3.5" aria-hidden="true" />
+              <div className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
+                {t(
+                  "自然语言、文件、截图和语音请走统一录入草稿；确认身份、字段 Diff 与来源后才会写入。",
                 )}
-                {t("AI 建档并连线")}
+              </div>
+              <Button variant="outline" onClick={onOpenIntake} className="rounded-full px-4">
+                <Sparkles className="size-3.5" aria-hidden="true" />
+                {t("前往安全录入")}
               </Button>
               <Button
                 variant="outline"
@@ -1135,12 +1150,68 @@ export function RelationsPanel({ preset }: Props) {
             >
               <option value="tag">{t("按标签分圈")}</option>
               <option value="none">{t("不分组")}</option>
-
             </select>
+            <select
+              value={relationFilter}
+              onChange={(event) => setRelationFilter(event.target.value)}
+              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              aria-label={t("关系类型筛选")}
+            >
+              <option value="all">{t("全部关系")}</option>
+              {relationLabels.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+            <label className="flex h-9 items-center gap-1.5 rounded-md border border-border px-2 text-xs">
+              <Checkbox
+                checked={showEdgeLabels}
+                onCheckedChange={(value) => setShowEdgeLabels(value === true)}
+              />
+              {t("显示边标签")}
+            </label>
           </div>
 
+          {groupBy === "tag" && graph.clusters.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2" aria-label={t("圈层图例")}>
+              <span className="text-[11px] text-muted-foreground">{t("圈层图例")}：</span>
+              {graph.clusters.map((cluster) => (
+                <div
+                  key={cluster.name}
+                  className="inline-flex overflow-hidden rounded-full border border-border bg-background text-[11px]"
+                >
+                  <button
+                    type="button"
+                    className="flex min-h-8 items-center gap-1.5 px-2.5 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    aria-label={`${t("编辑圈层")}：${cluster.name}`}
+                    onClick={() => setTagOpen(cluster.name)}
+                  >
+                    <span
+                      className="size-2.5 rounded-full"
+                      style={{ backgroundColor: cluster.color.node }}
+                      aria-hidden="true"
+                    />
+                    <span>{cluster.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="min-h-8 border-l border-border px-2.5 text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    aria-label={`${t("只看圈层")}：${cluster.name}`}
+                    onClick={() => {
+                      setSelectedId(null);
+                      setDrill({ mode: "group", key: cluster.name });
+                    }}
+                  >
+                    {t("只看")}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-            {drill.mode === "person" && (
+            {drill.mode !== "blocks" && (
               <>
                 <button
                   type="button"
@@ -1150,7 +1221,7 @@ export function RelationsPanel({ preset }: Props) {
                   ← {t("返回")}
                 </button>
                 <span className="rounded-full bg-primary/10 px-2 py-0.5 text-foreground">
-                  {nameOf(drill.key!)}
+                  {drill.mode === "person" ? nameOf(drill.key!) : drill.key}
                 </span>
               </>
             )}
@@ -1165,7 +1236,9 @@ export function RelationsPanel({ preset }: Props) {
               >
                 −
               </button>
-              <span className="w-10 text-center tabular-nums">{Math.round(viewport.scale * 100)}%</span>
+              <span className="w-10 text-center tabular-nums">
+                {Math.round(viewport.scale * 100)}%
+              </span>
               <button
                 type="button"
                 className="rounded-full border border-border px-2 py-0.5 hover:bg-accent"
@@ -1239,6 +1312,144 @@ export function RelationsPanel({ preset }: Props) {
                   ))}
                 </ul>
               )}
+              {selected.events.length > 0 && (
+                <div className="border-t border-primary/20 pt-2">
+                  <p className="text-[11px] font-medium">{t("最近共同事件")}</p>
+                  <ul className="mt-1 space-y-1 text-[11px] text-muted-foreground">
+                    {selected.events.map((event) => (
+                      <li key={event.id}>
+                        <span className="tabular-nums">{event.date}</span> · {event.title}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(selected.person.profile?.gifts?.length ?? 0) > 0 && (
+                <div className="border-t border-primary/20 pt-2">
+                  <p className="text-[11px] font-medium">{t("送礼记录")}</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {selected.person.profile?.gifts?.join("、")}
+                  </p>
+                </div>
+              )}
+              {selected.commitments.length > 0 && (
+                <div className="border-t border-primary/20 pt-2">
+                  <p className="text-[11px] font-medium">{t("承诺与约定")}</p>
+                  <ul className="mt-1 space-y-1 text-[11px] text-muted-foreground">
+                    {selected.commitments.map(([key, value]) => (
+                      <li key={key}>
+                        {key} · {value}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {selected.reminders.length > 0 && (
+                <div className="border-t border-primary/20 pt-2">
+                  <p className="text-[11px] font-medium">{t("相关提醒")}</p>
+                  <ul className="mt-1 space-y-1 text-[11px] text-muted-foreground">
+                    {selected.reminders.map((reminder) => (
+                      <li key={reminder.id}>
+                        {reminder.due ? `${reminder.due} · ` : ""}
+                        {reminder.title}
+                        {reminder.done ? ` · ${t("已完成")}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {selectedRelation && (
+            <div
+              className="space-y-2 rounded-xl border border-primary/30 bg-background p-3 text-xs"
+              role="region"
+              aria-label={t("关系详情")}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-medium">
+                  {nameOf(selectedRelation.fromId)} {isMutualRelation(selectedRelation) ? "⇄" : "→"}{" "}
+                  {nameOf(selectedRelation.toId)}
+                </p>
+                <button
+                  type="button"
+                  className="text-muted-foreground underline-offset-2 hover:underline"
+                  onClick={() => setSelectedRelationId(null)}
+                >
+                  {t("关闭详情")}
+                </button>
+              </div>
+              <dl className="grid gap-x-4 gap-y-1 text-[11px] sm:grid-cols-[auto_1fr_auto_1fr]">
+                <dt className="text-muted-foreground">{t("关系标签")}</dt>
+                <dd>{selectedRelation.label}</dd>
+                <dt className="text-muted-foreground">{t("方向语义")}</dt>
+                <dd className="space-y-1">
+                  {isMutualRelation(selectedRelation) ? (
+                    <>
+                      <span className="block">
+                        {nameOf(selectedRelation.fromId)} → {nameOf(selectedRelation.toId)}：
+                        {t("已记录该方向的关系语义")}
+                      </span>
+                      <span className="block">
+                        {nameOf(selectedRelation.toId)} → {nameOf(selectedRelation.fromId)}：
+                        {t("同一条双向关系同时记录反向语义")}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="block">
+                        {nameOf(selectedRelation.fromId)} → {nameOf(selectedRelation.toId)}：
+                        {t("仅记录这一方向")}
+                      </span>
+                      <span className="block">
+                        {nameOf(selectedRelation.toId)} → {nameOf(selectedRelation.fromId)}：
+                        {t("未记录反向关系")}
+                      </span>
+                    </>
+                  )}
+                </dd>
+                <dt className="text-muted-foreground">{t("创建于")}</dt>
+                <dd>{new Date(selectedRelation.createdAt).toLocaleString()}</dd>
+                <dt className="text-muted-foreground">{t("更新于")}</dt>
+                <dd>
+                  {new Date(
+                    selectedRelation.updatedAt ?? selectedRelation.createdAt,
+                  ).toLocaleString()}
+                </dd>
+                <dt className="text-muted-foreground">{t("确认状态")}</dt>
+                <dd>
+                  {selectedRelation.confirmationStatus === "pending" ? t("待确认") : t("已确认")}
+                </dd>
+                <dt className="text-muted-foreground">{t("证据引用")}</dt>
+                <dd className="min-w-0">
+                  {selectedEvidence ? (
+                    <span className="block space-y-1">
+                      <span className="block font-medium text-foreground">
+                        {selectedEvidence.title}
+                      </span>
+                      {selectedEvidence.origin && (
+                        <span className="block text-muted-foreground">
+                          {t("来源")}：{selectedEvidence.origin}
+                        </span>
+                      )}
+                      <span className="block break-words text-muted-foreground">
+                        {selectedEvidence.text.slice(0, 240)}
+                        {selectedEvidence.text.length > 240 ? "…" : ""}
+                      </span>
+                      <span className="block font-mono text-[9px] text-muted-foreground">
+                        {selectedEvidence.id}
+                      </span>
+                    </span>
+                  ) : (
+                    selectedRelation.sourceId || t("未关联单独证据记录")
+                  )}
+                </dd>
+              </dl>
+              {selectedRelation.note && (
+                <p className="text-muted-foreground">{selectedRelation.note}</p>
+              )}
+              <SourceBadge source={selectedRelation.source} detailed />
             </div>
           )}
 
@@ -1253,7 +1464,6 @@ export function RelationsPanel({ preset }: Props) {
               onPointerUp={onPanPointerUp}
               onPointerLeave={onPanPointerUp}
             >
-
               <defs>
                 {/* 单箭头：从 A 指向 B；对等关系两端都加箭头 */}
                 <marker
@@ -1280,157 +1490,190 @@ export function RelationsPanel({ preset }: Props) {
                 </marker>
               </defs>
               <g transform={`translate(${viewport.tx} ${viewport.ty}) scale(${viewport.scale})`}>
+                {graph.clusters.map((cluster) => (
+                  <g key={cluster.name}>
+                    <path
+                      d={cluster.path}
+                      strokeWidth={1}
+                      strokeDasharray="4 4"
+                      style={{
+                        fill: cluster.color.fill,
+                        stroke: cluster.color.stroke,
+                        transition: "d 260ms ease-out",
+                      }}
+                    />
 
+                    <text
+                      x={cluster.x}
+                      y={cluster.y - cluster.r - 8}
+                      textAnchor="middle"
+                      role="button"
+                      tabIndex={0}
+                      className="cursor-pointer fill-primary text-[11px] font-medium underline-offset-2 hover:underline"
+                      aria-label={`${t("编辑圈层")}：${cluster.name}`}
+                      onClick={() => setTagOpen(cluster.name)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        setTagOpen(cluster.name);
+                      }}
+                    >
+                      <title>{t("点击编辑这个圈层")}</title>
 
+                      {cluster.name}
+                    </text>
+                  </g>
+                ))}
 
-              {graph.clusters.map((cluster) => (
-                <g key={cluster.name}>
-                  <path
-                    d={cluster.path}
-                    className="fill-primary/5 stroke-primary/25"
-                    strokeWidth={1}
-                    strokeDasharray="4 4"
-                    style={{ transition: "d 260ms ease-out" }}
-                  />
+                {graph.edges.map((edge) => {
+                  const dx = edge.b!.x - edge.a!.x;
+                  const dy = edge.b!.y - edge.a!.y;
+                  const len = Math.hypot(dx, dy) || 1;
+                  const gap = 20;
+                  const ux = dx / len;
+                  const uy = dy / len;
+                  const x1 = edge.a!.x + ux * gap;
+                  const y1 = edge.a!.y + uy * gap;
+                  const x2 = edge.b!.x - ux * gap;
+                  const y2 = edge.b!.y - uy * gap;
+                  // 同一对人的多条关系画成不同弧度的曲线
+                  const cx = (x1 + x2) / 2 + -uy * edge.curve * 2;
+                  const cy = (y1 + y2) / 2 + ux * edge.curve * 2;
+                  const active =
+                    !selectedId || edge.a!.id === selectedId || edge.b!.id === selectedId;
+                  return (
+                    <g
+                      key={edge.id}
+                      role="button"
+                      tabIndex={0}
+                      opacity={active ? 1 : 0.12}
+                      className="cursor-pointer outline-none"
+                      aria-label={`${t("查看关系详情")}：${edge.a!.name} ${edge.mutual ? "⇄" : "→"} ${edge.b!.name} · ${edge.label}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedRelationId(edge.id);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setSelectedRelationId(edge.id);
+                      }}
+                    >
+                      <title>{`${edge.label} · ${t("点击查看来源、时间与确认状态")}`}</title>
+                      <path
+                        d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
+                        fill="none"
+                        className={
+                          selectedId && active
+                            ? "stroke-primary"
+                            : edge.mutual
+                              ? "stroke-primary/45"
+                              : "stroke-border"
+                        }
+                        strokeWidth={
+                          selectedRelationId === edge.id ? 3 : selectedId && active ? 2 : 1.5
+                        }
+                        strokeDasharray={edge.cross ? "5 4" : undefined}
+                        markerEnd="url(#relation-arrow)"
+                        markerStart={edge.mutual ? "url(#relation-arrow-start)" : undefined}
+                      />
 
-
-                  <text
-                    x={cluster.x}
-                    y={cluster.y - cluster.r - 8}
-                    textAnchor="middle"
-                    role="button"
-                    tabIndex={0}
-                    className="cursor-pointer fill-primary text-[11px] font-medium underline-offset-2 hover:underline"
-                    onClick={() => setDeptOpen(cluster.name)}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      setDeptOpen(cluster.name);
-                    }}
-                  >
-                    <title>{t("点击查看／编辑部门介绍")}</title>
-
-                    {cluster.name}
-                  </text>
-                </g>
-              ))}
-
-              {graph.edges.map((edge) => {
-                const dx = edge.b!.x - edge.a!.x;
-                const dy = edge.b!.y - edge.a!.y;
-                const len = Math.hypot(dx, dy) || 1;
-                const gap = 20;
-                const ux = dx / len;
-                const uy = dy / len;
-                const x1 = edge.a!.x + ux * gap;
-                const y1 = edge.a!.y + uy * gap;
-                const x2 = edge.b!.x - ux * gap;
-                const y2 = edge.b!.y - uy * gap;
-                // 同一对人的多条关系画成不同弧度的曲线
-                const cx = (x1 + x2) / 2 + -uy * edge.curve * 2;
-                const cy = (y1 + y2) / 2 + ux * edge.curve * 2;
-                const active =
-                  !selectedId || edge.a!.id === selectedId || edge.b!.id === selectedId;
-                return (
-                <g key={edge.id} opacity={active ? 1 : 0.12}>
-                  <path
-                    d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
-                    fill="none"
-                    className={
-                      selectedId && active
-                        ? "stroke-primary"
-                        : edge.mutual
-                          ? "stroke-primary/45"
-                          : "stroke-border"
-                    }
-                    strokeWidth={selectedId && active ? 2 : 1.5}
-                    strokeDasharray={edge.cross ? "5 4" : undefined}
-                    markerEnd="url(#relation-arrow)"
-                    markerStart={edge.mutual ? "url(#relation-arrow-start)" : undefined}
-                  />
-
-                  <rect
-                    x={edge.lx - edge.lw / 2}
-                    y={edge.ly - 9}
-                    width={edge.lw}
-                    height={17}
-                    rx={5}
-                    className="fill-background/90"
-                  />
-                  <text
-                    x={edge.lx}
-                    y={edge.ly + 3}
-                    textAnchor="middle"
-                    className="fill-muted-foreground text-[11px]"
-                  >
-                    {edge.label}
-                  </text>
-                </g>
-                );
-              })}
-              {graph.nodes.map((node) => {
-                const linked =
-                  !selectedId ||
-                  node.id === selectedId ||
-                  relations.some(
-                    (relation) =>
-                      (relation.fromId === selectedId && relation.toId === node.id) ||
-                      (relation.toId === selectedId && relation.fromId === node.id),
+                      {showEdgeLabels && (
+                        <>
+                          <rect
+                            x={edge.lx - edge.lw / 2}
+                            y={edge.ly - 9}
+                            width={edge.lw}
+                            height={17}
+                            rx={5}
+                            className="fill-background/90"
+                          />
+                          <text
+                            x={edge.lx}
+                            y={edge.ly + 3}
+                            textAnchor="middle"
+                            className="fill-muted-foreground text-[11px]"
+                          >
+                            {edge.label}
+                          </text>
+                        </>
+                      )}
+                    </g>
                   );
-                return (
-                <g
-                  key={node.id}
-                  role="button"
-                  tabIndex={0}
-                  opacity={linked ? 1 : 0.25}
-                  className="group cursor-grab outline-none active:cursor-grabbing"
-                  onPointerDown={(event) => onNodePointerDown(event, node)}
-                  onPointerMove={onNodePointerMove}
-                  onPointerUp={onNodePointerUp}
-                  onPointerCancel={() => {
-                    dragRef.current = null;
-                  }}
-                  onDoubleClick={() => {
-                    const person = people.find((item) => item.id === node.id);
-                    if (person) setEditing(person);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    setSelectedId((prev) => (prev === node.id ? null : node.id));
-                  }}
-                >
-                  <title>{`${node.name} · ${t("点选看关系，拖动可移动，双击开人物卡")}`}</title>
-                  <circle cx={node.x} cy={node.y} r={22} className="fill-transparent" />
-                  <circle
-                    cx={node.x}
-                    cy={node.y}
-                    r={node.id === selectedId ? 19 : 16}
-                    className={cn(
-                      "transition-opacity group-hover:opacity-80 group-focus-visible:stroke-foreground",
-                      node.id === selectedId ? "fill-primary stroke-foreground" : "fill-primary",
-                    )}
-                    strokeWidth={node.id === selectedId ? 2.5 : 2}
-                  />
+                })}
+                {graph.nodes.map((node) => {
+                  const linked =
+                    !selectedId ||
+                    node.id === selectedId ||
+                    relations.some(
+                      (relation) =>
+                        (relation.fromId === selectedId && relation.toId === node.id) ||
+                        (relation.toId === selectedId && relation.fromId === node.id),
+                    );
+                  return (
+                    <g
+                      key={node.id}
+                      role="button"
+                      tabIndex={0}
+                      opacity={linked ? 1 : 0.25}
+                      className="group cursor-grab outline-none active:cursor-grabbing"
+                      onPointerDown={(event) => onNodePointerDown(event, node)}
+                      onPointerMove={onNodePointerMove}
+                      onPointerUp={onNodePointerUp}
+                      onPointerCancel={() => {
+                        dragRef.current = null;
+                      }}
+                      onDoubleClick={() => {
+                        const person = people.find((item) => item.id === node.id);
+                        if (person) setEditing(person);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        if (drill.mode === "person" && drill.key === node.id) {
+                          setSelectedId((prev) => (prev === node.id ? null : node.id));
+                        } else {
+                          focusPerson(node.id);
+                        }
+                      }}
+                    >
+                      <title>{`${node.name} · ${t("点选看关系，拖动可移动，双击开人物卡")}`}</title>
+                      <circle cx={node.x} cy={node.y} r={22} className="fill-transparent" />
+                      <circle
+                        cx={node.x}
+                        cy={node.y}
+                        r={node.id === selectedId ? 19 : 16}
+                        className={cn(
+                          "transition-opacity group-hover:opacity-80 group-focus-visible:stroke-foreground",
+                          node.id === selectedId && "stroke-foreground",
+                        )}
+                        style={{ fill: node.color.node }}
+                        strokeWidth={node.id === selectedId ? 2.5 : 2}
+                      />
 
+                      <text
+                        x={node.x}
+                        y={node.y + 34}
+                        textAnchor="middle"
+                        className="fill-foreground text-[12px]"
+                      >
+                        {node.name}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {!graph.nodes.length && (
                   <text
-                    x={node.x}
-                    y={node.y + 34}
+                    x={viewSize / 2}
+                    y={viewSize / 2}
                     textAnchor="middle"
-                    className="fill-foreground text-[12px]"
+                    className="fill-muted-foreground text-xs"
                   >
-                    {node.name}
+                    {t("还没有任何人物档案")}
                   </text>
-
-                </g>
-                );
-              })}
-
-              {!graph.nodes.length && (
-                <text x={viewSize / 2} y={viewSize / 2} textAnchor="middle" className="fill-muted-foreground text-xs">
-                  {t("还没有任何人物档案")}
-                </text>
-              )}
+                )}
               </g>
             </svg>
           </div>
@@ -1446,12 +1689,18 @@ export function RelationsPanel({ preset }: Props) {
                     <span className="truncate">{nameOf(relation.fromId)}</span>
                     <button
                       type="button"
-                      title={isMutualRelation(relation) ? t("双向关系，点击改为单向") : t("单向关系，点击改为双向")}
+                      title={
+                        isMutualRelation(relation)
+                          ? t("双向关系，点击改为单向")
+                          : t("单向关系，点击改为双向")
+                      }
                       className="shrink-0 text-primary transition-opacity hover:opacity-70"
                       onClick={async () => {
                         await facesDb.putRelation({
                           ...relation,
                           mutual: !isMutualRelation(relation),
+                          updatedAt: Date.now(),
+                          confirmationStatus: "confirmed",
                         });
                         await refresh();
                       }}
@@ -1464,22 +1713,64 @@ export function RelationsPanel({ preset }: Props) {
                     </button>
                     <span className="shrink-0 text-primary">{relation.label}</span>
                     {isMutualRelation(relation) ? (
-                      <ArrowLeftRight className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                      <ArrowLeftRight
+                        className="size-3.5 shrink-0 text-primary"
+                        aria-hidden="true"
+                      />
                     ) : (
                       <ArrowRight className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
                     )}
                     <span className="truncate">{nameOf(relation.toId)}</span>
                   </span>
-                  <button
-                    type="button"
-                    className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
-                    onClick={async () => {
-                      await facesDb.deleteRelation(relation.id);
-                      await refresh();
-                    }}
-                  >
-                    <Trash2 className="size-3.5" aria-hidden="true" />
-                  </button>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <SourceBadge source={relation.source} />
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[10px]",
+                        relation.confirmationStatus === "pending"
+                          ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                          : "bg-primary/10 text-primary",
+                      )}
+                      title={`${t("创建于")} ${new Date(relation.createdAt).toLocaleString()} · ${t("更新于")} ${new Date(relation.updatedAt ?? relation.createdAt).toLocaleString()}`}
+                    >
+                      {relation.confirmationStatus === "pending" ? t("待确认") : t("已确认")}
+                    </span>
+                    {relation.confirmationStatus === "pending" && (
+                      <button
+                        type="button"
+                        className="text-primary underline-offset-2 hover:underline"
+                        onClick={async () => {
+                          await facesDb.putRelation({
+                            ...relation,
+                            confirmationStatus: "confirmed",
+                            updatedAt: Date.now(),
+                          });
+                          await refresh();
+                        }}
+                      >
+                        {t("确认")}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="text-primary underline-offset-2 hover:underline"
+                      onClick={() => setSelectedRelationId(relation.id)}
+                    >
+                      {t("详情")}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={t("删除关系")}
+                      className="text-muted-foreground transition-colors hover:text-destructive"
+                      onClick={async () => {
+                        await facesDb.deleteRelation(relation.id);
+                        if (selectedRelationId === relation.id) setSelectedRelationId(null);
+                        await refresh();
+                      }}
+                    >
+                      <Trash2 className="size-3.5" aria-hidden="true" />
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -1494,27 +1785,19 @@ export function RelationsPanel({ preset }: Props) {
         onSaved={refresh}
       />
 
-      <DepartmentDialog
-        department={deptOpen}
-        members={deptOpen ? membersOf(deptOpen) : []}
-        candidates={
-          deptOpen
-            ? people.filter(
-                (person) => (person.profile?.department?.trim() || t("未分部门")) !== deptOpen,
-              )
-            : []
-        }
-        onOpenChange={(open) => setDeptOpen(open ? deptOpen : null)}
-        onRename={renameDepartment}
-        onAddMember={(personId, department) => setPersonDepartment(personId, department)}
-        onRemoveMember={(personId) => setPersonDepartment(personId, undefined)}
+      <TagGroupDialog
+        tag={tagOpen}
+        members={tagMembers}
+        candidates={tagCandidates}
+        onOpenChange={(open) => setTagOpen(open ? tagOpen : null)}
+        onRename={renameTagGroup}
+        onAddMember={addPersonToTag}
+        onRemoveMember={removePersonFromTag}
         onOpenPerson={(person) => {
-          setDeptOpen(null);
+          setTagOpen(null);
           setEditing(person);
         }}
       />
-
-
     </section>
   );
 }

@@ -1,6 +1,6 @@
-/** 通用导出按钮：Markdown / Word / Excel / PDF */
+/** 通用导出按钮：Markdown / Word / PDF */
 
-import { Download, FileSpreadsheet, FileText, FileType, Printer } from "lucide-react";
+import { Download, FileText, FileType, Printer } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -18,7 +18,6 @@ import { t } from "@/lib/i18n";
 const OPTIONS: Array<{ id: ExportFormat; label: string; icon: typeof FileText }> = [
   { id: "md", label: "Markdown (.md)", icon: FileText },
   { id: "docx", label: "Word (.docx)", icon: FileType },
-  { id: "xlsx", label: "Excel (.xlsx)", icon: FileSpreadsheet },
   { id: "pdf", label: "PDF（打印另存）", icon: Printer },
 ];
 

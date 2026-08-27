@@ -44,10 +44,7 @@ export function DraftGraph({
   const [label, setLabel] = useState("");
   const [newName, setNewName] = useState("");
 
-  const names = useMemo(
-    () => people.map((p) => (p.name ?? "").trim()).filter(Boolean),
-    [people],
-  );
+  const names = useMemo(() => people.map((p) => (p.name ?? "").trim()).filter(Boolean), [people]);
 
   const points = useMemo(() => {
     const radius = names.length <= 1 ? 0 : Math.min(CENTER - 56, 60 + names.length * 14);
@@ -92,9 +89,22 @@ export function DraftGraph({
       {names.length === 0 ? (
         <p className="py-6 text-center text-xs text-muted-foreground">{t("还没有人物")}</p>
       ) : (
-        <svg viewBox={`0 0 ${SIZE} ${SIZE}`} className="w-full" role="img" aria-label={t("关系网预览")}>
+        <svg
+          viewBox={`0 0 ${SIZE} ${SIZE}`}
+          className="w-full"
+          role="img"
+          aria-label={t("关系网预览")}
+        >
           <defs>
-            <marker id="draft-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <marker
+              id="draft-arrow"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="5"
+              markerHeight="5"
+              orient="auto-start-reverse"
+            >
               <path d="M0,0 L10,5 L0,10 z" className="fill-primary" />
             </marker>
           </defs>
@@ -112,8 +122,7 @@ export function DraftGraph({
             const samePair = relations
               .map((r, i) => ({ r, i }))
               .filter(
-                ({ r }) =>
-                  [(r.from ?? "").trim(), (r.to ?? "").trim()].sort().join("|") === pair,
+                ({ r }) => [(r.from ?? "").trim(), (r.to ?? "").trim()].sort().join("|") === pair,
               );
             const total = samePair.length;
             const order = samePair.findIndex(({ i }) => i === index);
@@ -159,7 +168,10 @@ export function DraftGraph({
                   textAnchor="middle"
                   className="cursor-pointer fill-foreground text-[10px]"
                   onClick={() => {
-                    const next = window.prompt(t("改关系词（留空则删除这条关系）"), relation.label ?? "");
+                    const next = window.prompt(
+                      t("改关系词（留空则删除这条关系）"),
+                      relation.label ?? "",
+                    );
                     if (next === null) return;
                     if (!next.trim()) onRemoveRelation(index);
                     else onPatchRelation(index, next.trim());

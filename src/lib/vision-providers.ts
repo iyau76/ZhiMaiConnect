@@ -41,7 +41,6 @@ export function assertAudio(preset: ProviderPreset) {
   );
 }
 
-
 export const LOVABLE_MODELS = [
   { id: "google/gemini-3.6-flash", label: "Gemini 3.6 Flash（推荐，快且看图强）" },
   { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro（更强推理，较慢）" },

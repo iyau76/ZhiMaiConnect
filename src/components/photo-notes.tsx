@@ -163,7 +163,11 @@ export function PhotoNotes({ photos, onChange, label, className }: Props) {
               <span className="text-xs text-muted-foreground">{preview.caption}</span>
               <X className="size-4 text-muted-foreground" aria-hidden="true" />
             </div>
-            <img src={preview.dataUrl} alt={preview.caption || t("图片备注")} className="max-h-[70vh]" />
+            <img
+              src={preview.dataUrl}
+              alt={preview.caption || t("图片备注")}
+              className="max-h-[70vh]"
+            />
           </div>
         </div>
       )}

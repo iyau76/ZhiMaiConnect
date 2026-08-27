@@ -1,18 +1,43 @@
 import js from "@eslint/js";
-import eslintPluginPrettier from "eslint-plugin-prettier/recommended";
 import globals from "globals";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", ".output", ".vinxi"] },
+  {
+    ignores: [
+      "coverage",
+      "dist",
+      ".output",
+      "playwright-report",
+      "test-results",
+      ".tanstack",
+      ".vinxi",
+      ".wrangler",
+      ".codex/skills",
+    ],
+  },
+  {
+    ...js.configs.recommended,
+    files: ["**/*.{js,cjs,mjs}"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      globals: globals.node,
+    },
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
+    linterOptions: {
+      reportUnusedDisableDirectives: "error",
+    },
     languageOptions: {
-      ecmaVersion: 2020,
-      globals: globals.browser,
+      ecmaVersion: "latest",
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
     },
     plugins: {
       "react-hooks": reactHooks,
@@ -32,9 +57,23 @@ export default tseslint.config(
           ],
         },
       ],
-      "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+      "react-hooks/exhaustive-deps": "error",
+      "react-refresh/only-export-components": [
+        "error",
+        {
+          allowConstantExport: true,
+          allowExportNames: [
+            "badgeVariants",
+            "buttonVariants",
+            "navigationMenuTriggerStyle",
+            "normalizeHost",
+            "toggleVariants",
+            "useFormField",
+            "useSidebar",
+          ],
+        },
+      ],
       "@typescript-eslint/no-unused-vars": "off",
     },
   },
-  eslintPluginPrettier,
 );

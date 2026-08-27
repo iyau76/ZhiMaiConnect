@@ -85,7 +85,6 @@ export function ModelsPanel({
     setEditId(preset.id);
   };
 
-
   const handleTest = async () => {
     setTesting(true);
     try {
@@ -238,7 +237,6 @@ export function ModelsPanel({
           ))}
         </div>
 
-
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           <div className="space-y-1.5">
             <Label className="text-xs">{t("名称")}</Label>
@@ -262,7 +260,9 @@ export function ModelsPanel({
             ) : (
               <Input
                 value={editing.model}
-                placeholder={editing.kind === "ollama" ? "llava / qwen2.5vl" : "gpt-4o-mini / deepseek-chat"}
+                placeholder={
+                  editing.kind === "ollama" ? "llava / qwen2.5vl" : "gpt-4o-mini / deepseek-chat"
+                }
                 onChange={(e) => patch({ model: e.target.value, visionVerified: false })}
               />
             )}
@@ -279,12 +279,28 @@ export function ModelsPanel({
           )}
           {editing.kind === "openai" && (
             <div className="space-y-1.5">
-              <Label className="text-xs">{t("API Key")}</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs">{t("API Key")}</Label>
+                {editing.apiKey && (
+                  <button
+                    type="button"
+                    className="text-[11px] text-destructive underline-offset-2 hover:underline"
+                    onClick={() => patch({ apiKey: "" })}
+                  >
+                    {t("清除密钥")}
+                  </button>
+                )}
+              </div>
               <Input
                 type="password"
                 value={editing.apiKey}
+                autoComplete="off"
+                aria-describedby="api-key-storage-note"
                 onChange={(e) => patch({ apiKey: e.target.value })}
               />
+              <p id="api-key-storage-note" className="text-[11px] text-muted-foreground">
+                {t("密钥仅保存在当前浏览器会话，关闭标签页后清除。")}
+              </p>
             </div>
           )}
         </div>
@@ -367,7 +383,6 @@ export function ModelsPanel({
           </label>
         </div>
 
-
         {frame && (
           <img
             src={frame}
@@ -405,7 +420,6 @@ export function ModelsPanel({
             )}
           </Button>
         </div>
-
       </div>
     </div>
   );

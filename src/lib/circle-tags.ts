@@ -28,7 +28,6 @@ export function tagsOf(person: PersonRecord): string[] {
   return [...new Set([...list, ...autoTagsOf(person)])];
 }
 
-
 /** 主标签：优先取预设顺序里靠前的那个，用于关系网里的落位 */
 export function primaryTagOf(person: PersonRecord): string {
   const list = tagsOf(person);
@@ -44,7 +43,10 @@ export function primaryTagOf(person: PersonRecord): string {
  * 「朋友」这类可变身份不自动识别，只有用户自己加才算。
  */
 const AUTO_RULES: Array<{ tag: (typeof PRESET_TAGS)[number]; keys: RegExp }> = [
-  { tag: "家人", keys: /(爸|父亲|妈|母亲|哥|姐|弟|妹|儿子|女儿|老婆|妻子|老公|丈夫|爷爷|奶奶|外公|外婆|家人)/ },
+  {
+    tag: "家人",
+    keys: /(爸|父亲|妈|母亲|哥|姐|弟|妹|儿子|女儿|老婆|妻子|老公|丈夫|爷爷|奶奶|外公|外婆|家人)/,
+  },
   { tag: "亲戚", keys: /(舅|姑|姨|叔|伯|婶|表[哥姐弟妹兄]|堂[哥姐弟妹兄]|侄|外甥|亲戚)/ },
   { tag: "大学同学", keys: /(大学(同学|室友|同门)|本科同学|研究生同学|同班同学.*大学)/ },
   { tag: "高中同学", keys: /高中(同学|室友)/ },

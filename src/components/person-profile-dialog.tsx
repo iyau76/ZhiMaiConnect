@@ -21,6 +21,7 @@ import {
   type CustomField,
 } from "@/lib/card-template";
 import { PhotoNotes } from "@/components/photo-notes";
+import { SourceBadge } from "@/components/source-badge";
 import { facesDb, type PersonProfile, type PersonRecord, type PhotoNote } from "@/lib/face-db";
 import { askModel } from "@/lib/vision-client";
 import type { ProviderPreset } from "@/lib/vision-providers";
@@ -101,8 +102,7 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
         relation: str(parsed.relation) ?? prev.relation,
         birthday: str(parsed.birthday) ?? prev.birthday,
         circle: str(parsed.circle) ?? prev.circle,
-        closeness:
-          typeof parsed.closeness === "number" ? parsed.closeness : prev.closeness,
+        closeness: typeof parsed.closeness === "number" ? parsed.closeness : prev.closeness,
         likes: toList(parsed.likes) ?? prev.likes,
         dislikes: toList(parsed.dislikes) ?? prev.dislikes,
         gifts: toList(parsed.gifts) ?? prev.gifts,
@@ -142,6 +142,7 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
         profile,
         rawProfileText: raw,
         photos,
+        updatedAt: Date.now(),
       });
       await onSaved();
       toast.success(t("资料已保存"));
@@ -165,7 +166,6 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
     });
   };
 
-
   const field = (key: keyof PersonProfile, label: string) => (
     <div className="space-y-1.5">
       <Label className="text-xs text-muted-foreground">{label}</Label>
@@ -177,10 +177,7 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
     </div>
   );
 
-  const listField = (
-    key: "projects" | "tags" | "likes" | "dislikes" | "gifts",
-    label: string,
-  ) => (
+  const listField = (key: "projects" | "tags" | "likes" | "dislikes" | "gifts", label: string) => (
     <div className="space-y-1.5">
       <Label className="text-xs text-muted-foreground">{label}（逗号分隔）</Label>
       <Input
@@ -232,13 +229,21 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{t("编辑人员资料")}</DialogTitle>
-          <DialogDescription>{t("写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、圈子、喜好、送礼记录等字段。")}</DialogDescription>
+          <DialogDescription>
+            {t(
+              "写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、圈子、喜好、送礼记录等字段。",
+            )}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">{t("姓名")}</Label>
-            <Input value={name} onChange={(event) => setName(event.target.value)} className="h-8 text-xs" />
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className="h-8 text-xs"
+            />
           </div>
 
           <div className="space-y-1.5">
@@ -247,7 +252,9 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
               value={raw}
               onChange={(event) => setRaw(event.target.value)}
               rows={4}
-              placeholder={t("例如：张伟，我大学室友，3 月 12 日生日，爱打篮球、怕辣，现在在杭州做产品经理，去年生日送过他一副耳机。")}
+              placeholder={t(
+                "例如：张伟，我大学室友，3 月 12 日生日，爱打篮球、怕辣，现在在杭州做产品经理，去年生日送过他一副耳机。",
+              )}
               className="text-xs"
             />
             <Button size="sm" variant="outline" onClick={() => void organize()} disabled={busy}>
@@ -294,6 +301,86 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
 
           <div className="space-y-2 rounded-lg border border-border p-2.5">
             <div className="flex items-center justify-between gap-2">
+              <div>
+                <Label className="text-xs text-muted-foreground">{t("身份与昵称历史")}</Label>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {t("保留平台账号、曾用昵称和生效时间，改名不会覆盖旧身份。")}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                onClick={() =>
+                  setProfile((prev) => ({
+                    ...prev,
+                    identities: [
+                      ...(prev.identities ?? []),
+                      { platform: "", alias: "", source: { kind: "manual", at: Date.now() } },
+                    ],
+                  }))
+                }
+              >
+                <Plus className="size-3.5" aria-hidden="true" />
+                {t("添加身份")}
+              </Button>
+            </div>
+            {(profile.identities ?? []).map((identity, index) => (
+              <div
+                key={`${identity.platform}-${identity.alias}-${index}`}
+                className="grid gap-2 rounded-md bg-muted/30 p-2 sm:grid-cols-2"
+              >
+                {(
+                  [
+                    ["platform", t("平台 / 场景")],
+                    ["account", t("账号（可选）")],
+                    ["alias", t("昵称 / 身份名")],
+                    ["validFrom", t("生效时间")],
+                    ["validTo", t("失效时间（可选）")],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="space-y-1 text-[11px] text-muted-foreground">
+                    <span>{label}</span>
+                    <Input
+                      value={identity[key] ?? ""}
+                      onChange={(event) =>
+                        setProfile((prev) => ({
+                          ...prev,
+                          identities: (prev.identities ?? []).map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, [key]: event.target.value } : item,
+                          ),
+                        }))
+                      }
+                      className="h-8 text-xs"
+                    />
+                  </label>
+                ))}
+                <div className="flex items-center justify-between gap-2 sm:col-span-2">
+                  <SourceBadge source={identity.source} />
+                  <button
+                    type="button"
+                    className="text-[11px] text-destructive hover:underline"
+                    onClick={() =>
+                      setProfile((prev) => ({
+                        ...prev,
+                        identities: (prev.identities ?? []).filter(
+                          (_, itemIndex) => itemIndex !== index,
+                        ),
+                      }))
+                    }
+                  >
+                    {t("删除这条身份")}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {(profile.identities ?? []).length === 0 && (
+              <p className="text-[11px] text-muted-foreground">{t("尚未记录历史身份")}</p>
+            )}
+          </div>
+
+          <div className="space-y-2 rounded-lg border border-border p-2.5">
+            <div className="flex items-center justify-between gap-2">
               <Label className="text-xs text-muted-foreground">{t("标签分组")}</Label>
               {allTags.length === 0 && (
                 <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
@@ -329,8 +416,6 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
             </div>
             {listField("tags", t("其它标签"))}
           </div>
-
-
 
           <div className="space-y-2 rounded-lg border border-border p-2.5">
             <p className="text-xs text-muted-foreground">{t("自定义栏位（对所有人物卡生效）")}</p>
@@ -373,7 +458,6 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
             </div>
           </div>
 
-
           <PhotoNotes photos={photos} onChange={setPhotos} />
 
           <div className="space-y-1.5">
@@ -388,7 +472,9 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>{t("取消")}</Button>
+          <Button variant="outline" onClick={onClose}>
+            {t("取消")}
+          </Button>
           <Button onClick={() => void save()} disabled={saving}>
             {saving && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
             {t("保存")}

@@ -77,19 +77,26 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "知脉Connect · 人物档案与关系网梳理" },
-      { name: "description", content: "一段话写完，AI 自动整理成人物档案与关系网；支持摄像头人脸识别、简历截图导入，全程本地存储。" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "知脉Connect · 人物档案与关系网梳理" },
-      { property: "og:description", content: "一段话写完，AI 自动整理成人物档案与关系网；支持摄像头人脸识别、简历截图导入，全程本地存储。" },
+      { title: "知脉 Connect · 人际关系记忆与行动助手" },
+      {
+        name: "description",
+        content:
+          "本地优先、证据可追溯的人际关系记忆与行动助手：低摩擦整理人物、事件与关系，提供可解释的提醒和找人建议。",
+      },
+      { name: "author", content: "知脉 Connect 团队" },
+      { property: "og:title", content: "知脉 Connect · 人际关系记忆与行动助手" },
+      {
+        property: "og:description",
+        content:
+          "低摩擦记录人物与共同经历，通过来源证据、关系图和可解释建议，帮助你记住重要的人并采取合适行动。",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
-      { name: "twitter:title", content: "知脉Connect · 人物档案与关系网梳理" },
-      { name: "twitter:description", content: "一段话写完，AI 自动整理成人物档案与关系网；支持摄像头人脸识别、简历截图导入，全程本地存储。" },
-
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/ad48f06f-d39f-4550-bb9b-cf595ceb9efd/id-preview-f4fdd7b7--b8121f02-5be1-4897-b32f-27c518794295.lovable.app-1785459671665.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/ad48f06f-d39f-4550-bb9b-cf595ceb9efd/id-preview-f4fdd7b7--b8121f02-5be1-4897-b32f-27c518794295.lovable.app-1785459671665.png" },
+      { name: "twitter:title", content: "知脉 Connect · 人际关系记忆与行动助手" },
+      {
+        name: "twitter:description",
+        content: "本地优先记录关系记忆，用证据和可解释推荐帮助你找到合适的人。",
+      },
     ],
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -104,7 +111,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { rel: "icon", type: "image/png", href: "/favicon.png" },
     ],
-
   }),
   shellComponent: RootShell,
   component: RootComponent,
@@ -114,7 +120,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="zh-CN" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>

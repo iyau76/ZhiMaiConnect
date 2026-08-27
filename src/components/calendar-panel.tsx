@@ -26,7 +26,8 @@ import {
   touchesMonth,
   type FuzzyParse,
 } from "@/lib/fuzzy-date";
-import { FESTIVALS, birthdayMd, pad, todayStr } from "@/lib/personal";
+import { t } from "@/lib/i18n";
+import { birthdayMd, festivalsForYear, pad, todayStr } from "@/lib/personal";
 import { cn } from "@/lib/utils";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
@@ -38,7 +39,6 @@ const PRECISION_TABS: Record<string, string> = {
 };
 
 export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
-
   const now = new Date();
   const [view, setView] = useState<"month" | "timeline">("month");
   const [year, setYear] = useState(now.getFullYear());
@@ -53,10 +53,9 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
   const [fuzzyText, setFuzzyText] = useState("");
   const [fuzzyHint, setFuzzyHint] = useState("");
   const [title, setTitle] = useState("");
-  
+
   const [withIds, setWithIds] = useState<string[]>([]);
   const [photos, setPhotos] = useState<PhotoNote[]>([]);
-
 
   const load = useCallback(async () => {
     const [p, e] = await Promise.all([facesDb.listPersons(), facesDb.listLifeEvents()]);
@@ -125,7 +124,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
   const marksFor = (date: string) => {
     const md = date.slice(5);
     const birthdays = persons.filter((person) => birthdayMd(person.profile?.birthday) === md);
-    const festival = FESTIVALS.find((item) => item.md === md);
+    const festival = festivalsForYear(Number(date.slice(0, 4))).find((item) => item.md === md);
     return { birthdays, festival };
   };
 
@@ -194,9 +193,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
     setFuzzyText("");
     setFuzzyHint("");
     await load();
-
   };
-
 
   const remove = async (id: string) => {
     await facesDb.deleteLifeEvent(id);
@@ -204,7 +201,9 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
   };
 
   const names = (ids?: string[]) =>
-    (ids ?? []).map((id) => persons.find((person) => person.id === id)?.name ?? "已删除").join("、");
+    (ids ?? [])
+      .map((id) => persons.find((person) => person.id === id)?.name ?? "已删除")
+      .join("、");
 
   const dayEvents = byDate.get(selected) ?? [];
   const dayMarks = marksFor(selected);
@@ -251,7 +250,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
       <button
         type="button"
         onClick={() => void remove(event.id)}
-        aria-label="删除"
+        aria-label={t("删除")}
         className="text-muted-foreground transition-colors hover:text-destructive"
       >
         <Trash2 className="size-3.5" aria-hidden="true" />
@@ -287,7 +286,12 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
               {year} 年 {month + 1} 月
             </h2>
             <div className="flex gap-1.5">
-              <Button size="icon" variant="outline" onClick={() => shift(-1)} aria-label="上个月">
+              <Button
+                size="icon"
+                variant="outline"
+                onClick={() => shift(-1)}
+                aria-label={t("上个月")}
+              >
                 <ChevronLeft className="size-4" aria-hidden="true" />
               </Button>
               <Button
@@ -302,7 +306,12 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
               >
                 今天
               </Button>
-              <Button size="icon" variant="outline" onClick={() => shift(1)} aria-label="下个月">
+              <Button
+                size="icon"
+                variant="outline"
+                onClick={() => shift(1)}
+                aria-label={t("下个月")}
+              >
                 <ChevronRight className="size-4" aria-hidden="true" />
               </Button>
             </div>
@@ -347,16 +356,24 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
             })}
           </div>
           <p className="mt-3 text-[11px] text-muted-foreground">
-            <i className="mr-1 inline-block size-1.5 rounded-full bg-primary align-middle" />生日
-            <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-amber-400 align-middle" />节日
-            <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-foreground align-middle" />记清了的事
-            <span className="ml-3 inline-block rounded bg-primary/10 px-1 align-middle">底色</span> 一段时间里的事
+            <i className="mr-1 inline-block size-1.5 rounded-full bg-primary align-middle" />
+            生日
+            <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-amber-400 align-middle" />
+            节日
+            <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-foreground align-middle" />
+            记清了的事
+            <span className="ml-3 inline-block rounded bg-primary/10 px-1 align-middle">
+              底色
+            </span>{" "}
+            一段时间里的事
           </p>
 
           {fuzzyThisMonth.length > 0 && (
             <div className="mt-4 border-t border-border pt-3">
               <p className="text-xs text-muted-foreground">这个月前后，记不清具体哪天的：</p>
-              <ul className="mt-2 space-y-1.5">{fuzzyThisMonth.map((event) => renderEvent(event, true))}</ul>
+              <ul className="mt-2 space-y-1.5">
+                {fuzzyThisMonth.map((event) => renderEvent(event, true))}
+              </ul>
             </div>
           )}
         </section>
@@ -408,7 +425,11 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
 
         <div className="mt-3">
           {precision === "day" ? (
-            <Input type="date" value={selected} onChange={(event) => setSelected(event.target.value)} />
+            <Input
+              type="date"
+              value={selected}
+              onChange={(event) => setSelected(event.target.value)}
+            />
           ) : (
             <div className="space-y-1.5">
               <Input
@@ -422,7 +443,6 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
             </div>
           )}
         </div>
-
 
         {precision === "day" && (dayMarks.birthdays.length > 0 || dayMarks.festival) && (
           <p className="mt-2 text-xs text-primary">
@@ -465,7 +485,9 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
                     }
                     className={cn(
                       "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
-                      on ? "border-primary bg-primary/10 text-foreground" : "border-border text-muted-foreground",
+                      on
+                        ? "border-primary bg-primary/10 text-foreground"
+                        : "border-border text-muted-foreground",
                     )}
                   >
                     {person.name}
@@ -479,7 +501,6 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
               <Plus className="size-4" aria-hidden="true" />
               {saving ? "整理中…" : "记下来"}
             </Button>
-
           </div>
         </div>
       </section>

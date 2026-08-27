@@ -1,39 +1,43 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import {
+  API_LIMITS,
+  SafeApiError,
+  apiErrorResponse,
+  apiJson,
+  appendApiPath,
+  consumeUpstreamError,
+  enforceRateLimit,
+  noStoreHeaders,
+  parseJsonRequest,
+  readResponseTextLimited,
+  requireApiSession,
+  startUpstreamRequest,
+  validateCustomBaseUrl,
+  visionBodySchema,
+  type UpstreamRequest,
+  type VisionBody,
+} from "../../lib/api-security.server";
+
 const LOVABLE_BASE = "https://ai.gateway.lovable.dev/v1";
 
-type Turn = { role: "user" | "assistant"; text: string; image?: string };
+const SYSTEM_PROMPT = [
+  "你是「知脉 Connect」的内置助手：一个本地优先、证据可追溯的人际关系记忆与行动助手。",
+  "你帮助用户整理其主动提供的人物档案、关系、互动记录、重要日期和行动事项，并生成可核对、可编辑的建议或草稿。",
+  "事实规则：只依据本次对话中明确提供的文字、图片和资料回答；不得编造人物、关系、经历、联系方式或已完成的动作。资料不足时明确说“不确定”并指出需要补充什么。",
+  "证据规则：涉及具体人物或关系时，尽量标明信息来源、发生或记录时间和置信度；严格区分已知事实、合理推断和行动建议。没有来源或时间时，不得虚构引用，应明确标注缺失。",
+  "隐私规则：产品的档案默认保存在用户浏览器本地；只有用户主动调用云模型时，本次请求中选定的内容才会发送给相应服务商。不要声称所有处理都在本地完成。",
+  "外部行动规则：你只能生成消息、提醒或沟通方案的草稿，不得声称已经发送、发布、联系或修改任何外部系统。",
+  "平台边界：不得宣称能够读取、搜索或接入个人微信、QQ、小红书等封闭平台，也不得假装看到了用户未提供的聊天记录或账号数据。",
+  "图片规则：只描述图片中可直接观察或读取的信息；不要凭外貌猜测身份、关系、健康、民族、政治倾向等敏感属性。若要关联到已有档案，必须让用户确认。",
+  "表达规则：默认使用简洁、自然的中文；给出建议时说明依据、风险和下一步，始终让用户保留最终决定权。",
+].join("\n");
 
-interface Body {
-  action?: "chat" | "test" | "audit";
-  kind?: "lovable" | "openai";
-  baseUrl?: string;
-  apiKey?: string;
-  model?: string;
-  prompt?: string;
-  image?: string | null;
-  history?: Turn[];
-}
+type Message = { role: "system" | "user" | "assistant"; content: unknown };
 
-function buildMessages(history: Turn[], prompt: string, image?: string | null) {
-  const messages: Array<{ role: string; content: unknown }> = [
-    {
-      role: "system",
-      content: [
-        "你是「知脉 Connect」的内置 AI 助手。知脉 Connect 是一套本地优先的人物识别与关系网梳理工具，面向政企与组织人脉管理场景。",
-        "产品能力包括：",
-        "1）多端输入：ESP32-S3 摄像头抓拍、本机摄像头/图片粘贴上传、PDF/Word/截图等文档解析、自由文本录入；",
-        "2）人脸识别：浏览器本地运行 BlazeFace 检测 + 128 维人脸特征向量比对，支持合照多张人脸同时识别与批量入库，人脸数据只存在本机 IndexedDB；",
-        "3）AI 整理：把一段自然语言、简历或文档自动抽取为人物档案（姓名、部门、职位、负责项目等）与人物之间的关系，并生成可实时编辑的关系草图；",
-        "4）关系网可视化：按部门聚类的可拖拽关系图，单向/双向关系箭头，部门可改名、写说明、增删成员；",
-        "5）模型可换：可用平台内置模型，也可接入任意 OpenAI 兼容接口，并能审查该模型是否真的支持读图。",
-        "回答规则：用简洁中文；被问「你能干什么」时按上面的产品能力介绍自己，不要自称摄像头视觉助手；若用户给了画面或图片，就结合画面回答，可指出画面中的人、可识别的信息，以及可以怎样存入人物库或补充关系。",
-      ].join("\n"),
-    },
-  ];
-  for (const turn of history.slice(-8)) {
-    messages.push({ role: turn.role, content: turn.text });
-  }
+function buildMessages(history: VisionBody["history"], prompt: string, image?: string | null) {
+  const messages: Message[] = [{ role: "system", content: SYSTEM_PROMPT }];
+  for (const turn of history) messages.push({ role: turn.role, content: turn.text });
   if (image) {
     messages.push({
       role: "user",
@@ -48,16 +52,22 @@ function buildMessages(history: Turn[], prompt: string, image?: string | null) {
   return messages;
 }
 
-function resolveTarget(body: Body) {
+function resolveTarget(body: VisionBody) {
   if (body.kind === "openai") {
-    const base = (body.baseUrl || "").replace(/\/+$/, "");
-    if (!base) throw new Error("缺少接口地址（Base URL）");
+    const baseUrl = validateCustomBaseUrl(body.baseUrl ?? "");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (body.apiKey) headers.Authorization = `Bearer ${body.apiKey}`;
-    return { url: `${base}/chat/completions`, headers };
+    return { url: appendApiPath(baseUrl, "chat/completions"), headers };
   }
+
   const key = process.env.LOVABLE_API_KEY;
-  if (!key) throw new Error("服务端未配置 LOVABLE_API_KEY");
+  if (!key) {
+    throw new SafeApiError(
+      503,
+      "SERVER_MISCONFIGURED",
+      "内置 AI 尚未配置；请改用已获许可的自定义接口",
+    );
+  }
   return {
     url: `${LOVABLE_BASE}/chat/completions`,
     headers: {
@@ -68,122 +78,164 @@ function resolveTarget(body: Body) {
   };
 }
 
-/** 把上游 SSE 转成纯文本流，前端直接按 chunk 追加即可 */
-function sseToText(upstream: ReadableStream<Uint8Array>) {
+/** Convert the upstream SSE stream to the plain-text stream consumed by the UI. */
+function sseToText(upstream: ReadableStream<Uint8Array>, request: UpstreamRequest) {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
+
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = upstream.getReader();
       try {
+        // The initial deadline covers connection/headers. After that it becomes an
+        // inactivity deadline refreshed by every upstream byte, including reasoning
+        // chunks that are intentionally not forwarded to the UI.
+        request.refreshTimeout();
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          if (value.byteLength > 0) request.refreshTimeout();
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
           for (const raw of lines) {
             const line = raw.trim();
             if (!line.startsWith("data:")) continue;
-            const payload = line.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
+            const content = line.slice(5).trim();
+            if (!content) continue;
+            if (content === "[DONE]") {
+              try {
+                await reader.cancel();
+              } catch {
+                // The completion marker is authoritative even if cancellation fails.
+              }
+              controller.close();
+              return;
+            }
             try {
-              const json = JSON.parse(payload);
-              const delta = json?.choices?.[0]?.delta?.content;
-              if (typeof delta === "string" && delta)
-                controller.enqueue(encoder.encode(delta));
+              const payload = JSON.parse(content) as {
+                choices?: Array<{ delta?: { content?: unknown } }>;
+              };
+              const delta = payload.choices?.[0]?.delta?.content;
+              if (typeof delta === "string" && delta) controller.enqueue(encoder.encode(delta));
             } catch {
-              /* 忽略无法解析的心跳行 */
+              // Ignore non-data heartbeat lines without logging their content.
             }
           }
         }
         controller.close();
-      } catch (error) {
-        controller.error(error);
+      } catch {
+        controller.error(
+          new Error(
+            request.didTimeOut()
+              ? "上游 AI 流式响应连续 90 秒没有收到数据，已中止连接"
+              : "上游 AI 响应流中断",
+          ),
+        );
+      } finally {
+        reader.releaseLock();
+        request.dispose();
       }
     },
+    cancel() {
+      request.abort();
+      request.dispose();
+    },
   });
+}
+
+export async function handleVisionPost(request: Request): Promise<Response> {
+  let upstreamRequest: UpstreamRequest | undefined;
+  try {
+    enforceRateLimit(request, "vision", 30);
+    requireApiSession(request);
+    const body = await parseJsonRequest(request, visionBodySchema, API_LIMITS.visionRequestBytes);
+    const target = resolveTarget(body);
+    const oneShot = body.action === "test" || body.action === "audit";
+    const prompt = body.action === "test" ? "回复两个字：连通" : (body.prompt ?? "");
+    const payload = {
+      model: body.model,
+      messages: buildMessages(
+        oneShot ? [] : body.history,
+        prompt,
+        body.action === "test" ? null : body.image,
+      ),
+      stream: !oneShot,
+      ...(body.model.startsWith("openai/gpt-5.6") ? { reasoning_effort: "none" } : {}),
+    };
+
+    upstreamRequest = await startUpstreamRequest(
+      target.url,
+      {
+        method: "POST",
+        headers: target.headers,
+        body: JSON.stringify(payload),
+      },
+      {
+        timeoutMs: API_LIMITS.visionTimeoutMs,
+        timeoutMessage: "上游 AI 连接或首包响应超时",
+        requestSignal: request.signal,
+      },
+    );
+
+    const upstream = upstreamRequest.response;
+    if (!upstream.ok) {
+      const response = await consumeUpstreamError(upstream, "vision");
+      upstreamRequest.dispose();
+      upstreamRequest = undefined;
+      return response;
+    }
+
+    if (oneShot) {
+      let raw: string;
+      try {
+        raw = await readResponseTextLimited(upstream, API_LIMITS.upstreamJsonBytes);
+      } catch {
+        if (upstreamRequest.didTimeOut()) {
+          throw new SafeApiError(504, "UPSTREAM_TIMEOUT", "上游 AI 服务响应超时");
+        }
+        throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 返回内容过大或无法读取");
+      } finally {
+        upstreamRequest.dispose();
+        upstreamRequest = undefined;
+      }
+
+      let reply = "";
+      try {
+        const payload = JSON.parse(raw) as {
+          choices?: Array<{ message?: { content?: unknown } }>;
+        };
+        const content = payload.choices?.[0]?.message?.content;
+        if (typeof content === "string") reply = content;
+      } catch {
+        throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 返回了无效响应");
+      }
+      return apiJson({ ok: true, reply });
+    }
+
+    if (!upstream.body) {
+      upstreamRequest.dispose();
+      upstreamRequest = undefined;
+      throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 没有返回内容");
+    }
+
+    const stream = sseToText(upstream.body, upstreamRequest);
+    upstreamRequest = undefined;
+    return new Response(stream, {
+      headers: noStoreHeaders({ "Content-Type": "text/plain; charset=utf-8" }),
+    });
+  } catch (error) {
+    upstreamRequest?.dispose();
+    if (!(error instanceof SafeApiError)) console.error("[vision] unexpected internal failure");
+    return apiErrorResponse(error);
+  }
 }
 
 export const Route = createFileRoute("/api/vision")({
   server: {
     handlers: {
-      POST: async ({ request }) => {
-        let body: Body;
-        try {
-          body = (await request.json()) as Body;
-        } catch {
-          return Response.json({ error: "请求体不是合法 JSON" }, { status: 400 });
-        }
-
-        let target: { url: string; headers: Record<string, string> };
-        try {
-          target = resolveTarget(body);
-        } catch (error) {
-          return Response.json({ error: (error as Error).message }, { status: 400 });
-        }
-
-        const model = body.model?.trim();
-        if (!model) return Response.json({ error: "缺少模型名称" }, { status: 400 });
-
-        const isTest = body.action === "test";
-        const isAudit = body.action === "audit";
-        const oneShot = isTest || isAudit;
-        const prompt = isTest ? "回复两个字：连通" : (body.prompt?.trim() ?? "");
-        if (!prompt) return Response.json({ error: "请输入问题" }, { status: 400 });
-
-        const payload = {
-          model,
-          messages: buildMessages(oneShot ? [] : (body.history ?? []), prompt, isTest ? null : body.image),
-          stream: !oneShot,
-          ...(model.startsWith("openai/gpt-5.6") ? { reasoning_effort: "none" } : {}),
-        };
-
-
-        let upstream: Response;
-        try {
-          upstream = await fetch(target.url, {
-            method: "POST",
-            headers: target.headers,
-            body: JSON.stringify(payload),
-          });
-        } catch (error) {
-          return Response.json(
-            { error: `无法连接接口地址：${(error as Error).message}` },
-            { status: 502 },
-          );
-        }
-
-        if (!upstream.ok) {
-          const text = await upstream.text();
-          console.error(`vision upstream ${upstream.status}: ${text}`);
-          const message =
-            upstream.status === 429
-              ? "请求过于频繁，请稍后再试"
-              : upstream.status === 402
-                ? "AI 额度已用完，请在 Settings → Plans & credits 充值"
-                : `接口返回 ${upstream.status}：${text.slice(0, 400)}`;
-          return Response.json({ error: message }, { status: upstream.status });
-        }
-
-        if (oneShot) {
-          const json = (await upstream.json()) as {
-            choices?: Array<{ message?: { content?: string } }>;
-          };
-          return Response.json({ ok: true, reply: json?.choices?.[0]?.message?.content ?? "" });
-        }
-
-
-        if (!upstream.body) return Response.json({ error: "接口没有返回内容" }, { status: 502 });
-
-        return new Response(sseToText(upstream.body), {
-          headers: {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Cache-Control": "no-cache",
-          },
-        });
-      },
+      POST: ({ request }) => handleVisionPost(request),
     },
   },
 });

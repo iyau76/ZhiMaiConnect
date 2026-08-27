@@ -154,9 +154,17 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="flex items-baseline gap-2.5">
           <span className="font-display text-xl leading-none tracking-tight">{t("探案计划")}</span>
-          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Plan</span>
+          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
+            Plan
+          </span>
         </h2>
-        <Button size="sm" variant="outline" className="rounded-full px-4" disabled={busy} onClick={() => void generate()}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="rounded-full px-4"
+          disabled={busy}
+          onClick={() => void generate()}
+        >
           {busy ? (
             <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
           ) : (
@@ -177,7 +185,12 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
           onChange={(event) => rememberOfficer(event.target.value)}
           placeholder={t("负责人 / 办案人")}
         />
-        <Input type="date" value={due} onChange={(event) => setDue(event.target.value)} className="w-auto" />
+        <Input
+          type="date"
+          value={due}
+          onChange={(event) => setDue(event.target.value)}
+          className="w-auto"
+        />
       </div>
       <Textarea
         value={detail}
@@ -218,7 +231,10 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
                 <p className="py-4 text-center text-[11px] text-muted-foreground">—</p>
               ) : (
                 list.map((task) => (
-                  <div key={task.id} className="space-y-1.5 rounded-lg border border-border bg-background/50 p-2.5">
+                  <div
+                    key={task.id}
+                    className="space-y-1.5 rounded-lg border border-border bg-background/50 p-2.5"
+                  >
                     <div className="flex items-start justify-between gap-2">
                       <p className="min-w-0 text-[13px] font-medium leading-snug">{task.title}</p>
                       <button
@@ -236,7 +252,9 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
                       </p>
                     )}
                     <div className="flex flex-wrap items-center gap-1">
-                      <span className={`rounded-full border px-2 py-0.5 text-[10px] ${PRIORITY[task.priority].cls}`}>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] ${PRIORITY[task.priority].cls}`}
+                      >
                         {en ? PRIORITY[task.priority].en : PRIORITY[task.priority].zh}
                       </span>
                       {task.due && (
@@ -274,7 +292,9 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
       </div>
 
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        {t("计划里的每条行动项都记录了负责人和来源（人工排的还是 AI 排的），AI 排的需要办案人确认后再执行。")}
+        {t(
+          "计划里的每条行动项都记录了负责人和来源（人工排的还是 AI 排的），AI 排的需要办案人确认后再执行。",
+        )}
       </p>
     </section>
   );

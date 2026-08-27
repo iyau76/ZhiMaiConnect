@@ -1,6 +1,8 @@
 /** 录音 + 转写：录音在浏览器完成，音频只发给转写接口，不落盘 */
 
 import { findVariant } from "./dialects";
+import { confirmCloudTransfer } from "./cloud-consent";
+import { apiSessionHeaders } from "./api-session";
 import { assertAudio, supportsAudio, type ProviderPreset } from "./vision-providers";
 
 export function fileToDataUrl(file: Blob) {
@@ -20,7 +22,6 @@ export interface Recorder {
 
 /** 语言 / 方言 id，取值见 src/lib/dialects.ts */
 export type SttLang = string;
-
 
 export async function startRecording(): Promise<Recorder> {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持录音");
@@ -73,9 +74,11 @@ export async function transcribeAudio(
   const variant = findVariant(options.language ?? "auto");
   const hint = [variant.prompt, options.hint].filter(Boolean).join(" ").slice(0, 600) || undefined;
 
+  confirmCloudTransfer(useCustom ? preset : undefined, ["音频"]);
+
   const response = await fetch("/api/transcribe", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       audio: dataUrl,
       mime,
@@ -92,5 +95,3 @@ export async function transcribeAudio(
   if (!response.ok) throw new Error(json.error ?? `转写失败（${response.status}）`);
   return (json.text ?? "").trim();
 }
-
-

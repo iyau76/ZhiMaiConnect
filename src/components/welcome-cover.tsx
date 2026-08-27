@@ -3,7 +3,7 @@
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import logoUrl from "@/assets/logo-with-text.png";
+import logoUrl from "@/assets/logo-mark-384.png";
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 
@@ -52,9 +52,7 @@ export function WelcomeCover() {
             className="mb-5 size-48 opacity-95 transition-opacity duration-500 hover:opacity-100"
           />
 
-          <p className="text-[11px] uppercase tracking-[0.28em] text-muted-foreground">
-            Welcome
-          </p>
+          <p className="text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Welcome</p>
           <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
             {t("记住身边的人：生日、喜好、送过什么礼，还有该联系谁。")}
           </p>

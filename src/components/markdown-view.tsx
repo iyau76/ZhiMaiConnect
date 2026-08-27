@@ -31,7 +31,9 @@ export function MarkdownView({ text, className }: { text: string; className?: st
             <ul className="ml-1 space-y-1.5 border-l border-border pl-4">{children}</ul>
           ),
           ol: ({ children }) => (
-            <ol className="ml-4 list-decimal space-y-1.5 marker:text-muted-foreground">{children}</ol>
+            <ol className="ml-4 list-decimal space-y-1.5 marker:text-muted-foreground">
+              {children}
+            </ol>
           ),
           li: ({ children }) => <li className="text-muted-foreground">{children}</li>,
           strong: ({ children }) => (

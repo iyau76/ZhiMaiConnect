@@ -1,7 +1,13 @@
 import { Bot, Camera, FileUp, Globe, Mic, PenLine, Waves } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { formatSource, isInferred, sourceLabel, type Provenance, type SourceKind } from "@/lib/provenance";
+import {
+  formatSource,
+  isInferred,
+  sourceLabel,
+  type Provenance,
+  type SourceKind,
+} from "@/lib/provenance";
 import { getLang } from "@/lib/i18n";
 
 const ICONS: Record<SourceKind, typeof PenLine> = {

@@ -167,7 +167,9 @@ export function TimelinePanel() {
       <header className="flex items-center justify-between gap-3">
         <h2 className="flex items-baseline gap-2.5">
           <span className="font-display text-xl leading-none tracking-tight">{t("时间线")}</span>
-          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Timeline</span>
+          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
+            Timeline
+          </span>
         </h2>
       </header>
 
@@ -180,7 +182,9 @@ export function TimelinePanel() {
         {/* 案子本身发生了什么 */}
         <TabsContent value="case" className="space-y-4 pt-4">
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            {t("案件时间线记录案子里发生过的事：几点谁在哪、监控拍到什么、法医推断的时间区间。和录入材料的先后无关，需要手工或从材料里补。")}
+            {t(
+              "案件时间线记录案子里发生过的事：几点谁在哪、监控拍到什么、法医推断的时间区间。和录入材料的先后无关，需要手工或从材料里补。",
+            )}
           </p>
 
           <div className="space-y-2 rounded-xl border border-dashed border-border p-3">
@@ -341,12 +345,16 @@ export function TimelinePanel() {
           </div>
 
           {groups.length === 0 ? (
-            <p className="py-12 text-center text-xs text-muted-foreground">{t("这个条件下还没有记录")}</p>
+            <p className="py-12 text-center text-xs text-muted-foreground">
+              {t("这个条件下还没有记录")}
+            </p>
           ) : (
             <div className="space-y-6">
               {groups.map(([day, list]) => (
                 <div key={day}>
-                  <p className="mb-2 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">{day}</p>
+                  <p className="mb-2 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                    {day}
+                  </p>
                   <ol className="relative space-y-3 border-l border-border pl-5">
                     {list.map((item) => {
                       const Icon = ICONS[item.kind];
@@ -360,7 +368,8 @@ export function TimelinePanel() {
                               <p className="flex flex-wrap items-baseline gap-2">
                                 <span className="truncate text-sm font-medium">{item.title}</span>
                                 <span className="text-[10px] text-muted-foreground">
-                                  {new Date(item.at).toLocaleTimeString()} · {t(KIND_LABEL[item.kind])}
+                                  {new Date(item.at).toLocaleTimeString()} ·{" "}
+                                  {t(KIND_LABEL[item.kind])}
                                 </span>
                               </p>
                               {item.detail && (
@@ -394,7 +403,9 @@ export function TimelinePanel() {
           )}
 
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            {t("办案时间线按材料进入系统的时间排列，用来回溯资料是怎么来的，每条都标注了信息来源。")}
+            {t(
+              "办案时间线按材料进入系统的时间排列，用来回溯资料是怎么来的，每条都标注了信息来源。",
+            )}
           </p>
         </TabsContent>
       </Tabs>

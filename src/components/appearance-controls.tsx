@@ -14,6 +14,16 @@ export function LanguageToggle() {
           key={code}
           type="button"
           onClick={() => setLang(code)}
+          aria-label={
+            getLang() === "zh"
+              ? code === "zh"
+                ? "切换为中文"
+                : "切换为英文"
+              : code === "zh"
+                ? "Switch to Chinese"
+                : "Switch to English"
+          }
+          aria-pressed={getLang() === code}
           className={cn(
             "rounded-full px-2.5 py-1 text-[11px] transition-colors",
             getLang() === code

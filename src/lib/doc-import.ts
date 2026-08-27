@@ -8,7 +8,26 @@ export interface ImportedDoc {
   text: string;
 }
 
-const TEXT_EXT = [".txt", ".md", ".markdown", ".csv", ".json", ".log", ".vtt", ".srt", ".html", ".htm"];
+export const IMPORT_LIMITS = {
+  maxFiles: 4,
+  maxFileBytes: 12 * 1024 * 1024,
+  maxPdfPages: 8,
+  maxExtractedCharacters: 8_000,
+  maxImageEdge: 1_600,
+} as const;
+
+const TEXT_EXT = [
+  ".txt",
+  ".md",
+  ".markdown",
+  ".csv",
+  ".json",
+  ".log",
+  ".vtt",
+  ".srt",
+  ".html",
+  ".htm",
+];
 
 const OCR_PROMPT =
   "这是一份人物资料（简历、名片、登记表或聊天/资料截图）。请把画面里所有文字按原样抄录出来，" +
@@ -24,13 +43,41 @@ function readAsDataUrl(file: Blob) {
   });
 }
 
+async function compressedImageDataUrl(file: File) {
+  const raw = await readAsDataUrl(file);
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("图片解码失败"));
+    element.src = raw;
+  });
+  const scale = Math.min(
+    1,
+    IMPORT_LIMITS.maxImageEdge / Math.max(image.naturalWidth, image.naturalHeight),
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("浏览器无法压缩图片");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
+
 /** 用多模态模型抄录一张图里的文字 */
 async function ocrImage(dataUrl: string, preset: ProviderPreset) {
   assertVision(preset);
   let out = "";
-  await askModel(preset, OCR_PROMPT, dataUrl, [], (chunk) => {
-    out += chunk;
-  }, new AbortController().signal);
+  await askModel(
+    preset,
+    OCR_PROMPT,
+    dataUrl,
+    [],
+    (chunk) => {
+      out += chunk;
+    },
+    new AbortController().signal,
+  );
   return out.trim();
 }
 
@@ -45,13 +92,13 @@ async function readPdf(file: File, preset: ProviderPreset, onStep?: (text: strin
   const pdfjs = await loadPdfjs();
   const data = new Uint8Array(await file.arrayBuffer());
   const doc = await pdfjs.getDocument({ data }).promise;
-  const pages = Math.min(doc.numPages, 8);
+  const pages = Math.min(doc.numPages, IMPORT_LIMITS.maxPdfPages);
   const parts: string[] = [];
   for (let i = 1; i <= pages; i += 1) {
     onStep?.(`正在读取 ${file.name} 第 ${i}/${pages} 页`);
-    // eslint-disable-next-line no-await-in-loop
+
     const page = await doc.getPage(i);
-    // eslint-disable-next-line no-await-in-loop
+
     const content = await page.getTextContent();
     const text = content.items
       .map((item) => ("str" in item ? item.str : ""))
@@ -69,10 +116,10 @@ async function readPdf(file: File, preset: ProviderPreset, onStep?: (text: strin
     canvas.height = Math.round(viewport.height);
     const ctx = canvas.getContext("2d");
     if (!ctx) continue;
-    // eslint-disable-next-line no-await-in-loop
+
     await page.render({ canvas, canvasContext: ctx, viewport } as never).promise;
     onStep?.(`${file.name} 第 ${i} 页是扫描件，正在用 AI 抄录`);
-    // eslint-disable-next-line no-await-in-loop
+
     parts.push(await ocrImage(canvas.toDataURL("image/jpeg", 0.85), preset));
   }
   return parts.join("\n");
@@ -88,6 +135,9 @@ export async function importFiles(
   onStep?: (text: string) => void,
   onProgress?: (done: number, total: number) => void,
 ): Promise<ImportedDoc[]> {
+  if (files.length > IMPORT_LIMITS.maxFiles) {
+    throw new Error(`一次最多导入 ${IMPORT_LIMITS.maxFiles} 个文件`);
+  }
   const out: ImportedDoc[] = [];
   let done = 0;
   onProgress?.(0, files.length);
@@ -95,27 +145,40 @@ export async function importFiles(
     const lower = file.name.toLowerCase();
     onStep?.(`正在读取 ${file.name}`);
     try {
+      if (file.size > IMPORT_LIMITS.maxFileBytes) {
+        throw new Error(`单个文件不能超过 ${IMPORT_LIMITS.maxFileBytes / 1024 / 1024} MB`);
+      }
       if (file.type.startsWith("image/")) {
-        // eslint-disable-next-line no-await-in-loop
-        const dataUrl = await readAsDataUrl(file);
+        const dataUrl = await compressedImageDataUrl(file);
         onStep?.(`正在用 AI 抄录 ${file.name}`);
-        // eslint-disable-next-line no-await-in-loop
-        out.push({ name: file.name, text: await ocrImage(dataUrl, preset) });
+
+        out.push({
+          name: file.name,
+          text: (await ocrImage(dataUrl, preset)).slice(0, IMPORT_LIMITS.maxExtractedCharacters),
+        });
       } else if (lower.endsWith(".pdf")) {
-        // eslint-disable-next-line no-await-in-loop
-        out.push({ name: file.name, text: await readPdf(file, preset, onStep) });
+        out.push({
+          name: file.name,
+          text: (await readPdf(file, preset, onStep)).slice(
+            0,
+            IMPORT_LIMITS.maxExtractedCharacters,
+          ),
+        });
       } else if (lower.endsWith(".docx")) {
-        // eslint-disable-next-line no-await-in-loop
         const mammoth = (await import("mammoth")) as unknown as {
           extractRawText: (o: unknown) => Promise<{ value: string }>;
         };
-        // eslint-disable-next-line no-await-in-loop
-        const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-        out.push({ name: file.name, text: result.value.trim() });
 
+        const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+        out.push({
+          name: file.name,
+          text: result.value.trim().slice(0, IMPORT_LIMITS.maxExtractedCharacters),
+        });
       } else if (TEXT_EXT.some((ext) => lower.endsWith(ext)) || file.type.startsWith("text/")) {
-        // eslint-disable-next-line no-await-in-loop
-        out.push({ name: file.name, text: (await file.text()).trim() });
+        out.push({
+          name: file.name,
+          text: (await file.text()).trim().slice(0, IMPORT_LIMITS.maxExtractedCharacters),
+        });
       } else {
         throw new Error("暂不支持这种格式，可以先截图或另存为 PDF/Word/纯文本");
       }

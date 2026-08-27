@@ -15,12 +15,20 @@ export type ThemeId = (typeof THEMES)[number]["id"];
 
 /** 无障碍配色 / 对比度增强 */
 export const A11Y_MODES = [
-  { id: "none", zh: "关闭", en: "Off", desc: { zh: "使用主题原本的配色", en: "Theme default colours" } },
+  {
+    id: "none",
+    zh: "关闭",
+    en: "Off",
+    desc: { zh: "使用主题原本的配色", en: "Theme default colours" },
+  },
   {
     id: "deuter",
     zh: "红绿色弱（红绿色盲）",
     en: "Red-green (deuter/protan)",
-    desc: { zh: "改用蓝 / 橙区分，红绿不再承担信息", en: "Blue / orange coding instead of red-green" },
+    desc: {
+      zh: "改用蓝 / 橙区分，红绿不再承担信息",
+      en: "Blue / orange coding instead of red-green",
+    },
   },
   {
     id: "tritan",

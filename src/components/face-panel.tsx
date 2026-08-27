@@ -1,7 +1,6 @@
 import {
   Database,
   ImagePlus,
-
   Loader2,
   Pencil,
   ScanFace,
@@ -36,7 +35,6 @@ import { askModel, captureFrame } from "@/lib/vision-client";
 import type { ProviderPreset } from "@/lib/vision-providers";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
-
 
 interface FacePanelProps {
   host: string;
@@ -77,7 +75,6 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
 
   const peopleRef = useRef<PersonRecord[]>([]);
   const thresholdRef = useRef(threshold);
-
 
   peopleRef.current = people;
   thresholdRef.current = threshold;
@@ -202,7 +199,9 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
   /** 只在下方人脸上传框内粘贴才识别，避免抢走其它模块的图片 */
   const onZonePaste = useCallback(
     (event: React.ClipboardEvent) => {
-      const file = [...(event.clipboardData?.files ?? [])].find((item) => item.type.startsWith("image/"));
+      const file = [...(event.clipboardData?.files ?? [])].find((item) =>
+        item.type.startsWith("image/"),
+      );
       if (!file) return;
       event.preventDefault();
       void pickPhoto(file);
@@ -210,14 +209,11 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
     [pickPhoto],
   );
 
-
-
   useEffect(() => {
     if (!auto) return;
     const timer = window.setInterval(() => void scan(), 1500);
     return () => window.clearInterval(timer);
   }, [auto, scan]);
-
 
   const enroll = async (index: number) => {
     const face = faces[index];
@@ -282,8 +278,6 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
     );
     toast.success(`${t("已入库")} ${pending.length} ${t("人")}`);
   };
-
-
 
   const removePerson = async (person: PersonRecord) => {
     await facesDb.deletePerson(person.id);
@@ -389,7 +383,9 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
     setEditingId(null);
   };
 
-  {t("/** 按当前人员库，把还没标注（未知）的到访记录自动对应上人名 */")}
+  {
+    t("/** 按当前人员库，把还没标注（未知）的到访记录自动对应上人名 */");
+  }
   const rematch = async () => {
     if (!people.length) {
       toast.error(t("人员库还是空的，先录入至少一个人"));
@@ -406,7 +402,6 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
       for (const item of targets) {
         const best = findMatch(item.descriptor!, people, threshold);
         if (best && best.id) {
-          // eslint-disable-next-line no-await-in-loop
           await facesDb.putSighting({
             ...item,
             personId: best.id,
@@ -427,13 +422,13 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
     }
   };
 
-
   return (
-
     <section className="flex flex-col gap-5 rounded-2xl border border-border bg-card/60 p-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 font-display text-xl leading-none tracking-tight text-foreground">
-          <ScanFace className="size-4 text-primary" aria-hidden="true" />{t("人脸识别与人员库")}</h2>
+          <ScanFace className="size-4 text-primary" aria-hidden="true" />
+          {t("人脸识别与人员库")}
+        </h2>
         <span className="text-xs text-muted-foreground">
           {engineState === "loading"
             ? engineNote || t("加载模型中…")
@@ -448,8 +443,12 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
       <Tabs defaultValue="scan">
         <TabsList>
           <TabsTrigger value="scan">{t("实时识别")}</TabsTrigger>
-          <TabsTrigger value="people">{t("人员库")} ({people.length})</TabsTrigger>
-          <TabsTrigger value="log">{t("到访记录")} ({sightings.length})</TabsTrigger>
+          <TabsTrigger value="people">
+            {t("人员库")} ({people.length})
+          </TabsTrigger>
+          <TabsTrigger value="log">
+            {t("到访记录")} ({sightings.length})
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="scan" className="space-y-4 pt-4">
@@ -480,15 +479,13 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
             >
               <ImagePlus className="size-4 text-primary" aria-hidden="true" />
               <span>{t("上传合照识别")}</span>
-
             </div>
-
-
-
 
             <div className="flex items-center gap-2">
               <Switch id="auto-scan" checked={auto} onCheckedChange={setAuto} />
-              <Label htmlFor="auto-scan" className="text-xs text-muted-foreground">{t("每 1.5 秒自动识别")}</Label>
+              <Label htmlFor="auto-scan" className="text-xs text-muted-foreground">
+                {t("每 1.5 秒自动识别")}
+              </Label>
             </div>
             <div className="flex min-w-48 flex-1 items-center gap-3">
               <Label className="whitespace-nowrap text-xs text-muted-foreground">
@@ -527,9 +524,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                   <span
                     className={cn(
                       "absolute -top-5 left-0 whitespace-nowrap rounded px-1 text-[10px] font-medium",
-                      face.personId
-                        ? "bg-success text-background"
-                        : "bg-warning text-background",
+                      face.personId ? "bg-success text-background" : "bg-warning text-background",
                     )}
                   >
                     {index + 1}. {face.personId ? face.name : t("未知")}
@@ -537,7 +532,6 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                 </button>
               ))}
             </div>
-
           ) : (
             <div
               tabIndex={0}
@@ -545,16 +539,21 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
               onClick={() => photoRef.current?.click()}
               className="cursor-pointer space-y-1 rounded-lg border border-dashed border-border py-10 text-center outline-none focus:border-primary"
             >
-              <p className="text-xs text-muted-foreground">{t("上传一张合照，会框出里面所有人脸并逐个标名字；也可以点「识别当前画面」从摄像头抓一帧。")}</p>
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  "上传一张合照，会框出里面所有人脸并逐个标名字；也可以点「识别当前画面」从摄像头抓一帧。",
+                )}
+              </p>
               <p className="text-xs text-foreground">{t("点一下这个框，再 Ctrl/⌘+V 粘贴图片")}</p>
             </div>
           )}
 
-
           {shot && (
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={() => onUseFrame(shot.frame)}>
-                <Sparkles className="size-3.5" aria-hidden="true" />{t("把这帧发给 AI 提问")}</Button>
+                <Sparkles className="size-3.5" aria-hidden="true" />
+                {t("把这帧发给 AI 提问")}
+              </Button>
             </div>
           )}
 
@@ -568,8 +567,8 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
             <div className="space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground">
-                  {t("共检测到")} {faces.length} {t("张人脸")} ·{" "}
-                  {t("已认出")} {faces.filter((face) => face.personId).length} ·{" "}
+                  {t("共检测到")} {faces.length} {t("张人脸")} · {t("已认出")}{" "}
+                  {faces.filter((face) => face.personId).length} ·{" "}
                   {t("给未知的填上名字，可一次性全部入库")}
                 </p>
                 <Button size="sm" variant="outline" onClick={() => void enrollAll()}>
@@ -580,57 +579,59 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 {faces.map((face, index) => (
-                <div
-                  key={index}
-                  onClick={() => setSelectedFace(index)}
-                  className={cn(
-                    "flex cursor-pointer items-center gap-3 rounded-lg border bg-muted/30 p-2",
-                    selectedFace === index ? "border-primary ring-1 ring-primary" : "border-border",
-                  )}
-                >
-                  <img
-                    src={face.thumb}
-                    alt={t("检测到的人脸")}
-                    className="size-14 rounded object-cover"
-                  />
-                  <div className="min-w-0 flex-1 space-y-1.5">
-                    <p className="text-[10px] text-muted-foreground">第 {index + 1} 张人脸</p>
-                    {face.personId ? (
-
-                      <>
-                        <p className="truncate text-sm font-medium">{face.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {t("相似度距离")} {face.distance.toFixed(3)} {t("（越小越像）")}
-                        </p>
-                      </>
-                    ) : (
-                      <div className="flex gap-1.5">
-                        <Input
-                          value={nameDrafts[index] ?? ""}
-                          onChange={(event) =>
-                            setNameDrafts((prev) => ({ ...prev, [index]: event.target.value }))
-                          }
-                          placeholder={t("这是谁？填名字入库")}
-                          list="known-person-names"
-                          className="h-8 text-xs"
-                        />
-                        <Button size="sm" className="h-8" onClick={() => void enroll(index)}>
-                          <UserPlus className="size-3.5" aria-hidden="true" />
-                        </Button>
-                      </div>
+                  <div
+                    key={index}
+                    onClick={() => setSelectedFace(index)}
+                    className={cn(
+                      "flex cursor-pointer items-center gap-3 rounded-lg border bg-muted/30 p-2",
+                      selectedFace === index
+                        ? "border-primary ring-1 ring-primary"
+                        : "border-border",
                     )}
+                  >
+                    <img
+                      src={face.thumb}
+                      alt={t("检测到的人脸")}
+                      className="size-14 rounded object-cover"
+                    />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <p className="text-[10px] text-muted-foreground">第 {index + 1} 张人脸</p>
+                      {face.personId ? (
+                        <>
+                          <p className="truncate text-sm font-medium">{face.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {t("相似度距离")} {face.distance.toFixed(3)} {t("（越小越像）")}
+                          </p>
+                        </>
+                      ) : (
+                        <div className="flex gap-1.5">
+                          <Input
+                            value={nameDrafts[index] ?? ""}
+                            onChange={(event) =>
+                              setNameDrafts((prev) => ({ ...prev, [index]: event.target.value }))
+                            }
+                            placeholder={t("这是谁？填名字入库")}
+                            list="known-person-names"
+                            className="h-8 text-xs"
+                          />
+                          <Button size="sm" className="h-8" onClick={() => void enroll(index)}>
+                            <UserPlus className="size-3.5" aria-hidden="true" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
                 ))}
               </div>
             </div>
           )}
-
         </TabsContent>
 
         <TabsContent value="people" className="pt-4">
           {people.length === 0 ? (
-            <p className="py-10 text-center text-xs text-muted-foreground">{t("人员库是空的。识别到未知人脸后填个名字即可入库。")}</p>
+            <p className="py-10 text-center text-xs text-muted-foreground">
+              {t("人员库是空的。识别到未知人脸后填个名字即可入库。")}
+            </p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {people.map((person) => (
@@ -638,7 +639,11 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                   key={person.id}
                   className="flex items-start gap-3 rounded-lg border border-border p-2"
                 >
-                  <img src={person.thumb} alt={person.name} className="size-14 rounded object-cover" />
+                  <img
+                    src={person.thumb}
+                    alt={person.name}
+                    className="size-14 rounded object-cover"
+                  />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{person.name}</p>
                     <p className="text-xs text-muted-foreground">
@@ -671,7 +676,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                     <Button
                       variant="ghost"
                       size="icon"
-                      aria-label={`编辑 ${person.name} 的资料`}
+                      aria-label={`${t("编辑人物资料")}：${person.name}`}
                       onClick={() => setEditingPerson(person)}
                     >
                       <Pencil className="size-3.5" aria-hidden="true" />
@@ -679,7 +684,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                     <Button
                       variant="ghost"
                       size="icon"
-                      aria-label={`删除 ${person.name}`}
+                      aria-label={`${t("删除")}：${person.name}`}
                       onClick={() => void removePerson(person)}
                     >
                       <Trash2 className="size-3.5" aria-hidden="true" />
@@ -689,7 +694,6 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
               ))}
             </div>
           )}
-
         </TabsContent>
 
         <TabsContent value="log" className="space-y-3 pt-4">
@@ -739,9 +743,10 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                 await refresh();
               }}
             >
-              <Trash2 className="size-3.5" aria-hidden="true" />{t("清空全部")}</Button>
+              <Trash2 className="size-3.5" aria-hidden="true" />
+              {t("清空全部")}
+            </Button>
           </div>
-
 
           {summary && (
             <div className="whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-3 text-sm leading-relaxed">
@@ -808,13 +813,17 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                         </td>
                         <td className="p-2">
                           <div className="flex items-center gap-1">
-                            <Button size="sm" className="h-8" onClick={() => void assign(item)}>{t("确认")}</Button>
+                            <Button size="sm" className="h-8" onClick={() => void assign(item)}>
+                              {t("确认")}
+                            </Button>
                             <Button
                               variant="outline"
                               size="sm"
                               className="h-8"
                               onClick={() => setEditingId(null)}
-                            >{t("取消")}</Button>
+                            >
+                              {t("取消")}
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -823,7 +832,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                         <td className="p-2">
                           <input
                             type="checkbox"
-                            aria-label={`选择 ${item.name}`}
+                            aria-label={`${t("选择人物")}：${item.name}`}
                             checked={selectedIds.includes(item.id)}
                             onChange={(event) =>
                               setSelectedIds((prev) =>
@@ -847,7 +856,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
-                            aria-label={`标注 ${item.name}`}
+                            aria-label={`${t("标注人物")}：${item.name}`}
                             onClick={() => startEdit(item)}
                           >
                             <Pencil className="size-3.5" aria-hidden="true" />
@@ -857,7 +866,6 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                     ),
                   )}
                 </tbody>
-
               </table>
             </div>
           )}
@@ -871,9 +879,10 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
         onSaved={refresh}
       />
 
-
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Database className="size-3.5 shrink-0" aria-hidden="true" />{t("人员库与记录保存在本机浏览器（IndexedDB），换浏览器不共享，清理站点数据会清空。")}</p>
+        <Database className="size-3.5 shrink-0" aria-hidden="true" />
+        {t("人员库与记录保存在本机浏览器（IndexedDB），换浏览器不共享，清理站点数据会清空。")}
+      </p>
     </section>
   );
 }

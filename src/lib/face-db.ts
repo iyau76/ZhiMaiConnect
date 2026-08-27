@@ -38,10 +38,20 @@ export interface PersonProfile {
   gifts?: string[];
   /** 相识场景 */
   metAt?: string;
+  /** 平台账号与历史昵称；按时间保留，避免只用当前姓名判断是否同一人。 */
+  identities?: Array<{
+    platform: string;
+    account?: string;
+    alias: string;
+    validFrom?: string;
+    validTo?: string;
+    source?: Provenance;
+  }>;
   /** 自定义栏位（人物卡模板里自己加的字段）+ AI 整理出的其它字段 */
   extra?: Record<string, string>;
+  /** Per-field provenance for sensitive values accepted from intake. */
+  fieldSources?: Record<string, Provenance>;
 }
-
 
 /** 图片备注：直接存 dataURL，跟着记录留在本机 */
 export interface PhotoNote {
@@ -63,13 +73,12 @@ export interface PersonRecord {
   descriptors: number[][];
   thumb: string;
   createdAt: number;
+  updatedAt?: number;
   /** 图片备注（合照、名片、聊天截图等） */
   photos?: PhotoNote[];
   /** 这条档案是怎么来的 */
   source?: Provenance;
 }
-
-
 
 export interface SightingRecord {
   id: string;
@@ -83,7 +92,6 @@ export interface SightingRecord {
   source?: Provenance;
 }
 
-
 export interface RelationRecord {
   id: string;
   fromId: string;
@@ -96,6 +104,10 @@ export interface RelationRecord {
   /** 来源证据 id，用于溯源；没有就是人工手填 */
   sourceId?: string;
   createdAt: number;
+  /** 最近一次人工编辑或确认时间；旧数据缺省回退到 createdAt。 */
+  updatedAt?: number;
+  /** AI 抽取先进入待确认；人工创建或在草稿页确认后为 confirmed。 */
+  confirmationStatus?: "pending" | "confirmed" | "rejected";
   source?: Provenance;
 }
 
@@ -224,6 +236,7 @@ export interface LifeEventRecord {
   /** 图片备注 */
   photos?: PhotoNote[];
   createdAt: number;
+  source?: Provenance;
 }
 
 /** 个人版：待办 / 提醒（生日祝福、节日问候、请人帮忙等） */
@@ -237,6 +250,7 @@ export interface ReminderRecord {
   kind?: "birthday" | "festival" | "gift" | "custom";
   done: boolean;
   createdAt: number;
+  source?: Provenance;
 }
 
 const DB_NAME = "openglass-faces";
@@ -252,7 +266,6 @@ const PROJECTS = "projects";
 const LIFE_EVENTS = "lifeEvents";
 const REMINDERS = "reminders";
 
-
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openDb() {
@@ -266,7 +279,8 @@ function openDb() {
         const store = db.createObjectStore(SIGHTINGS, { keyPath: "id" });
         store.createIndex("at", "at");
       }
-      if (!db.objectStoreNames.contains(RELATIONS)) db.createObjectStore(RELATIONS, { keyPath: "id" });
+      if (!db.objectStoreNames.contains(RELATIONS))
+        db.createObjectStore(RELATIONS, { keyPath: "id" });
       if (!db.objectStoreNames.contains(EVIDENCE)) {
         const store = db.createObjectStore(EVIDENCE, { keyPath: "id" });
         store.createIndex("createdAt", "createdAt");
@@ -295,7 +309,6 @@ function openDb() {
         const store = db.createObjectStore(REMINDERS, { keyPath: "id" });
         store.createIndex("createdAt", "createdAt");
       }
-
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -304,8 +317,11 @@ function openDb() {
   return dbPromise;
 }
 
-
-async function run<T>(store: string, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest) {
+async function run<T>(
+  store: string,
+  mode: IDBTransactionMode,
+  fn: (s: IDBObjectStore) => IDBRequest,
+) {
   const db = await openDb();
   return new Promise<T>((resolve, reject) => {
     const tx = db.transaction(store, mode);
@@ -358,7 +374,8 @@ export const facesDb = {
     run<RelationRecord[]>(RELATIONS, "readonly", (s) => s.getAll()).then((rows) =>
       rows.sort((a, b) => b.createdAt - a.createdAt),
     ),
-  putRelation: (relation: RelationRecord) => run<void>(RELATIONS, "readwrite", (s) => s.put(relation)),
+  putRelation: (relation: RelationRecord) =>
+    run<void>(RELATIONS, "readwrite", (s) => s.put(relation)),
   deleteRelation: (id: string) => run<void>(RELATIONS, "readwrite", (s) => s.delete(id)),
   listEvidence: () =>
     run<EvidenceRecord[]>(EVIDENCE, "readonly", (s) => s.getAll()).then((rows) =>
@@ -370,13 +387,15 @@ export const facesDb = {
     run<VoiceprintRecord[]>(VOICEPRINTS, "readonly", (s) => s.getAll()).then((rows) =>
       rows.sort((a, b) => b.createdAt - a.createdAt),
     ),
-  putVoiceprint: (record: VoiceprintRecord) => run<void>(VOICEPRINTS, "readwrite", (s) => s.put(record)),
+  putVoiceprint: (record: VoiceprintRecord) =>
+    run<void>(VOICEPRINTS, "readwrite", (s) => s.put(record)),
   deleteVoiceprint: (id: string) => run<void>(VOICEPRINTS, "readwrite", (s) => s.delete(id)),
   listCaseEvents: () =>
     run<CaseEventRecord[]>(CASE_EVENTS, "readonly", (s) => s.getAll()).then((rows) =>
       rows.sort((a, b) => a.at - b.at),
     ),
-  putCaseEvent: (record: CaseEventRecord) => run<void>(CASE_EVENTS, "readwrite", (s) => s.put(record)),
+  putCaseEvent: (record: CaseEventRecord) =>
+    run<void>(CASE_EVENTS, "readwrite", (s) => s.put(record)),
   deleteCaseEvent: (id: string) => run<void>(CASE_EVENTS, "readwrite", (s) => s.delete(id)),
   listTasks: () =>
     run<TaskRecord[]>(TASKS, "readonly", (s) => s.getAll()).then((rows) =>
@@ -394,7 +413,8 @@ export const facesDb = {
     run<LifeEventRecord[]>(LIFE_EVENTS, "readonly", (s) => s.getAll()).then((rows) =>
       rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)),
     ),
-  putLifeEvent: (record: LifeEventRecord) => run<void>(LIFE_EVENTS, "readwrite", (s) => s.put(record)),
+  putLifeEvent: (record: LifeEventRecord) =>
+    run<void>(LIFE_EVENTS, "readwrite", (s) => s.put(record)),
   deleteLifeEvent: (id: string) => run<void>(LIFE_EVENTS, "readwrite", (s) => s.delete(id)),
   listReminders: () =>
     run<ReminderRecord[]>(REMINDERS, "readonly", (s) => s.getAll()).then((rows) =>
@@ -403,5 +423,3 @@ export const facesDb = {
   putReminder: (record: ReminderRecord) => run<void>(REMINDERS, "readwrite", (s) => s.put(record)),
   deleteReminder: (id: string) => run<void>(REMINDERS, "readwrite", (s) => s.delete(id)),
 };
-
-

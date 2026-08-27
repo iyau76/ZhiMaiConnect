@@ -1,103 +1,137 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import {
+  API_LIMITS,
+  SafeApiError,
+  apiErrorResponse,
+  apiJson,
+  appendApiPath,
+  consumeUpstreamError,
+  decodeBase64,
+  enforceRateLimit,
+  parseJsonRequest,
+  readResponseTextLimited,
+  requireApiSession,
+  startUpstreamRequest,
+  transcribeBodySchema,
+  validateCustomBaseUrl,
+  type TranscribeBody,
+  type UpstreamRequest,
+} from "../../lib/api-security.server";
+
 const LOVABLE_BASE = "https://ai.gateway.lovable.dev/v1";
 const DEFAULT_MODEL = "openai/gpt-4o-mini-transcribe";
 
-interface Body {
-  /** data URL 或纯 base64 */
-  audio?: string;
-  mime?: string;
-  filename?: string;
-  /** "lovable"（默认，走 Lovable AI）或 "openai"（自定义 OpenAI 兼容接口，如自建 Whisper） */
-  kind?: "lovable" | "openai";
-  baseUrl?: string;
-  apiKey?: string;
-  model?: string;
-  /** 提示语，帮助模型识别人名/术语 */
-  hint?: string;
-  /** ISO-639-1 语言码，不传则自动检测（方言统一用 zh + hint 引导） */
-  language?: string;
+function resolveTarget(body: TranscribeBody) {
+  if (body.kind === "openai") {
+    const baseUrl = validateCustomBaseUrl(body.baseUrl ?? "");
+    const headers: Record<string, string> = {};
+    if (body.apiKey) headers.Authorization = `Bearer ${body.apiKey}`;
+    return {
+      url: appendApiPath(baseUrl, "audio/transcriptions"),
+      headers,
+      model: body.model ?? "whisper-1",
+    };
+  }
+
+  const key = process.env.LOVABLE_API_KEY;
+  if (!key) {
+    throw new SafeApiError(
+      503,
+      "SERVER_MISCONFIGURED",
+      "内置语音转写尚未配置；请改用已获许可的自定义接口",
+    );
+  }
+  return {
+    url: `${LOVABLE_BASE}/audio/transcriptions`,
+    headers: {
+      "Lovable-API-Key": key,
+      "X-Lovable-AIG-SDK": "lovable-fetch",
+    } as Record<string, string>,
+    model: body.model ?? DEFAULT_MODEL,
+  };
 }
 
-function decodeBase64(input: string) {
-  const raw = input.includes(",") ? input.slice(input.indexOf(",") + 1) : input;
-  const binary = atob(raw);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+export async function handleTranscribePost(request: Request): Promise<Response> {
+  let upstreamRequest: UpstreamRequest | undefined;
+  try {
+    enforceRateLimit(request, "transcribe", 10);
+    requireApiSession(request);
+    const body = await parseJsonRequest(
+      request,
+      transcribeBodySchema,
+      API_LIMITS.transcribeRequestBytes,
+    );
+    const target = resolveTarget(body);
+
+    let audio: Uint8Array;
+    try {
+      audio = decodeBase64(body.audio);
+    } catch {
+      throw new SafeApiError(400, "INVALID_REQUEST", "音频 base64 无法解码");
+    }
+
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([audio as unknown as BlobPart], { type: body.mime || "audio/webm" }),
+      body.filename || "audio.webm",
+    );
+    form.append("model", target.model);
+    if (body.hint) form.append("prompt", body.hint);
+    if (body.language && body.language !== "auto") form.append("language", body.language);
+
+    upstreamRequest = await startUpstreamRequest(
+      target.url,
+      { method: "POST", headers: target.headers, body: form },
+      {
+        timeoutMs: API_LIMITS.transcriptionTimeoutMs,
+        timeoutMessage: "上游语音转写连接或首包响应超时",
+        requestSignal: request.signal,
+      },
+    );
+
+    const upstream = upstreamRequest.response;
+    if (!upstream.ok) {
+      const response = await consumeUpstreamError(upstream, "transcribe");
+      upstreamRequest.dispose();
+      upstreamRequest = undefined;
+      return response;
+    }
+
+    let raw: string;
+    try {
+      raw = await readResponseTextLimited(upstream, API_LIMITS.upstreamJsonBytes);
+    } catch {
+      if (upstreamRequest.didTimeOut()) {
+        throw new SafeApiError(504, "UPSTREAM_TIMEOUT", "上游语音转写响应超时");
+      }
+      throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游语音转写响应无法读取");
+    } finally {
+      upstreamRequest.dispose();
+      upstreamRequest = undefined;
+    }
+
+    let text: string;
+    try {
+      const payload = JSON.parse(raw) as { text?: unknown };
+      if (typeof payload.text !== "string") throw new Error("missing text");
+      text = payload.text;
+    } catch {
+      throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游语音转写返回了无效响应");
+    }
+    return apiJson({ ok: true, text });
+  } catch (error) {
+    upstreamRequest?.dispose();
+    if (!(error instanceof SafeApiError)) console.error("[transcribe] unexpected internal failure");
+    return apiErrorResponse(error);
+  }
 }
 
 export const Route = createFileRoute("/api/transcribe")({
   server: {
     handlers: {
-      POST: async ({ request }) => {
-        let body: Body;
-        try {
-          body = (await request.json()) as Body;
-        } catch {
-          return Response.json({ error: "请求体不是合法 JSON" }, { status: 400 });
-        }
-
-        if (!body.audio) return Response.json({ error: "缺少音频数据" }, { status: 400 });
-
-        let url: string;
-        const headers: Record<string, string> = {};
-        let model = body.model?.trim() || DEFAULT_MODEL;
-
-        if (body.kind === "openai") {
-          const base = (body.baseUrl || "").replace(/\/+$/, "");
-          if (!base) return Response.json({ error: "缺少接口地址（Base URL）" }, { status: 400 });
-          url = `${base}/audio/transcriptions`;
-          if (body.apiKey) headers.Authorization = `Bearer ${body.apiKey}`;
-          if (!body.model?.trim()) model = "whisper-1";
-        } else {
-          const key = process.env.LOVABLE_API_KEY;
-          if (!key) return Response.json({ error: "服务端未配置 LOVABLE_API_KEY" }, { status: 400 });
-          url = `${LOVABLE_BASE}/audio/transcriptions`;
-          headers["Lovable-API-Key"] = key;
-          headers["X-Lovable-AIG-SDK"] = "lovable-fetch";
-        }
-
-        let bytes: Uint8Array;
-        try {
-          bytes = decodeBase64(body.audio);
-        } catch {
-          return Response.json({ error: "音频数据无法解码" }, { status: 400 });
-        }
-
-        const mime = body.mime || "audio/webm";
-        const form = new FormData();
-        form.append("file", new Blob([bytes as unknown as BlobPart], { type: mime }), body.filename || "audio.webm");
-        form.append("model", model);
-        if (body.hint) form.append("prompt", body.hint);
-        if (body.language && body.language !== "auto") form.append("language", body.language);
-
-        let upstream: Response;
-        try {
-          upstream = await fetch(url, { method: "POST", headers, body: form });
-        } catch (error) {
-          return Response.json(
-            { error: `无法连接转写接口：${(error as Error).message}` },
-            { status: 502 },
-          );
-        }
-
-        if (!upstream.ok) {
-          const text = await upstream.text();
-          console.error(`transcribe upstream ${upstream.status}: ${text}`);
-          const message =
-            upstream.status === 429
-              ? "请求过于频繁，请稍后再试"
-              : upstream.status === 402
-                ? "AI 额度已用完，请在 Settings → Plans & credits 充值"
-                : `转写接口返回 ${upstream.status}：${text.slice(0, 400)}`;
-          return Response.json({ error: message }, { status: upstream.status });
-        }
-
-        const json = (await upstream.json()) as { text?: string };
-        return Response.json({ ok: true, text: json.text ?? "" });
-      },
+      POST: ({ request }) => handleTranscribePost(request),
     },
   },
 });
-

@@ -61,19 +61,41 @@ export function yearOf(event: LifeEventRecord) {
 export type FuzzyParse = { date: string; dateEnd?: string; precision: DatePrecision };
 
 const CN_NUM: Record<string, number> = {
-  一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
-  十一: 11, 十二: 12, 冬: 12,
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+  十: 10,
+  十一: 11,
+  十二: 12,
+  冬: 12,
 };
 
 const num = (raw: string) => (CN_NUM[raw] !== undefined ? CN_NUM[raw] : Number(raw));
 
 /** 季节 → 起止月 */
 const SEASONS: Record<string, [number, number]> = {
-  春: [3, 5], 春天: [3, 5], 开春: [3, 4],
-  夏: [6, 8], 夏天: [6, 8], 暑假: [7, 8],
-  秋: [9, 11], 秋天: [9, 11],
-  冬天: [12, 2], 寒假: [1, 2],
-  年初: [1, 3], 上半年: [1, 6], 年中: [6, 8], 下半年: [7, 12], 年底: [11, 12], 年末: [11, 12],
+  开春: [3, 4],
+  春天: [3, 5],
+  春: [3, 5],
+  夏: [6, 8],
+  夏天: [6, 8],
+  暑假: [7, 8],
+  秋: [9, 11],
+  秋天: [9, 11],
+  冬天: [12, 2],
+  寒假: [1, 2],
+  年初: [1, 3],
+  上半年: [1, 6],
+  年中: [6, 8],
+  下半年: [7, 12],
+  年底: [11, 12],
+  年末: [11, 12],
 };
 
 /** 先本地猜一遍常见说法，猜不出来再交给 AI */
@@ -90,7 +112,7 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
   else if (/去年|上一?年/.test(s)) year = thisYear - 1;
   else if (/前年/.test(s)) year = thisYear - 2;
   else {
-    const ago = s.match(/([一二三四五六七八九十]|\d+)\s*年前/);
+    const ago = s.match(/([一二三四五六七八九十]{1,2}|\d+)\s*年前/);
     if (ago) year = thisYear - num(ago[1]);
   }
 
@@ -115,10 +137,19 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
     if (!s.includes(key)) continue;
     const y = year ?? thisYear;
     if (to < from) {
-      return { date: `${y}-${pad(from)}-01`, dateEnd: `${y + 1}-${pad(to)}-28`, precision: "range" };
+      const last = new Date(y + 1, to, 0).getDate();
+      return {
+        date: `${y}-${pad(from)}-01`,
+        dateEnd: `${y + 1}-${pad(to)}-${pad(last)}`,
+        precision: "range",
+      };
     }
     const last = new Date(y, to, 0).getDate();
-    return { date: `${y}-${pad(from)}-01`, dateEnd: `${y}-${pad(to)}-${pad(last)}`, precision: "range" };
+    return {
+      date: `${y}-${pad(from)}-01`,
+      dateEnd: `${y}-${pad(to)}-${pad(last)}`,
+      precision: "range",
+    };
   }
 
   /** 上个月 / 几个月前 */
@@ -126,7 +157,7 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
     const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`, precision: "month" };
   }
-  const monthsAgo = s.match(/([一二三四五六七八九十]|\d+)\s*个?月前/);
+  const monthsAgo = s.match(/([一二三四五六七八九十]{1,2}|\d+)\s*个?月前/);
   if (monthsAgo) {
     const d = new Date(now.getFullYear(), now.getMonth() - num(monthsAgo[1]), 1);
     return { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`, precision: "month" };
@@ -149,12 +180,22 @@ export function fuzzyPrompt(text: string, now = new Date()) {
 
 /** 校验 AI 返回的结果 */
 export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | null {
-  if (!raw?.date || !/^\d{4}-\d{2}-\d{2}$/.test(raw.date)) return null;
+  const validDate = (value: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const [year, month, day] = value.split("-").map(Number);
+    return month >= 1 && month <= 12 && day >= 1 && day <= new Date(year, month, 0).getDate();
+  };
+  if (!raw?.date || !validDate(raw.date)) return null;
   const precision: DatePrecision =
-    raw.precision === "day" || raw.precision === "month" || raw.precision === "year" || raw.precision === "range"
+    raw.precision === "day" ||
+    raw.precision === "month" ||
+    raw.precision === "year" ||
+    raw.precision === "range"
       ? raw.precision
       : "year";
-  const dateEnd = raw.dateEnd && /^\d{4}-\d{2}-\d{2}$/.test(raw.dateEnd) ? raw.dateEnd : undefined;
+  if (raw.dateEnd && !validDate(raw.dateEnd)) return null;
+  const dateEnd = raw.dateEnd;
   if (precision === "range" && !dateEnd) return { date: raw.date, precision: "month" };
+  if (precision === "range" && dateEnd! < raw.date) return null;
   return { date: raw.date, dateEnd: precision === "range" ? dateEnd : undefined, precision };
 }

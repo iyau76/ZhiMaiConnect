@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 
 import { AppearanceControls, LanguageToggle } from "@/components/appearance-controls";
 import { CalendarPanel } from "@/components/calendar-panel";
+import { DemoDataControls } from "@/components/demo-data-controls";
 import { IntakePanel } from "@/components/intake-panel";
 import { ModelsPanel } from "@/components/models-panel";
 import { PageGuide } from "@/components/page-guide";
+import { PreflightPanel } from "@/components/preflight-panel";
 import { RemindersPanel } from "@/components/reminders-panel";
 
 import { RelationsPanel } from "@/components/relations-panel";
@@ -20,6 +22,25 @@ import { DEFAULT_PRESETS, type ProviderPreset } from "@/lib/vision-providers";
 
 const PRESETS_KEY = "openglass.presets";
 const ACTIVE_KEY = "openglass.active";
+const SESSION_KEYS_KEY = "openglass.session-api-keys";
+
+function readSessionKeys(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(SESSION_KEYS_KEY) ?? "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function withoutPersistentKeys(presets: ProviderPreset[]) {
+  return presets.map((preset) => ({ ...preset, apiKey: "" }));
+}
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -27,14 +48,12 @@ export const Route = createFileRoute("/")({
       { title: "知脉 Connect · 个人人脉与人情往来助手" },
       {
         name: "description",
-        content:
-          "记下身边的人：生日提醒、节日祝福、送礼建议、和谁在哪天做了什么，AI 帮你整理成一张人际关系网，全部存在本机。",
+        content: "本地优先记录人物、事件与关系；云端 AI 仅在确认后接收当前任务所需内容。",
       },
       { property: "og:title", content: "知脉 Connect · 个人人脉与人情往来助手" },
       {
         property: "og:description",
-        content:
-          "记下身边的人：生日提醒、节日祝福、送礼建议、日历回忆，AI 自动整理关系网，数据只存本机。",
+        content: "本地优先、证据可追溯的人际关系记忆与行动助手。",
       },
 
       { property: "og:type", content: "website" },
@@ -125,9 +144,6 @@ const HEADINGS: Record<
   },
 };
 
-
-
-
 function Index() {
   const [presets, setPresets] = useState<ProviderPreset[]>(DEFAULT_PRESETS);
   const [activeId, setActiveId] = useState(DEFAULT_PRESETS[0].id);
@@ -143,7 +159,15 @@ function Index() {
       const storedPresets = localStorage.getItem(PRESETS_KEY);
       if (storedPresets) {
         const parsed = JSON.parse(storedPresets) as ProviderPreset[];
-        if (Array.isArray(parsed) && parsed.length) setPresets(parsed);
+        if (Array.isArray(parsed) && parsed.length) {
+          const sessionKeys = readSessionKeys();
+          setPresets(
+            parsed.map((preset) => ({
+              ...preset,
+              apiKey: sessionKeys[preset.id] ?? preset.apiKey ?? "",
+            })),
+          );
+        }
       }
       const storedActive = localStorage.getItem(ACTIVE_KEY);
       if (storedActive) setActiveId(storedActive);
@@ -155,8 +179,20 @@ function Index() {
 
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem(PRESETS_KEY, JSON.stringify(presets));
-    localStorage.setItem(ACTIVE_KEY, activeId);
+    try {
+      localStorage.setItem(PRESETS_KEY, JSON.stringify(withoutPersistentKeys(presets)));
+      localStorage.setItem(ACTIVE_KEY, activeId);
+      sessionStorage.setItem(
+        SESSION_KEYS_KEY,
+        JSON.stringify(
+          Object.fromEntries(
+            presets.filter((preset) => preset.apiKey).map((preset) => [preset.id, preset.apiKey]),
+          ),
+        ),
+      );
+    } catch {
+      /* 隐私模式或存储空间不足时，仅保留当前内存状态 */
+    }
   }, [hydrated, presets, activeId]);
 
   const resolvedActiveId = presets.some((preset) => preset.id === activeId)
@@ -166,7 +202,10 @@ function Index() {
   const heading = HEADINGS[view];
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div
+      className="min-h-screen bg-background text-foreground"
+      data-app-hydrated={hydrated ? "true" : "false"}
+    >
       <div className="flex min-h-screen">
         {/* 侧边导航 */}
         <aside className="sticky top-0 hidden h-screen w-[13.5rem] shrink-0 flex-col justify-between border-r border-border bg-sidebar px-5 py-7 md:flex">
@@ -214,7 +253,9 @@ function Index() {
           <div className="space-y-4">
             <LanguageToggle />
             <p className="text-[11px] leading-relaxed text-muted-foreground">
-              {t("所有资料只存在本机浏览器，AI 结论仅供参考，需人工复核。")}
+              {t(
+                "人物档案默认只存在本机；使用云端 AI 时，仅发送当前任务所需内容，提交前请确认。AI 结论需人工复核。",
+              )}
             </p>
           </div>
         </aside>
@@ -245,7 +286,6 @@ function Index() {
             </div>
           </div>
 
-
           <main className="min-w-0 flex-1 px-4 py-6 md:px-8 md:py-10">
             <header className="mb-7 max-w-3xl">
               <p className="text-[11px] uppercase tracking-[0.28em] text-muted-foreground">
@@ -263,8 +303,6 @@ function Index() {
               />
             </header>
 
-
-
             {view === "intake" ? (
               <div className="min-w-0 space-y-5">
                 <IntakePanel preset={activePreset} />
@@ -272,8 +310,10 @@ function Index() {
             ) : view === "reminders" ? (
               <RemindersPanel preset={activePreset} />
             ) : view === "settings" ? (
-              <div className="max-w-2xl rounded-xl border border-border bg-card p-5">
+              <div className="max-w-2xl space-y-5 rounded-xl border border-border bg-card p-5">
                 <AppearanceControls />
+                <DemoDataControls />
+                <PreflightPanel preset={activePreset} />
               </div>
             ) : view === "calendar" ? (
               <CalendarPanel preset={activePreset} />
@@ -288,7 +328,7 @@ function Index() {
               />
             ) : (
               <div className="min-w-0 space-y-5">
-                <RelationsPanel preset={activePreset} />
+                <RelationsPanel preset={activePreset} onOpenIntake={() => setView("intake")} />
               </div>
             )}
           </main>
@@ -296,7 +336,6 @@ function Index() {
       </div>
       <Toaster />
       <WelcomeCover />
-
     </div>
   );
 }

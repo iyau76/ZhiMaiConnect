@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiStatusRouteImport } from './routes/api/status'
 import { Route as ApiTranscribeRouteImport } from './routes/api/transcribe'
 import { Route as ApiVisionRouteImport } from './routes/api/vision'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStatusRoute = ApiStatusRouteImport.update({
+  id: '/api/status',
+  path: '/api/status',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiTranscribeRoute = ApiTranscribeRouteImport.update({
@@ -31,30 +37,34 @@ const ApiVisionRoute = ApiVisionRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/status': typeof ApiStatusRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/api/vision': typeof ApiVisionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/status': typeof ApiStatusRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/api/vision': typeof ApiVisionRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/status': typeof ApiStatusRoute
   '/api/transcribe': typeof ApiTranscribeRoute
   '/api/vision': typeof ApiVisionRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/transcribe' | '/api/vision'
+  fullPaths: '/' | '/api/status' | '/api/transcribe' | '/api/vision'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/transcribe' | '/api/vision'
-  id: '__root__' | '/' | '/api/transcribe' | '/api/vision'
+  to: '/' | '/api/status' | '/api/transcribe' | '/api/vision'
+  id: '__root__' | '/' | '/api/status' | '/api/transcribe' | '/api/vision'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiStatusRoute: typeof ApiStatusRoute
   ApiTranscribeRoute: typeof ApiTranscribeRoute
   ApiVisionRoute: typeof ApiVisionRoute
 }
@@ -66,6 +76,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/status': {
+      id: '/api/status'
+      path: '/api/status'
+      fullPath: '/api/status'
+      preLoaderRoute: typeof ApiStatusRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/transcribe': {
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiStatusRoute: ApiStatusRoute,
   ApiTranscribeRoute: ApiTranscribeRoute,
   ApiVisionRoute: ApiVisionRoute,
 }

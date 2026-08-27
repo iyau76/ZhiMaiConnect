@@ -1,4 +1,6 @@
 import { assertVision, type ChatTurn, type ProviderPreset } from "./vision-providers";
+import { confirmCloudTransfer, type CloudDataType } from "./cloud-consent";
+import { apiSessionHeaders } from "./api-session";
 
 function stripDataUrl(dataUrl: string) {
   const idx = dataUrl.indexOf(",");
@@ -67,7 +69,7 @@ async function streamServer(
 ) {
   const response = await fetch("/api/vision", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
     signal,
     body: JSON.stringify({
       action: "chat",
@@ -115,7 +117,7 @@ function assertConfigured(preset: ProviderPreset) {
   }
 }
 
-export function askModel(
+export async function askModel(
   preset: ProviderPreset,
   prompt: string,
   image: string | null,
@@ -129,6 +131,10 @@ export function askModel(
   if (preset.kind === "ollama") {
     return streamOllama(preset, prompt, image, history, onChunk, signal);
   }
+  const dataTypes: CloudDataType[] = ["文字内容"];
+  if (/人物档案|人物关系|人脉库|关系网/.test(prompt)) dataTypes.push("人物关系上下文");
+  if (image || history.some((turn) => turn.image)) dataTypes.push("图片");
+  confirmCloudTransfer(preset, dataTypes);
   return streamServer(preset, prompt, image, history, onChunk, signal);
 }
 
@@ -148,7 +154,7 @@ export async function testConnection(preset: ProviderPreset) {
 
   const response = await fetch("/api/vision", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       action: "test",
       kind: preset.kind,
@@ -204,7 +210,7 @@ async function askOnce(preset: ProviderPreset, prompt: string, image: string) {
 
   const response = await fetch("/api/vision", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       action: "audit",
       kind: preset.kind,
@@ -244,7 +250,6 @@ export async function auditVision(preset: ProviderPreset) {
   }
   return { ok: true as const, detail: `两轮颜色测试全部答对（${replies.join(" / ")}）` };
 }
-
 
 /** 从 ESP32 CameraWebServer 抓一帧，返回 data URL */
 export async function captureFrame(host: string) {

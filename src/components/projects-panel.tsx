@@ -1,7 +1,7 @@
 /** 事务 / 项目信息库：列出要推进的事务，以及各自的负责人与参与人 */
 
 import { Briefcase, Plus, Trash2, Users } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { ExportMenu } from "@/components/export-menu";
@@ -81,8 +81,10 @@ export function ProjectsPanel() {
     return [...set].sort();
   }, [people, projects]);
 
-  const nameOf = (id?: string | null) =>
-    people.find((person) => person.id === id)?.name ?? "";
+  const nameOf = useCallback(
+    (id?: string | null) => people.find((person) => person.id === id)?.name ?? "",
+    [people],
+  );
 
   const reset = () => {
     setForm({ ...EMPTY });
@@ -178,7 +180,7 @@ export function ProjectsPanel() {
         .toLowerCase();
       return haystack.includes(word);
     });
-  }, [projects, filter, keyword, people]);
+  }, [projects, filter, keyword, nameOf]);
 
   const byOwner = useMemo(() => {
     const map = new Map<string, { name: string; rows: ProjectRecord[] }>();
@@ -190,7 +192,7 @@ export function ProjectsPanel() {
       map.set(key, bucket);
     }
     return [...map.values()].sort((a, b) => b.rows.length - a.rows.length);
-  }, [visible, people]);
+  }, [visible, nameOf]);
 
   const counts = useMemo(() => {
     const result: Record<string, number> = { all: projects.length };
@@ -206,12 +208,9 @@ export function ProjectsPanel() {
       <div className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
         <div className="mb-4 flex items-center gap-2">
           <Briefcase className="size-4 text-primary" aria-hidden="true" />
-          <h2 className="text-sm font-medium">
-            {editingId ? t("修改事务") : t("新增事务")}
-          </h2>
+          <h2 className="text-sm font-medium">{editingId ? t("修改事务") : t("新增事务")}</h2>
           <ExportMenu scope="projects" className="ml-auto" />
         </div>
-
 
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
@@ -273,9 +272,7 @@ export function ProjectsPanel() {
               <select
                 id="project-priority"
                 value={form.priority}
-                onChange={(event) =>
-                  setForm({ ...form, priority: event.target.value as Priority })
-                }
+                onChange={(event) => setForm({ ...form, priority: event.target.value as Priority })}
                 className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
               >
                 {PRIORITIES.map((item) => (

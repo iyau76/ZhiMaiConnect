@@ -1,21 +1,46 @@
 /** 个人版：提醒 —— 生日、节日、待办，以及「这事该拜托谁」 */
 
-import { Cake, Check, Gift, Loader2, PartyPopper, Plus, Sparkles, Trash2, Users } from "lucide-react";
+import {
+  Cake,
+  Check,
+  Clipboard,
+  Clock3,
+  Gift,
+  Loader2,
+  PartyPopper,
+  Plus,
+  Sparkles,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { MarkdownView } from "@/components/markdown-view";
+import { SourceBadge } from "@/components/source-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { askText } from "@/lib/ai-text";
-import { facesDb, type PersonRecord, type ReminderRecord } from "@/lib/face-db";
+import {
+  facesDb,
+  type LifeEventRecord,
+  type PersonRecord,
+  type ReminderRecord,
+} from "@/lib/face-db";
+import { t } from "@/lib/i18n";
 import { blessingPrompt, upcoming, todayStr, type UpcomingItem } from "@/lib/personal";
+import {
+  rankCandidates,
+  recommendationPrompt,
+  staleContacts,
+  type CandidateRecommendation,
+} from "@/lib/recommendation";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   const [persons, setPersons] = useState<PersonRecord[]>([]);
   const [reminders, setReminders] = useState<ReminderRecord[]>([]);
+  const [events, setEvents] = useState<LifeEventRecord[]>([]);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -23,11 +48,17 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   const [ask, setAsk] = useState("");
   const [askBusy, setAskBusy] = useState(false);
   const [askAnswer, setAskAnswer] = useState("");
+  const [candidates, setCandidates] = useState<CandidateRecommendation[]>([]);
 
   const load = useCallback(async () => {
-    const [p, r] = await Promise.all([facesDb.listPersons(), facesDb.listReminders()]);
+    const [p, r, e] = await Promise.all([
+      facesDb.listPersons(),
+      facesDb.listReminders(),
+      facesDb.listLifeEvents(),
+    ]);
     setPersons(p);
     setReminders(r);
+    setEvents(e);
   }, []);
 
   useEffect(() => {
@@ -35,6 +66,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   }, [load]);
 
   const items = useMemo(() => upcoming(persons, 60), [persons]);
+  const stale = useMemo(() => staleContacts(persons, events, 90).slice(0, 6), [persons, events]);
 
   const suggest = async (item: UpcomingItem) => {
     setBusyKey(item.key);
@@ -89,22 +121,47 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     await load();
   };
 
-  const askWho = async () => {
+  const addContactReminder = async (person: PersonRecord) => {
+    await facesDb.putReminder({
+      id: crypto.randomUUID(),
+      title: `联系 ${person.name}`,
+      detail: "长期未联系提醒，请先确认对方近况再发送消息。",
+      personIds: [person.id],
+      kind: "custom",
+      done: false,
+      createdAt: Date.now(),
+    });
+    await load();
+    toast.success("已加入待办");
+  };
+
+  const findWho = () => {
     if (!ask.trim()) return;
+    const ranked = rankCandidates(ask.trim(), persons, events).slice(0, 3);
+    setCandidates(ranked);
+    setAskAnswer("");
+    if (!ranked.length) toast.error("人物库还是空的，请先录入人物资料");
+  };
+
+  const loadOfflineRecommendationDemo = () => {
+    const question = "我要组织校园记忆展开幕活动，找谁负责拍照比较合适？";
+    const ranked = rankCandidates(question, persons, events).slice(0, 3);
+    setAsk(question);
+    setCandidates(ranked);
+    setAskAnswer("");
+    if (ranked.length) {
+      toast.success("已用本地规则生成演示候选；人物与结果均须使用合成演示数据");
+    } else {
+      toast.error("请先在设置中载入合成演示数据");
+    }
+  };
+
+  const explainCandidates = async () => {
+    if (!ask.trim() || !candidates.length) return;
     setAskBusy(true);
     setAskAnswer("");
     try {
-      const roster = persons
-        .slice(0, 80)
-        .map((person) => {
-          const p = person.profile ?? {};
-          return `- ${person.name}｜${p.circle ?? "未分组"}｜亲密度 ${p.closeness ?? "?"}/5｜${p.title ?? ""} ${p.org ?? ""}｜擅长/喜好：${(p.likes ?? []).join("、") || "未知"}｜备注：${person.note || "无"}`;
-        })
-        .join("\n");
-      const text = await askText(
-        preset,
-        `这是我的人脉库：\n${roster || "（还没有人物）"}\n\n我遇到的事情：${ask.trim()}\n\n请从上面的人里挑 1-3 位最合适帮忙的人，说明理由（关系、亲密度、能力匹配），并给出可以直接发出去的开场消息。如果库里没有合适的人，直说并给出替代办法。中文，简短分点。`,
-      );
+      const text = await askText(preset, recommendationPrompt(ask.trim(), candidates));
       setAskAnswer(text);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "AI 请求失败");
@@ -145,7 +202,12 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                     </span>
                   </span>
                   <span className="flex gap-1.5">
-                    <Button size="sm" variant="outline" onClick={() => void suggest(item)} disabled={busyKey === item.key}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void suggest(item)}
+                      disabled={busyKey === item.key}
+                    >
                       {busyKey === item.key ? (
                         <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
                       ) : (
@@ -160,10 +222,74 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                   </span>
                 </div>
                 {answer?.key === item.key && (
-                  <div className="mt-3 rounded-lg border border-border bg-card p-3">
-                    <MarkdownView text={answer.text} />
+                  <div className="mt-3 space-y-2 rounded-lg border border-border bg-card p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[10px] text-muted-foreground">
+                        {item.person
+                          ? "依据人物卡中的关系、喜好、忌口与送礼记录；缺失信息须由模型明确说明"
+                          : "依据本地节日表生成；发送前请自行确认语气与对象"}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        {item.person && <SourceBadge source={item.person.source} detailed />}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(answer.text);
+                            toast.success("已复制；系统不会自动发送");
+                          }}
+                        >
+                          <Clipboard className="size-3.5" aria-hidden="true" />
+                          复制
+                        </Button>
+                      </span>
+                    </div>
+                    <Textarea
+                      value={answer.text}
+                      onChange={(event) => setAnswer({ ...answer, text: event.target.value })}
+                      rows={8}
+                      aria-label={t("可编辑的祝福与礼物建议")}
+                    />
                   </div>
                 )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* 长期未联系：完全本地计算，不依赖模型 */}
+      <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
+        <h2 className="flex items-center gap-2 text-sm font-medium">
+          <Clock3 className="size-4 text-primary" aria-hidden="true" />
+          长期未联系
+        </h2>
+        {stale.length === 0 ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            暂无超过 90 天未互动的人物；这里只依据本地共同事件记录计算。
+          </p>
+        ) : (
+          <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+            {stale.map((item) => (
+              <li
+                key={item.person.id}
+                className="flex items-center justify-between gap-2 rounded-xl border border-border bg-background/60 p-3"
+              >
+                <span className="min-w-0 text-sm">
+                  <span className="block truncate font-medium">{item.person.name}</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {item.lastDate ? `上次记录 ${item.lastDate}` : "尚无共同事件"} · 约 {item.days}{" "}
+                    天
+                  </span>
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void addContactReminder(item.person)}
+                >
+                  <Plus className="size-3.5" aria-hidden="true" />
+                  待办
+                </Button>
               </li>
             ))}
           </ul>
@@ -212,15 +338,19 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                 >
                   {record.done && <Check className="size-3" aria-hidden="true" />}
                 </span>
-                <span className={`truncate text-sm ${record.done ? "text-muted-foreground line-through" : ""}`}>
+                <span
+                  className={`truncate text-sm ${record.done ? "text-muted-foreground line-through" : ""}`}
+                >
                   {record.title}
                 </span>
-                {record.due && <span className="text-[11px] text-muted-foreground">{record.due}</span>}
+                {record.due && (
+                  <span className="text-[11px] text-muted-foreground">{record.due}</span>
+                )}
               </button>
               <button
                 type="button"
                 onClick={() => void remove(record.id)}
-                aria-label="删除"
+                aria-label={t("删除")}
                 className="text-muted-foreground transition-colors hover:text-destructive"
               >
                 <Trash2 className="size-3.5" aria-hidden="true" />
@@ -228,12 +358,14 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
             </li>
           ))}
           {reminders.length === 0 && (
-            <li className="text-xs text-muted-foreground">还没有待办，可以从上面的生日 / 节日一键加入。</li>
+            <li className="text-xs text-muted-foreground">
+              还没有待办，可以从上面的生日 / 节日一键加入。
+            </li>
           )}
         </ul>
       </section>
 
-      {/* 这事拜托谁 */}
+      {/* 这事拜托谁：先本地确定性召回，再让 AI 解释和润色 */}
       <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Users className="size-4 text-primary" aria-hidden="true" />
@@ -241,24 +373,90 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
         </h2>
         <Textarea
           value={ask}
-          onChange={(event) => setAsk(event.target.value)}
+          onChange={(event) => {
+            setAsk(event.target.value);
+            setCandidates([]);
+            setAskAnswer("");
+          }}
           rows={3}
           placeholder="例如：我想找人帮忙看一下租房合同，谁比较合适？"
           className="mt-3"
         />
-        <div className="mt-2 flex justify-end">
-          <Button onClick={() => void askWho()} disabled={askBusy || !ask.trim()}>
-            {askBusy ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Sparkles className="size-4" aria-hidden="true" />
-            )}
-            问问 AI
+        <div className="mt-2 flex flex-wrap justify-end gap-2">
+          <Button variant="ghost" onClick={loadOfflineRecommendationDemo}>
+            <Sparkles className="size-4" aria-hidden="true" />
+            离线演示问题（合成数据）
           </Button>
+          <Button variant="outline" onClick={findWho} disabled={!ask.trim()}>
+            <Users className="size-4" aria-hidden="true" />
+            本地筛选候选
+          </Button>
+          {candidates.length > 0 && (
+            <Button onClick={() => void explainCandidates()} disabled={askBusy}>
+              {askBusy ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Sparkles className="size-4" aria-hidden="true" />
+              )}
+              生成比较与话术
+            </Button>
+          )}
         </div>
+        {candidates.length > 0 && (
+          <ol className="mt-3 grid gap-2 lg:grid-cols-3">
+            {candidates.map((candidate, index) => (
+              <li
+                key={candidate.person.id}
+                className="rounded-xl border border-border bg-background/60 p-3 text-xs"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-medium">
+                    {index + 1}. {candidate.person.name}
+                  </span>
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+                    {candidate.score} 分 · {candidate.confidence}置信度
+                  </span>
+                </div>
+                <p className="mt-2 leading-relaxed">
+                  {candidate.reasons.join("；") || "暂无直接匹配理由"}
+                </p>
+                <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
+                  {candidate.evidence.map((item) => (
+                    <p key={item}>依据：{item}</p>
+                  ))}
+                  <p>信息更新：{new Date(candidate.updatedAt).toLocaleDateString()}</p>
+                  {candidate.risks.map((risk) => (
+                    <p key={risk} className="text-amber-700 dark:text-amber-300">
+                      风险：{risk}
+                    </p>
+                  ))}
+                </div>
+                <SourceBadge source={candidate.source} className="mt-2" detailed />
+              </li>
+            ))}
+          </ol>
+        )}
         {askAnswer && (
           <div className="mt-3 rounded-lg border border-border bg-background/60 p-3">
-            <MarkdownView text={askAnswer} />
+            <div className="mb-2 flex justify-end">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  void navigator.clipboard.writeText(askAnswer);
+                  toast.success("已复制，可继续编辑后自行发送");
+                }}
+              >
+                <Clipboard className="size-3.5" aria-hidden="true" />
+                复制
+              </Button>
+            </div>
+            <Textarea
+              value={askAnswer}
+              onChange={(event) => setAskAnswer(event.target.value)}
+              rows={10}
+              aria-label={t("可编辑的候选比较与求助话术")}
+            />
           </div>
         )}
       </section>

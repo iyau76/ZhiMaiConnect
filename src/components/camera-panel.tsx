@@ -81,7 +81,6 @@ export function CameraPanel({ host, onHostChange, frame, onFrame }: CameraPanelP
     };
   }, [base, nonce]);
 
-
   const applyHost = () => {
     const next = normalizeHost(draft);
     if (!next) {
@@ -118,7 +117,9 @@ export function CameraPanel({ host, onHostChange, frame, onFrame }: CameraPanelP
     <section className="flex min-w-0 flex-col gap-5 rounded-2xl border border-border bg-card/60 p-5">
       <header className="flex items-center justify-between gap-3">
         <h2 className="flex items-baseline gap-2.5">
-          <span className="font-display text-xl leading-none tracking-tight">{t("摄像头画面")}</span>
+          <span className="font-display text-xl leading-none tracking-tight">
+            {t("摄像头画面")}
+          </span>
           <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
             Live
           </span>
@@ -135,7 +136,9 @@ export function CameraPanel({ host, onHostChange, frame, onFrame }: CameraPanelP
           <Label
             htmlFor="camera-host"
             className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground"
-          >{t("设备地址")}</Label>
+          >
+            {t("设备地址")}
+          </Label>
           <Input
             id="camera-host"
             value={draft}
@@ -145,9 +148,15 @@ export function CameraPanel({ host, onHostChange, frame, onFrame }: CameraPanelP
             className="border-0 border-b border-border bg-transparent px-0 font-mono text-sm shadow-none focus-visible:ring-0"
           />
         </div>
-        <Button onClick={applyHost} variant="outline" size="sm" className="shrink-0 rounded-full px-4">{t("加载地址")}</Button>
+        <Button
+          onClick={applyHost}
+          variant="outline"
+          size="sm"
+          className="shrink-0 rounded-full px-4"
+        >
+          {t("加载地址")}
+        </Button>
       </div>
-
 
       <div
         ref={shellRef}
@@ -163,13 +172,17 @@ export function CameraPanel({ host, onHostChange, frame, onFrame }: CameraPanelP
             onError={() => setStatus("offline")}
           />
         ) : (
-          <div className="flex size-full items-center justify-center px-6 text-center font-display text-lg italic text-muted-foreground">{t("填写 IP 后点击「加载地址」")}</div>
+          <div className="flex size-full items-center justify-center px-6 text-center font-display text-lg italic text-muted-foreground">
+            {t("填写 IP 后点击「加载地址」")}
+          </div>
         )}
 
         {status === "offline" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-background/85 px-6 text-center">
             <p className="font-display text-xl">{t("连不上摄像头")}</p>
-            <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">{t("请确认此设备和 ESP32 在同一 WiFi、IP 没有变化，并试试切换到「轮询快照」模式。")}</p>
+            <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+              {t("请确认此设备和 ESP32 在同一 WiFi、IP 没有变化，并试试切换到「轮询快照」模式。")}
+            </p>
           </div>
         )}
       </div>
@@ -179,21 +192,24 @@ export function CameraPanel({ host, onHostChange, frame, onFrame }: CameraPanelP
           {t("轮询快照")}
         </span>
 
-
         <button
           type="button"
           onClick={() => setNonce((n) => n + 1)}
           disabled={!base}
           className="flex items-center gap-1.5 text-[11px] tracking-wide text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
         >
-          <RefreshCw className="size-3.5" aria-hidden="true" />{t("重连")}</button>
+          <RefreshCw className="size-3.5" aria-hidden="true" />
+          {t("重连")}
+        </button>
         <button
           type="button"
           onClick={() => shellRef.current?.requestFullscreen?.()}
           disabled={!base}
           className="flex items-center gap-1.5 text-[11px] tracking-wide text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
         >
-          <Maximize2 className="size-3.5" aria-hidden="true" />{t("全屏")}</button>
+          <Maximize2 className="size-3.5" aria-hidden="true" />
+          {t("全屏")}
+        </button>
 
         <Button
           size="sm"
@@ -213,11 +229,14 @@ export function CameraPanel({ host, onHostChange, frame, onFrame }: CameraPanelP
       {frame && (
         <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/30 p-2">
           <img src={frame} alt={t("待提问的画面")} className="h-16 w-24 rounded-lg object-cover" />
-          <div className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">{t("这一帧会随下一个问题发给模型。")}</div>
-          <Button variant="ghost" size="sm" onClick={() => onFrame(null)}>{t("清除")}</Button>
+          <div className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
+            {t("这一帧会随下一个问题发给模型。")}
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => onFrame(null)}>
+            {t("清除")}
+          </Button>
         </div>
       )}
-
     </section>
   );
 }

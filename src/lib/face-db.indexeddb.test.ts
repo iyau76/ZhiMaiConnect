@@ -1,0 +1,247 @@
+import { IDBFactory } from "fake-indexeddb";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { LifeEventRecord, PersonRecord, RelationRecord, ReminderRecord } from "./face-db";
+
+const DB_NAME = "openglass-faces";
+const EXPECTED_STORES = [
+  "caseEvents",
+  "evidence",
+  "lifeEvents",
+  "persons",
+  "projects",
+  "relations",
+  "reminders",
+  "sightings",
+  "tasks",
+  "voiceprints",
+];
+
+function useFreshIndexedDb() {
+  Object.defineProperty(globalThis, "indexedDB", {
+    configurable: true,
+    value: new IDBFactory(),
+    writable: true,
+  });
+}
+
+function openRawDatabase(
+  version?: number,
+  upgrade?: (database: IDBDatabase, transaction: IDBTransaction) => void,
+) {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request =
+      version === undefined ? indexedDB.open(DB_NAME) : indexedDB.open(DB_NAME, version);
+    request.onupgradeneeded = () => {
+      if (request.transaction) upgrade?.(request.result, request.transaction);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function person(id: string, createdAt = 1): PersonRecord {
+  return {
+    id,
+    name: `Person ${id}`,
+    note: "",
+    descriptors: [],
+    thumb: "",
+    createdAt,
+  };
+}
+
+function relation(id: string, fromId: string, toId: string): RelationRecord {
+  return {
+    id,
+    fromId,
+    toId,
+    label: "friend",
+    createdAt: 1,
+  };
+}
+
+beforeEach(() => {
+  vi.resetModules();
+  useFreshIndexedDb();
+});
+
+describe("facesDb schema", () => {
+  it("creates a fresh version 8 database with every object store", async () => {
+    const { facesDb } = await import("./face-db");
+
+    await expect(facesDb.listPersons()).resolves.toEqual([]);
+
+    const database = await openRawDatabase();
+    expect(database.version).toBe(8);
+    expect(Array.from(database.objectStoreNames)).toEqual(EXPECTED_STORES);
+    database.close();
+  });
+
+  it("upgrades a legacy database without dropping existing people", async () => {
+    const legacyPerson = person("legacy-person", 42);
+    const legacyDatabase = await openRawDatabase(1, (database, transaction) => {
+      database.createObjectStore("persons", { keyPath: "id" });
+      transaction.objectStore("persons").put(legacyPerson);
+    });
+    legacyDatabase.close();
+
+    const { facesDb } = await import("./face-db");
+    await expect(facesDb.listPersons()).resolves.toEqual([legacyPerson]);
+
+    const upgradedDatabase = await openRawDatabase();
+    expect(upgradedDatabase.version).toBe(8);
+    expect(Array.from(upgradedDatabase.objectStoreNames)).toEqual(EXPECTED_STORES);
+    upgradedDatabase.close();
+  });
+});
+
+describe("facesDb people and relations", () => {
+  it("creates, reads, updates, and deletes a person", async () => {
+    const { facesDb } = await import("./face-db");
+    const original = person("person-1");
+
+    await facesDb.putPerson(original);
+    await expect(facesDb.listPersons()).resolves.toEqual([original]);
+
+    const updated = { ...original, name: "Updated person", updatedAt: 2 };
+    await facesDb.putPerson(updated);
+    await expect(facesDb.listPersons()).resolves.toEqual([updated]);
+
+    await facesDb.deletePerson(original.id);
+    await expect(facesDb.listPersons()).resolves.toEqual([]);
+  });
+
+  it("creates, reads, updates, and deletes a relation", async () => {
+    const { facesDb } = await import("./face-db");
+    const original = relation("relation-1", "person-1", "person-2");
+
+    await facesDb.putRelation(original);
+    await expect(facesDb.listRelations()).resolves.toEqual([original]);
+
+    const updated = { ...original, label: "classmate", updatedAt: 2 };
+    await facesDb.putRelation(updated);
+    await expect(facesDb.listRelations()).resolves.toEqual([updated]);
+
+    await facesDb.deleteRelation(original.id);
+    await expect(facesDb.listRelations()).resolves.toEqual([]);
+  });
+
+  it("deleting a person cascades only relations connected to that person", async () => {
+    const { facesDb } = await import("./face-db");
+    await Promise.all([
+      facesDb.putPerson(person("person-1", 3)),
+      facesDb.putPerson(person("person-2", 2)),
+      facesDb.putPerson(person("person-3", 1)),
+    ]);
+    await Promise.all([
+      facesDb.putRelation(relation("remove-me", "person-1", "person-2")),
+      facesDb.putRelation(relation("keep-me", "person-2", "person-3")),
+    ]);
+
+    await facesDb.deletePerson("person-1");
+
+    await expect(facesDb.listPersons()).resolves.toEqual([
+      person("person-2", 2),
+      person("person-3", 1),
+    ]);
+    await expect(facesDb.listRelations()).resolves.toEqual([
+      relation("keep-me", "person-2", "person-3"),
+    ]);
+  });
+});
+
+describe("facesDb life events and reminders", () => {
+  it("supports life-event CRUD", async () => {
+    const { facesDb } = await import("./face-db");
+    const original: LifeEventRecord = {
+      id: "event-1",
+      date: "2026-08-26",
+      title: "Meet a friend",
+      createdAt: 1,
+    };
+
+    await facesDb.putLifeEvent(original);
+    await expect(facesDb.listLifeEvents()).resolves.toEqual([original]);
+
+    const updated = { ...original, detail: "Bring the photo album" };
+    await facesDb.putLifeEvent(updated);
+    await expect(facesDb.listLifeEvents()).resolves.toEqual([updated]);
+
+    await facesDb.deleteLifeEvent(original.id);
+    await expect(facesDb.listLifeEvents()).resolves.toEqual([]);
+  });
+
+  it("supports reminder CRUD", async () => {
+    const { facesDb } = await import("./face-db");
+    const original: ReminderRecord = {
+      id: "reminder-1",
+      title: "Send a message",
+      done: false,
+      createdAt: 1,
+    };
+
+    await facesDb.putReminder(original);
+    await expect(facesDb.listReminders()).resolves.toEqual([original]);
+
+    const updated = { ...original, done: true };
+    await facesDb.putReminder(updated);
+    await expect(facesDb.listReminders()).resolves.toEqual([updated]);
+
+    await facesDb.deleteReminder(original.id);
+    await expect(facesDb.listReminders()).resolves.toEqual([]);
+  });
+});
+
+describe("competition demo data", () => {
+  it("loads exactly 50 people and 80 relations and remains idempotent", async () => {
+    const { facesDb } = await import("./face-db");
+    const { getDemoDataStatus, loadDemoData } = await import("./demo-data");
+
+    await expect(loadDemoData()).resolves.toMatchObject({ people: 50, relations: 80, events: 25 });
+    await expect(getDemoDataStatus()).resolves.toEqual({ people: 50, relations: 80 });
+    await expect(facesDb.listLifeEvents()).resolves.toHaveLength(25);
+    await expect(facesDb.listReminders()).resolves.toHaveLength(3);
+
+    await loadDemoData();
+    await expect(getDemoDataStatus()).resolves.toEqual({ people: 50, relations: 80 });
+    await expect(facesDb.listLifeEvents()).resolves.toHaveLength(25);
+    await expect(facesDb.listReminders()).resolves.toHaveLength(3);
+  });
+
+  it("clears only demo records and preserves user-owned records", async () => {
+    const { facesDb } = await import("./face-db");
+    const { clearDemoData, getDemoDataStatus, loadDemoData } = await import("./demo-data");
+    const firstUser = person("user-person-1", 2);
+    const secondUser = person("user-person-2", 1);
+    const userRelation = relation("user-relation", firstUser.id, secondUser.id);
+    const userEvent: LifeEventRecord = {
+      id: "user-event",
+      date: "2026-08-26",
+      title: "User event",
+      createdAt: 1,
+    };
+    const userReminder: ReminderRecord = {
+      id: "user-reminder",
+      title: "User reminder",
+      done: false,
+      createdAt: 1,
+    };
+    await Promise.all([
+      facesDb.putPerson(firstUser),
+      facesDb.putPerson(secondUser),
+      facesDb.putRelation(userRelation),
+      facesDb.putLifeEvent(userEvent),
+      facesDb.putReminder(userReminder),
+    ]);
+    await loadDemoData();
+
+    await clearDemoData();
+
+    await expect(getDemoDataStatus()).resolves.toEqual({ people: 0, relations: 0 });
+    await expect(facesDb.listPersons()).resolves.toEqual([firstUser, secondUser]);
+    await expect(facesDb.listRelations()).resolves.toEqual([userRelation]);
+    await expect(facesDb.listLifeEvents()).resolves.toEqual([userEvent]);
+    await expect(facesDb.listReminders()).resolves.toEqual([userReminder]);
+  });
+});

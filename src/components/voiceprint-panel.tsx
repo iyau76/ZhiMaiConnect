@@ -184,7 +184,9 @@ export function VoiceprintPanel() {
               {t("相似度")} {pending.best.score.toFixed(3)} · {verdict(pending.best.score)}
             </p>
           ) : (
-            <p className="text-[11px] text-muted-foreground">{t("声纹库还是空的，这是第一条样本")}</p>
+            <p className="text-[11px] text-muted-foreground">
+              {t("声纹库还是空的，这是第一条样本")}
+            </p>
           )}
 
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -217,7 +219,9 @@ export function VoiceprintPanel() {
       )}
 
       <p className="rounded-lg border border-dashed border-border p-3 text-[11px] leading-relaxed text-muted-foreground">
-        {t("声纹为本机统计式近似特征，只能提示「疑似同一说话人」，不具备司法鉴定效力，不能单独作为证据。")}
+        {t(
+          "声纹为本机统计式近似特征，只能提示「疑似同一说话人」，不具备司法鉴定效力，不能单独作为证据。",
+        )}
       </p>
 
       {prints.length === 0 ? (
@@ -232,7 +236,8 @@ export function VoiceprintPanel() {
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{record.name}</p>
                 <p className="text-[10px] text-muted-foreground">
-                  {Math.round(record.durationMs / 1000)}s · {new Date(record.createdAt).toLocaleString()}
+                  {Math.round(record.durationMs / 1000)}s ·{" "}
+                  {new Date(record.createdAt).toLocaleString()}
                   {record.personId ? ` · ${getLang() === "en" ? "linked" : "已关联档案"}` : ""}
                 </p>
                 <div className="mt-1">

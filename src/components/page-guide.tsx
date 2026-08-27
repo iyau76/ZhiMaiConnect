@@ -23,7 +23,6 @@ export function PageGuide({
 
   void id;
 
-
   if (!open) {
     return (
       <button
@@ -41,7 +40,12 @@ export function PageGuide({
   }
 
   return (
-    <div className={cn("relative rounded-xl border border-primary/25 bg-primary/5 p-3 pr-9", className)}>
+    <div
+      className={cn(
+        "relative rounded-xl border border-primary/25 bg-primary/5 p-3 pr-9",
+        className,
+      )}
+    >
       <button
         type="button"
         onClick={close}
@@ -53,7 +57,10 @@ export function PageGuide({
       <p className="text-[12px] font-medium">{t(title)}</p>
       <ul className="mt-1.5 space-y-1">
         {points.map((point) => (
-          <li key={point} className="flex gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          <li
+            key={point}
+            className="flex gap-1.5 text-[11px] leading-relaxed text-muted-foreground"
+          >
             <span className="text-primary">·</span>
             <span>{t(point)}</span>
           </li>

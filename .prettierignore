@@ -1,7 +1,16 @@
 node_modules
 dist
 .output
+.tanstack
 .vinxi
+.wrangler
+coverage
+playwright-report
+test-results
+.lovable
+.codex/skills
+doc
+AGENTS.md
 pnpm-lock.yaml
 package-lock.json
 bun.lock

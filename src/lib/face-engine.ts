@@ -9,7 +9,6 @@ type FaceApi = typeof import("@vladmandic/face-api");
 let apiPromise: Promise<FaceApi> | null = null;
 
 export function loadFaceEngine(onProgress?: (text: string) => void) {
-
   if (apiPromise) return apiPromise;
   apiPromise = (async () => {
     onProgress?.("正在下载人脸模型…");
@@ -28,7 +27,6 @@ export function loadFaceEngine(onProgress?: (text: string) => void) {
       faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
       faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
     ]);
-
 
     // 预热：先跑一张空图，把 WebGL kernel 编译提前做掉，第一次识别就不会卡好几秒
     try {
@@ -57,7 +55,6 @@ function ensureSsd(faceapi: FaceApi) {
   ssdReady ??= faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL).then(() => undefined);
   return ssdReady;
 }
-
 
 export interface DetectedFace {
   box: { x: number; y: number; width: number; height: number };
@@ -160,11 +157,9 @@ export async function detectFaces(dataUrl: string): Promise<{
             width: b.width / 2,
             height: b.height / 2,
           })) ?? null;
-
       }
     }
     if (boxes && boxes.length) {
-
       const workW = "naturalWidth" in work ? work.naturalWidth : work.width;
       const workH = "naturalHeight" in work ? work.naturalHeight : work.height;
       for (const b of boxes) {
@@ -180,7 +175,7 @@ export async function detectFaces(dataUrl: string): Promise<{
         const ctx = crop.getContext("2d");
         if (!ctx) continue;
         ctx.drawImage(work as CanvasImageSource, sx, sy, sw, sh, 0, 0, 224, 224);
-        // eslint-disable-next-line no-await-in-loop
+
         const single = (await faceapi
           .detectSingleFace(
             crop as never,
@@ -192,7 +187,10 @@ export async function detectFaces(dataUrl: string): Promise<{
           single?.descriptor ??
           ((await faceapi.computeFaceDescriptor(crop as never)) as unknown as Float32Array);
         if (!descriptor) continue;
-        results.push({ detection: { box: { x: b.x, y: b.y, width: b.width, height: b.height } }, descriptor });
+        results.push({
+          detection: { box: { x: b.x, y: b.y, width: b.width, height: b.height } },
+          descriptor,
+        });
       }
       if (results.length) {
         return {
@@ -213,8 +211,6 @@ export async function detectFaces(dataUrl: string): Promise<{
   } catch {
     /* 快路失败就走下面的 face-api 兜底 */
   }
-
-
 
   function iou(a: DetectedFace["box"], b: DetectedFace["box"]) {
     const x1 = Math.max(a.x, b.x);
@@ -247,28 +243,26 @@ export async function detectFaces(dataUrl: string): Promise<{
         source: work,
         options: new faceapi.SsdMobilenetv1Options({ minConfidence: 0.2, maxResults: 10 }),
       };
-
     },
   ];
 
   for (let i = 0; i < passes.length; i += 1) {
-    // eslint-disable-next-line no-await-in-loop
     const { source, options } = await passes[i]();
-    // eslint-disable-next-line no-await-in-loop
+
     const found = (await faceapi
       .detectAllFaces(source as never, options as never)
       .withFaceLandmarks(true)
       .withFaceDescriptors()) as unknown as Result[];
     for (const item of found) {
-      if (results.some((existing) => iou(existing.detection.box, item.detection.box) > 0.35)) continue;
+      if (results.some((existing) => iou(existing.detection.box, item.detection.box) > 0.35))
+        continue;
       results.push(item);
     }
     // 检到人脸立刻收工，后面的增强重试只服务于「一无所获」的情况
     if (results.length > 0) break;
-    // eslint-disable-next-line no-await-in-loop
+
     await yieldToUi();
   }
-
 
   return {
     width: image.naturalWidth,
@@ -284,7 +278,6 @@ export async function detectFaces(dataUrl: string): Promise<{
     }),
   };
 }
-
 
 export function distance(a: number[], b: number[]) {
   let sum = 0;

@@ -1,8 +1,8 @@
-/** 把人物关系库和事务导出成 Markdown / Word / Excel / PDF（浏览器本地生成，不上传） */
+/** 把人物关系库和事务导出成 Markdown / Word / PDF（浏览器本地生成，不上传） */
 
 import { facesDb, type PersonRecord, type ProjectRecord, type RelationRecord } from "./face-db";
 
-export type ExportFormat = "md" | "docx" | "xlsx" | "pdf";
+export type ExportFormat = "md" | "docx" | "pdf";
 export type ExportScope = "people" | "projects";
 
 const STATUS_LABEL: Record<ProjectRecord["status"], string> = {
@@ -35,7 +35,12 @@ function nameMap(persons: PersonRecord[]) {
 }
 
 async function buildPeople(): Promise<ExportPayload> {
-  const [persons, relations] = await Promise.all([facesDb.listPersons(), facesDb.listRelations()]);
+  const [persons, relations, events, reminders] = await Promise.all([
+    facesDb.listPersons(),
+    facesDb.listRelations(),
+    facesDb.listLifeEvents(),
+    facesDb.listReminders(),
+  ]);
   const nameOf = nameMap(persons);
 
   const personRows = persons.map((person) => {
@@ -60,6 +65,26 @@ async function buildPeople(): Promise<ExportPayload> {
     (relation.note ?? "").replace(/\s+/g, " "),
   ]);
 
+  const eventRows = events.map((event) => [
+    event.date,
+    event.dateEnd ?? "",
+    event.precision ?? "day",
+    event.title,
+    event.kind ?? "",
+    (event.personIds ?? []).map((id) => nameOf(id)).join("、"),
+    event.place ?? "",
+    (event.detail ?? "").replace(/\s+/g, " "),
+  ]);
+
+  const reminderRows = reminders.map((reminder) => [
+    reminder.due ?? "",
+    reminder.done ? "已完成" : "待办",
+    reminder.kind ?? "custom",
+    reminder.title,
+    (reminder.personIds ?? []).map((id) => nameOf(id)).join("、"),
+    (reminder.detail ?? "").replace(/\s+/g, " "),
+  ]);
+
   return {
     title: "知脉 Connect · 人物关系库",
     sheets: [
@@ -72,6 +97,16 @@ async function buildPeople(): Promise<ExportPayload> {
         name: "人物关系",
         head: ["来源", "方向", "对象", "关系", "备注"],
         rows: relationRows,
+      },
+      {
+        name: "日历事件",
+        head: ["开始", "结束", "日期精度", "事件", "类型", "相关人物", "地点", "详情"],
+        rows: eventRows,
+      },
+      {
+        name: "提醒待办",
+        head: ["到期", "状态", "类型", "提醒", "相关人物", "详情"],
+        rows: reminderRows,
       },
     ],
   };
@@ -87,7 +122,10 @@ async function buildProjects(): Promise<ExportPayload> {
     PRIORITY_LABEL[project.priority],
     project.department ?? "",
     project.ownerName || nameOf(project.ownerId) || "",
-    (project.memberIds ?? []).map((id) => nameOf(id)).filter(Boolean).join("、"),
+    (project.memberIds ?? [])
+      .map((id) => nameOf(id))
+      .filter(Boolean)
+      .join("、"),
     project.due ?? "",
     (project.tags ?? []).join("、"),
     (project.detail ?? "").replace(/\s+/g, " "),
@@ -184,8 +222,19 @@ ${tables}
 }
 
 async function exportDocx(payload: ExportPayload, filename: string) {
-  const { Document, Packer, Paragraph, Table, TableCell, TableRow, TextRun, HeadingLevel, WidthType, ShadingType, BorderStyle } =
-    await import("docx");
+  const {
+    Document,
+    Packer,
+    Paragraph,
+    Table,
+    TableCell,
+    TableRow,
+    TextRun,
+    HeadingLevel,
+    WidthType,
+    ShadingType,
+    BorderStyle,
+  } = await import("docx");
 
   const border = { style: BorderStyle.SINGLE, size: 1, color: "D8D3E0" };
   const borders = { top: border, bottom: border, left: border, right: border };
@@ -226,7 +275,9 @@ async function exportDocx(payload: ExportPayload, filename: string) {
         columnWidths: widths,
         rows: [
           new TableRow({ children: sheet.head.map((h, i) => cell(h, i, true)) }),
-          ...sheet.rows.map((row) => new TableRow({ children: row.map((c, i) => cell(c, i, false)) })),
+          ...sheet.rows.map(
+            (row) => new TableRow({ children: row.map((c, i) => cell(c, i, false)) }),
+          ),
         ],
       }),
     );
@@ -237,7 +288,10 @@ async function exportDocx(payload: ExportPayload, filename: string) {
     sections: [
       {
         properties: {
-          page: { size: { width: 12240, height: 15840 }, margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } },
+          page: {
+            size: { width: 12240, height: 15840 },
+            margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+          },
         },
         children,
       },
@@ -245,21 +299,6 @@ async function exportDocx(payload: ExportPayload, filename: string) {
   });
 
   download(await Packer.toBlob(doc), filename);
-}
-
-async function exportXlsx(payload: ExportPayload, filename: string) {
-  const XLSX = await import("xlsx");
-  const book = XLSX.utils.book_new();
-  for (const sheet of payload.sheets) {
-    const sheetData = XLSX.utils.aoa_to_sheet([sheet.head, ...sheet.rows]);
-    sheetData["!cols"] = sheet.head.map((head, index) => {
-      const longest = Math.max(head.length, ...sheet.rows.map((row) => (row[index] ?? "").length));
-      return { wch: Math.min(48, Math.max(10, longest + 2)) };
-    });
-    XLSX.utils.book_append_sheet(book, sheetData, sheet.name.slice(0, 30));
-  }
-  const out = XLSX.write(book, { bookType: "xlsx", type: "array" });
-  download(new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), filename);
 }
 
 function exportPdf(payload: ExportPayload) {
@@ -278,13 +317,13 @@ export async function exportData(scope: ExportScope, format: ExportFormat) {
 
   switch (format) {
     case "md":
-      download(new Blob([toMarkdown(payload)], { type: "text/markdown;charset=utf-8" }), `${base}.md`);
+      download(
+        new Blob([toMarkdown(payload)], { type: "text/markdown;charset=utf-8" }),
+        `${base}.md`,
+      );
       break;
     case "docx":
       await exportDocx(payload, `${base}.docx`);
-      break;
-    case "xlsx":
-      await exportXlsx(payload, `${base}.xlsx`);
       break;
     case "pdf":
       exportPdf(payload);

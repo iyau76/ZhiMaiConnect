@@ -120,74 +120,81 @@ export function InvestigatePanel({ preset }: { preset: ProviderPreset }) {
 
   return (
     <div className="min-w-0 space-y-5">
-    <section className="flex min-w-0 flex-col gap-5 rounded-2xl border border-border bg-card/60 p-5">
-      <header>
-        <h2 className="flex items-baseline gap-2.5">
-          <span className="font-display text-xl leading-none tracking-tight">{t("探案协助")}</span>
-          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Assist</span>
-        </h2>
-        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          {t("基于库里的人物、关系与材料，给出下一步走访建议、询问提纲和利益牵扯分析。结论仅供参考，需人工复核。")}
-        </p>
-      </header>
+      <section className="flex min-w-0 flex-col gap-5 rounded-2xl border border-border bg-card/60 p-5">
+        <header>
+          <h2 className="flex items-baseline gap-2.5">
+            <span className="font-display text-xl leading-none tracking-tight">
+              {t("探案协助")}
+            </span>
+            <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
+              Assist
+            </span>
+          </h2>
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+            {t(
+              "基于库里的人物、关系与材料，给出下一步走访建议、询问提纲和利益牵扯分析。结论仅供参考，需人工复核。",
+            )}
+          </p>
+        </header>
 
-      <div className="flex flex-wrap gap-1.5">
-        {FOCUS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setFocus(item.id)}
-            className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
-              focus === item.id
-                ? "border-primary bg-primary/10 text-primary"
-                : "border-border text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {getLang() === "en" ? item.en : item.zh}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <span>
-          {t("人物")} {people.length} · {t("关系")} {relations.length} · {t("材料")} {evidence.length}
-        </span>
-        <Button className="rounded-full px-5" onClick={() => void run()} disabled={busy}>
-          {busy ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-          ) : (
-            <Target className="size-3.5" aria-hidden="true" />
-          )}
-          {t("生成建议")}
-        </Button>
-      </div>
-
-      <div className="space-y-2">
-        <Textarea
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-          rows={2}
-          className="text-sm"
-          placeholder={t("也可以直接问，例：李强和张伟的说法哪里对不上？")}
-        />
-        <Button
-          variant="outline"
-          className="rounded-full px-4"
-          disabled={busy || !question.trim()}
-          onClick={() => void run(question.trim())}
-        >
-          <Search className="size-3.5" aria-hidden="true" />
-          {t("问这个")}
-        </Button>
-      </div>
-
-      {answer && (
-        <div className="rounded-xl border border-border bg-background/60 p-4">
-          <MarkdownView text={answer} />
+        <div className="flex flex-wrap gap-1.5">
+          {FOCUS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setFocus(item.id)}
+              className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                focus === item.id
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {getLang() === "en" ? item.en : item.zh}
+            </button>
+          ))}
         </div>
-      )}
-    </section>
-    <PlanBoard preset={preset} />
+
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <span>
+            {t("人物")} {people.length} · {t("关系")} {relations.length} · {t("材料")}{" "}
+            {evidence.length}
+          </span>
+          <Button className="rounded-full px-5" onClick={() => void run()} disabled={busy}>
+            {busy ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Target className="size-3.5" aria-hidden="true" />
+            )}
+            {t("生成建议")}
+          </Button>
+        </div>
+
+        <div className="space-y-2">
+          <Textarea
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            rows={2}
+            className="text-sm"
+            placeholder={t("也可以直接问，例：李强和张伟的说法哪里对不上？")}
+          />
+          <Button
+            variant="outline"
+            className="rounded-full px-4"
+            disabled={busy || !question.trim()}
+            onClick={() => void run(question.trim())}
+          >
+            <Search className="size-3.5" aria-hidden="true" />
+            {t("问这个")}
+          </Button>
+        </div>
+
+        {answer && (
+          <div className="rounded-xl border border-border bg-background/60 p-4">
+            <MarkdownView text={answer} />
+          </div>
+        )}
+      </section>
+      <PlanBoard preset={preset} />
     </div>
   );
 }

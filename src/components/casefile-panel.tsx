@@ -1,13 +1,4 @@
-import {
-  FileText,
-  Loader2,
-  Mic,
-  Package,
-  Square,
-  Trash2,
-  Upload,
-  Sparkles,
-} from "lucide-react";
+import { FileText, Loader2, Mic, Package, Square, Trash2, Upload, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -16,12 +7,7 @@ import { Input } from "@/components/ui/input";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  facesDb,
-  type EvidenceKind,
-  type EvidenceRecord,
-  type PersonRecord,
-} from "@/lib/face-db";
+import { facesDb, type EvidenceKind, type EvidenceRecord, type PersonRecord } from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
 import { SPEECH_VARIANTS } from "@/lib/dialects";
 import { makeSource } from "@/lib/provenance";
@@ -62,7 +48,10 @@ interface Extracted {
 }
 
 function parseJson(text: string): Extracted {
-  const cleaned = text.replace(/^\s*```(?:json)?/i, "").replace(/```\s*$/, "").trim();
+  const cleaned = text
+    .replace(/^\s*```(?:json)?/i, "")
+    .replace(/```\s*$/, "")
+    .trim();
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error(t("AI 没有返回可解析的内容"));
@@ -101,7 +90,6 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
   const recorderRef = useRef<Recorder | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-
   const refresh = useCallback(async () => {
     const [e, p] = await Promise.all([facesDb.listEvidence(), facesDb.listPersons()]);
     setRecords(e);
@@ -125,7 +113,11 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
         preset: audioPreset ?? preset,
         filename,
         language: sttLang,
-        hint: people.map((person) => person.name).join("、").slice(0, 300) || undefined,
+        hint:
+          people
+            .map((person) => person.name)
+            .join("、")
+            .slice(0, 300) || undefined,
       });
 
       if (!result) throw new Error(t("没有识别到语音内容"));
@@ -197,7 +189,6 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
     await refresh();
     toast.success(t("材料已归档"));
   };
-
 
   /** 从一条材料里抽实体 → 写回人物库和关系网，并记录来源 */
   const extract = async (record: EvidenceRecord) => {
@@ -273,7 +264,6 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
         links += 1;
       }
 
-
       await facesDb.putEvidence({
         ...record,
         entities: (parsed.entities ?? [])
@@ -302,7 +292,9 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
       <header className="flex items-center justify-between gap-3">
         <h2 className="flex items-baseline gap-2.5">
           <span className="font-display text-xl leading-none tracking-tight">{t("卷宗")}</span>
-          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Evidence</span>
+          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
+            Evidence
+          </span>
         </h2>
         <span className="text-[11px] text-muted-foreground">
           {records.length} {t("条材料")}
@@ -319,7 +311,6 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
         <TabsContent value="voice">
           <VoiceprintPanel />
         </TabsContent>
-
 
         <TabsContent value="new" className="space-y-4 pt-4">
           <div className="flex flex-wrap gap-1.5">
@@ -382,9 +373,7 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
             </span>
           </div>
 
-
           <div className="flex flex-wrap items-center gap-2">
-
             <Button
               type="button"
               variant={recording ? "destructive" : "outline"}
@@ -450,7 +439,9 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
 
         <TabsContent value="list" className="space-y-3 pt-4">
           {records.length === 0 ? (
-            <p className="py-10 text-center text-xs text-muted-foreground">{t("还没有归档任何材料")}</p>
+            <p className="py-10 text-center text-xs text-muted-foreground">
+              {t("还没有归档任何材料")}
+            </p>
           ) : (
             records.map((record) => {
               const Icon = KIND_META[record.kind].icon;
@@ -474,7 +465,8 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
                           <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
                             {getLang() === "en"
                               ? SPEECH_VARIANTS.find((item) => item.id === record.speechVariant)?.en
-                              : SPEECH_VARIANTS.find((item) => item.id === record.speechVariant)?.zh}
+                              : SPEECH_VARIANTS.find((item) => item.id === record.speechVariant)
+                                  ?.zh}
                           </span>
                         )}
                       </div>
@@ -485,7 +477,9 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
                         size="sm"
                         variant="ghost"
                         className="h-7 px-2 text-[11px]"
-                        title={t("让 AI 把这段材料里出现的人物、地点、物品、时间、组织挑出来做成标签，方便检索和对上人物档案")}
+                        title={t(
+                          "让 AI 把这段材料里出现的人物、地点、物品、时间、组织挑出来做成标签，方便检索和对上人物档案",
+                        )}
                         disabled={busy !== null}
                         onClick={() => void extract(record)}
                       >
