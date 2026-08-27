@@ -96,10 +96,12 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   };
 
   const addFrom = async (item: UpcomingItem) => {
+    const today = new Date();
+    const occurrence = new Date(today.getFullYear(), today.getMonth(), today.getDate() + item.days);
     const record: ReminderRecord = {
       id: crypto.randomUUID(),
       title: item.kind === "birthday" ? `给 ${item.person?.name} 送生日祝福` : `${item.title}问候`,
-      due: undefined,
+      due: todayStr(occurrence),
       personIds: item.person ? [item.person.id] : [],
       kind: item.kind,
       done: false,
@@ -107,7 +109,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     };
     await facesDb.putReminder(record);
     await load();
-    toast.success("已加入待办");
+    toast.success("已加入待办，并同步显示在日历");
   };
 
   const addManual = async () => {
@@ -376,6 +378,9 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
             添加
           </Button>
         </div>
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          填写日期的待办会同步显示在日历；不填日期时只保留在本页。
+        </p>
 
         <ul className="mt-4 space-y-1.5">
           {[...open, ...done].map((record) => (

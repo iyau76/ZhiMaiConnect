@@ -122,6 +122,7 @@ function compactRelation(relation: RelationRecord, names: Map<string, string>) {
     label: cleanText(relation.label, 100),
     mutual: relation.mutual,
     note: cleanText(relation.note, 300),
+    basis: cleanText(relation.basis, 500),
     confirmationStatus: relation.confirmationStatus ?? "confirmed",
     updatedAt: relation.updatedAt ?? relation.createdAt,
   };

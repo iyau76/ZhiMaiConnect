@@ -18,7 +18,7 @@ for (const width of [390, 768, 1440]) {
     await page.getByRole("tab", { name: "关系网" }).click();
     const graph = page.locator("svg").filter({ has: page.locator("#relation-arrow") });
     await graph
-      .getByRole("button", { name: /点选看关系/ })
+      .getByRole("button", { name: /单击聚焦/ })
       .first()
       .click();
     await expect(page.getByRole("button", { name: "打开人物卡" })).toBeVisible();

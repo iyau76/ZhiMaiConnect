@@ -260,7 +260,7 @@ test("补充并重新整理会保留人工字段及其来源", async ({ page, mo
   expect(mockNetwork.visionRequests).toHaveLength(2);
 });
 
-test("关系网聚焦后只保留直接邻居，并能打开人物详情", async ({ page }) => {
+test("关系网单击只淡化无关节点，双击开人物卡，并可在图上新建自定义关系", async ({ page }) => {
   await openApp(page);
   await seedIndexedDb(page, {
     persons: [
@@ -360,12 +360,17 @@ test("关系网聚焦后只保留直接邻居，并能打开人物详情", async
   await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
   await page.getByRole("tab", { name: "关系网" }).click();
   const graph = page.locator("svg").filter({ has: page.locator("#relation-arrow") });
-  await graph.getByRole("button", { name: /^陈安 ·/ }).click();
+  const personA = graph.getByRole("button", { name: /^陈安 ·/ });
+  const personB = graph.getByRole("button", { name: /^赵宇 ·/ });
+  const personD = graph.getByRole("button", { name: /^丁晨 ·/ });
+  await personA.click();
 
   await expect(graph.getByRole("button", { name: /^陈安 ·/ })).toHaveCount(1);
   await expect(graph.getByRole("button", { name: /^赵宇 ·/ })).toHaveCount(1);
   await expect(graph.getByRole("button", { name: /^唐悦 ·/ })).toHaveCount(1);
-  await expect(graph.getByRole("button", { name: /^丁晨 ·/ })).toHaveCount(0);
+  await expect(graph.getByRole("button", { name: /^丁晨 ·/ })).toHaveCount(1);
+  await expect(personB).toHaveAttribute("opacity", "1");
+  await expect(personD).toHaveAttribute("opacity", "0.25");
   const openProfile = page.getByRole("button", { name: "打开人物卡" });
   await expect(openProfile).toBeVisible();
   const detail = openProfile.locator("../..");
@@ -374,6 +379,28 @@ test("关系网聚焦后只保留直接邻居，并能打开人物详情", async
   await expect(detail).toContainText("唐悦");
   await expect(detail).toContainText("朋友");
 
+  await graph.locator('[data-graph-background="true"]').click({ position: { x: 8, y: 8 } });
+  await expect(personD).toHaveAttribute("opacity", "1");
+  await expect(openProfile).toHaveCount(0);
+
+  await personA.click();
+  await expect(personD).toHaveAttribute("opacity", "0.25");
+
+  await page.getByRole("button", { name: "新建关系" }).click();
+  const composer = page.getByRole("region", { name: "新建关系" });
+  await expect(composer).toContainText("陈安");
+  await personD.click();
+  await composer.getByLabel("关系名称").fill("共同创业伙伴");
+  await composer.getByRole("button", { name: "确认建立" }).click();
+  await expect(composer).toHaveCount(0);
+  await expect
+    .poll(async () =>
+      (await readIndexedDbStore<{ label?: string }>(page, "relations")).some(
+        (relation) => relation.label === "共同创业伙伴",
+      ),
+    )
+    .toBe(true);
+
   await graph.getByRole("button", { name: /查看关系详情：陈安 ⇄ 赵宇/ }).click();
   const relationDetail = page.getByRole("region", { name: "关系详情" });
   await expect(relationDetail).toContainText("陈安 → 赵宇");
@@ -381,7 +408,7 @@ test("关系网聚焦后只保留直接邻居，并能打开人物详情", async
   await expect(relationDetail).toContainText("合成演示：校友活动记录");
   await expect(relationDetail).toContainText("共同负责签到");
 
-  await openProfile.click();
+  await personA.dblclick();
   const dialog = page.getByRole("dialog");
   await expect(
     dialog.getByText("姓名", { exact: true }).locator("..").getByRole("textbox"),
@@ -637,6 +664,40 @@ test("日历中的既有事件可以原位编辑而不是重复新建", async ({
   expect(events).toEqual([
     expect.objectContaining({ id: "event-direct-edit", title: "新事件标题", detail: "新细节" }),
   ]);
+});
+
+test("带日期的待办会进入月历和时间轴，并可在日历中完成", async ({ page }) => {
+  await openApp(page);
+  const due = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+  await seedIndexedDb(page, {
+    reminders: [
+      {
+        id: "reminder-calendar",
+        title: "给外婆打电话",
+        detail: "确认周末是否回家吃饭",
+        due,
+        kind: "custom",
+        done: false,
+        createdAt: NOW,
+      },
+    ],
+  });
+
+  await clickVisible(page, page.getByRole("button", { name: /^日历/ }));
+  await expect(page.getByRole("button", { name: new RegExp(`^${due}.*1 个待办`) })).toBeVisible();
+
+  const dayTasks = page.getByRole("region", { name: `${due} 的待办` });
+  await expect(dayTasks).toContainText("给外婆打电话");
+  await expect(dayTasks).toContainText("确认周末是否回家吃饭");
+  await dayTasks.getByRole("button", { name: "完成待办：给外婆打电话" }).click();
+  await expect(dayTasks.getByText("给外婆打电话")).toHaveClass(/line-through/);
+
+  const stored = await readIndexedDbStore<{ id: string; done: boolean }>(page, "reminders");
+  expect(stored).toEqual([expect.objectContaining({ id: "reminder-calendar", done: true })]);
+
+  await page.getByRole("button", { name: "时间轴" }).click();
+  const timeline = page.getByRole("heading", { name: "时间轴" }).locator("..");
+  await expect(timeline).toContainText("给外婆打电话");
 });
 
 test("资料不足时祝福与礼物建议明确提示缺口且保持可编辑", async ({ page }) => {

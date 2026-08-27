@@ -1,7 +1,9 @@
 /** 个人版：日历 —— 记得住的写到天，记不清的记到月/年或一段时间，都在时间轴上排好 */
 
 import {
+  BellRing,
   CalendarDays,
+  Check,
   ChevronLeft,
   ChevronRight,
   ListTree,
@@ -22,6 +24,7 @@ import {
   type LifeEventRecord,
   type PersonRecord,
   type PhotoNote,
+  type ReminderRecord,
 } from "@/lib/face-db";
 import { askText, parseLooseJson } from "@/lib/ai-text";
 import {
@@ -55,6 +58,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
   const [selected, setSelected] = useState(todayStr());
   const [persons, setPersons] = useState<PersonRecord[]>([]);
   const [events, setEvents] = useState<LifeEventRecord[]>([]);
+  const [reminders, setReminders] = useState<ReminderRecord[]>([]);
 
   // 表单
   const [precision, setPrecision] = useState<DatePrecision>("day");
@@ -68,9 +72,14 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [p, e] = await Promise.all([facesDb.listPersons(), facesDb.listLifeEvents()]);
+    const [p, e, r] = await Promise.all([
+      facesDb.listPersons(),
+      facesDb.listLifeEvents(),
+      facesDb.listReminders(),
+    ]);
     setPersons(p);
     setEvents(e);
+    setReminders(r);
   }, []);
 
   useEffect(() => {
@@ -110,6 +119,18 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
     return map;
   }, [events]);
 
+  /** 有明确截止日的待办直接落到月历；无日期待办仍只留在提醒页。 */
+  const remindersByDate = useMemo(() => {
+    const map = new Map<string, ReminderRecord[]>();
+    for (const reminder of reminders) {
+      if (!reminder.due) continue;
+      const rows = map.get(reminder.due) ?? [];
+      rows.push(reminder);
+      map.set(reminder.due, rows);
+    }
+    return map;
+  }, [reminders]);
+
   /** 覆盖当前月份、但记不清具体哪天的事件 */
   const fuzzyThisMonth = useMemo(
     () => events.filter((event) => !isExact(event) && touchesMonth(event, ym)),
@@ -130,16 +151,24 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
   }, [events, cells]);
 
   const timeline = useMemo(() => {
-    const sorted = [...events].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-    const groups = new Map<string, LifeEventRecord[]>();
-    for (const event of sorted) {
-      const key = event.date.slice(0, 4);
+    type TimelineItem =
+      | { kind: "event"; date: string; record: LifeEventRecord }
+      | { kind: "reminder"; date: string; record: ReminderRecord };
+    const sorted: TimelineItem[] = [
+      ...events.map((record): TimelineItem => ({ kind: "event", date: record.date, record })),
+      ...reminders.flatMap((record): TimelineItem[] =>
+        record.due ? [{ kind: "reminder", date: record.due, record }] : [],
+      ),
+    ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    const groups = new Map<string, TimelineItem[]>();
+    for (const item of sorted) {
+      const key = item.date.slice(0, 4);
       const arr = groups.get(key) ?? [];
-      arr.push(event);
+      arr.push(item);
       groups.set(key, arr);
     }
     return [...groups.entries()];
-  }, [events]);
+  }, [events, reminders]);
 
   const marksFor = (date: string) => {
     const md = date.slice(5);
@@ -254,7 +283,54 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
       .join("、");
 
   const dayEvents = byDate.get(selected) ?? [];
+  const dayReminders = remindersByDate.get(selected) ?? [];
   const dayMarks = marksFor(selected);
+
+  const toggleReminder = async (reminder: ReminderRecord) => {
+    await facesDb.putReminder({ ...reminder, done: !reminder.done });
+    await load();
+  };
+
+  const renderReminder = (reminder: ReminderRecord, showDate = false) => (
+    <li
+      key={`reminder-${reminder.id}`}
+      className={cn(
+        "flex items-start justify-between gap-3 rounded-lg border px-3 py-2",
+        reminder.done
+          ? "border-border bg-muted/30 text-muted-foreground"
+          : "border-rose-500/35 bg-rose-500/5",
+      )}
+    >
+      <div className="min-w-0">
+        {showDate && <p className="text-[11px] font-medium text-rose-600">{reminder.due}</p>}
+        <p className={cn("text-sm", reminder.done && "line-through")}>{reminder.title}</p>
+        {reminder.detail && <p className="text-xs text-muted-foreground">{reminder.detail}</p>}
+        {reminder.personIds && reminder.personIds.length > 0 && (
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            相关人物：{names(reminder.personIds)}
+          </p>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => void toggleReminder(reminder)}
+        className={cn(
+          "flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors",
+          reminder.done
+            ? "border-primary bg-primary text-primary-foreground"
+            : "border-border bg-background hover:border-primary hover:text-primary",
+        )}
+        aria-label={`${reminder.done ? "恢复待办" : "完成待办"}：${reminder.title}`}
+        title={reminder.done ? "标记为未完成" : "标记为已完成"}
+      >
+        {reminder.done ? (
+          <Check className="size-3.5" aria-hidden="true" />
+        ) : (
+          <BellRing className="size-3.5" aria-hidden="true" />
+        )}
+      </button>
+    </li>
+  );
 
   const renderEvent = (event: LifeEventRecord, showDate = false) => (
     <li
@@ -390,16 +466,26 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
               if (!date) return <span key={`empty-${index}`} />;
               const { birthdays, festival } = marksFor(date);
               const has = (byDate.get(date)?.length ?? 0) > 0;
+              const dateReminders = remindersByDate.get(date) ?? [];
+              const hasOpenReminder = dateReminders.some((reminder) => !reminder.done);
+              const hasDoneReminder = dateReminders.length > 0 && !hasOpenReminder;
               const inSpan = spanDays.has(date);
               const isToday = date === todayStr();
               const lunar = lunarByDate.get(date);
+              const reminderLabel = dateReminders.length
+                ? `${dateReminders.length} 个待办${hasOpenReminder ? "" : "，均已完成"}`
+                : "";
               return (
                 <button
                   key={date}
                   type="button"
                   onClick={() => setSelected(date)}
-                  title={[date, lunar?.full, festival?.name].filter(Boolean).join(" · ")}
-                  aria-label={[date, lunar?.full, festival?.name].filter(Boolean).join("，")}
+                  title={[date, lunar?.full, festival?.name, reminderLabel]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  aria-label={[date, lunar?.full, festival?.name, reminderLabel]
+                    .filter(Boolean)
+                    .join("，")}
                   className={cn(
                     "relative flex h-14 flex-col items-start justify-start rounded-md border p-1.5 text-xs transition-colors sm:h-16 md:h-[4.5rem] md:rounded-lg md:p-2",
                     selected === date
@@ -418,6 +504,8 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
                     {birthdays.length > 0 && <i className="size-1.5 rounded-full bg-primary" />}
                     {festival && <i className="size-1.5 rounded-full bg-amber-400" />}
                     {has && <i className="size-1.5 rounded-full bg-foreground" />}
+                    {hasOpenReminder && <i className="size-1.5 rounded-full bg-rose-500" />}
+                    {hasDoneReminder && <i className="size-1.5 rounded-full bg-emerald-500" />}
                   </span>
                 </button>
               );
@@ -430,6 +518,10 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
             节日
             <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-foreground align-middle" />
             记清了的事
+            <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-rose-500 align-middle" />
+            未完成待办
+            <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-emerald-500 align-middle" />
+            已完成待办
             <span className="ml-3 inline-block rounded bg-primary/10 px-1 align-middle">
               底色
             </span>{" "}
@@ -449,19 +541,25 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
         <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
           <h2 className="font-display text-lg tracking-tight">时间轴</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            按年份倒序，记清日期的标成实线，只记得大概的用虚线。
+            事件和有截止日期的待办按年份倒序；模糊日期事件使用虚线显示。
           </p>
           <div className="mt-4 space-y-5">
             {timeline.map(([y, list]) => (
               <div key={y}>
                 <h3 className="text-sm font-medium text-primary">{y} 年</h3>
                 <ul className="mt-2 space-y-1.5 border-l border-border pl-3">
-                  {list.map((event) => renderEvent(event, true))}
+                  {list.map((item) =>
+                    item.kind === "event"
+                      ? renderEvent(item.record, true)
+                      : renderReminder(item.record, true),
+                  )}
                 </ul>
               </div>
             ))}
             {timeline.length === 0 && (
-              <p className="text-xs text-muted-foreground">还没有记录，先在下面写一条。</p>
+              <p className="text-xs text-muted-foreground">
+                还没有事件或带日期的待办，先在下面写一条。
+              </p>
             )}
           </div>
         </section>
@@ -529,12 +627,29 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
         )}
 
         {precision === "day" && (
-          <ul className="mt-3 space-y-1.5">
-            {dayEvents.map((event) => renderEvent(event))}
-            {dayEvents.length === 0 && (
-              <li className="text-xs text-muted-foreground">这天还没有记录，写一条吧。</li>
+          <div className="mt-3 space-y-3">
+            {dayReminders.length > 0 && (
+              <section
+                className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-3"
+                role="region"
+                aria-label={`${selected} 的待办`}
+              >
+                <h4 className="flex items-center gap-1.5 text-xs font-medium">
+                  <BellRing className="size-3.5 text-rose-500" aria-hidden="true" />
+                  当天待办 · {dayReminders.filter((reminder) => !reminder.done).length} 项未完成
+                </h4>
+                <ul className="mt-2 space-y-1.5">
+                  {dayReminders.map((reminder) => renderReminder(reminder))}
+                </ul>
+              </section>
             )}
-          </ul>
+            <ul className="space-y-1.5">
+              {dayEvents.map((event) => renderEvent(event))}
+              {dayEvents.length === 0 && dayReminders.length === 0 && (
+                <li className="text-xs text-muted-foreground">这天还没有记录，写一条吧。</li>
+              )}
+            </ul>
+          </div>
         )}
 
         <div className="mt-4 space-y-2 border-t border-border pt-4">

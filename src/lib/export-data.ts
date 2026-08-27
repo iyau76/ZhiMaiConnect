@@ -62,6 +62,7 @@ async function buildPeople(): Promise<ExportPayload> {
     relation.mutual ? "↔ 双向" : "→ 单向",
     nameOf(relation.toId),
     relation.label,
+    (relation.basis ?? "").replace(/\s+/g, " "),
     (relation.note ?? "").replace(/\s+/g, " "),
   ]);
 
@@ -95,7 +96,7 @@ async function buildPeople(): Promise<ExportPayload> {
       },
       {
         name: "人物关系",
-        head: ["来源", "方向", "对象", "关系", "备注"],
+        head: ["来源", "方向", "对象", "关系", "依据", "备注"],
         rows: relationRows,
       },
       {

@@ -85,6 +85,34 @@ describe("intake runtime schema", () => {
     expect(parsed.people?.[0]).toEqual({ name: "唐悦", confidence: undefined });
   });
 
+  test("normalizes a model-generated decimal closeness to the nearest 1-5 level", () => {
+    const parsed = parseIngestCandidate(
+      '{"people":[{"name":"唐悦","closeness":4.6},{"name":"周宁","closeness":2.2}]}',
+    );
+    expect(parsed.people?.map((person) => person.closeness)).toEqual([5, 2]);
+  });
+
+  test("accepts relation basis and caps inferred relation confidence at 0.75", () => {
+    const parsed = parseIngestCandidate(
+      JSON.stringify({
+        relations: [
+          {
+            from: "贾赦",
+            to: "贾政",
+            label: "兄弟",
+            note: "AI 亲属推导，需核验",
+            basis: "推断依据：同为贾母之子",
+            confidence: 0.98,
+          },
+        ],
+      }),
+    );
+    expect(parsed.relations?.[0]).toMatchObject({
+      basis: "推断依据：同为贾母之子",
+      confidence: 0.75,
+    });
+  });
+
   test("rejects unknown fields and invalid confidence before a draft is shown", () => {
     expect(() => parseIngestCandidate('{"people":[{"name":"唐悦","invented":true}]}')).toThrow();
     expect(() => parseIngestCandidate('{"people":[{"name":"唐悦","confidence":2}]}')).toThrow();

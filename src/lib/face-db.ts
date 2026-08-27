@@ -101,6 +101,8 @@ export interface RelationRecord {
   /** true = 对等关系（双箭头），false = 有方向（单箭头），未设置则按关系词推断 */
   mutual?: boolean;
   note?: string;
+  /** 原文摘录或可审计的关系推导依据。 */
+  basis?: string;
   /** 来源证据 id，用于溯源；没有就是人工手填 */
   sourceId?: string;
   createdAt: number;

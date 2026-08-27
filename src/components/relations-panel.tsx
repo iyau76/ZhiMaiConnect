@@ -1,10 +1,13 @@
 import {
   ArrowLeftRight,
   ArrowRight,
+  Check,
   Loader2,
   Maximize2,
   Minimize2,
+  MousePointer2,
   Network,
+  Plus,
   Search,
   Sparkles,
   Tag,
@@ -48,6 +51,8 @@ interface Props {
   onOpenIntake: () => void;
 }
 
+const DEFAULT_RELATION_LABELS = ["朋友", "同事", "同学", "亲属", "夫妻", "合作伙伴"];
+
 function graphColor(key: string) {
   let hash = 0;
   for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) % 360;
@@ -82,6 +87,9 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
   const [label, setLabel] = useState("");
+  const [relationComposerOpen, setRelationComposerOpen] = useState(false);
+  const [relationPick, setRelationPick] = useState<"from" | "to">("from");
+  const relationLabelRef = useRef<HTMLInputElement | null>(null);
   /** auto = 按关系词推断方向；mutual = 双箭头；directed = 单箭头 */
   const [dirMode, setDirMode] = useState<"auto" | "mutual" | "directed">("auto");
   /** 关系网布局：按标签分圈 / 不分组 */
@@ -102,8 +110,8 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** 当前选中的关系边：在图与无障碍列表中共享同一详情面板。 */
   const [selectedRelationId, setSelectedRelationId] = useState<string | null>(null);
-  /** 钻取层级：区块总览 → 某个区块里的人 → 某个人和ta的关联人 */
-  const [drill, setDrill] = useState<{ mode: "blocks" | "group" | "person"; key?: string }>({
+  /** 只有点击圈层图例中的“只看”才缩小范围；普通节点选择不会改变图的数据范围。 */
+  const [drill, setDrill] = useState<{ mode: "blocks" | "group"; key?: string }>({
     mode: "blocks",
   });
   /** 画布缩放 / 平移 */
@@ -120,7 +128,14 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     oy: number;
     moved: number;
   } | null>(null);
-  const panRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
+  const panRef = useRef<{
+    x: number;
+    y: number;
+    tx: number;
+    ty: number;
+    moved: number;
+  } | null>(null);
+  const pendingNodeClickRef = useRef<{ id: string; timer: number } | null>(null);
 
   const refresh = useCallback(async () => {
     await facesDb.pruneOrphanRelations();
@@ -189,8 +204,9 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       return;
     }
     const now = Date.now();
+    const relationId = crypto.randomUUID();
     await facesDb.putRelation({
-      id: crypto.randomUUID(),
+      id: relationId,
       fromId,
       toId,
       label: label.trim() || t("认识"),
@@ -200,9 +216,38 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       confirmationStatus: "confirmed",
       source: makeSource("manual"),
     });
+    const fromName = nameOf(fromId);
+    const toName = nameOf(toId);
+    setSelectedId(fromId);
+    setSelectedRelationId(relationId);
+    setRelationComposerOpen(false);
+    setFromId("");
+    setToId("");
     setLabel("");
+    setRelationPick("from");
     await refresh();
+    toast.success(`${t("已建立关系")}：${fromName} ${t("与")} ${toName}`);
   };
+
+  const openRelationComposer = () => {
+    const source =
+      selectedId && people.some((person) => person.id === selectedId) ? selectedId : "";
+    setFromId(source);
+    setToId("");
+    setLabel("");
+    setDirMode("auto");
+    setRelationPick(source ? "to" : "from");
+    setSelectedRelationId(null);
+    setRelationComposerOpen(true);
+  };
+
+  const closeRelationComposer = useCallback(() => {
+    setRelationComposerOpen(false);
+    setFromId("");
+    setToId("");
+    setLabel("");
+    setRelationPick("from");
+  }, []);
 
   const analyse = async () => {
     if (!people.length) {
@@ -394,20 +439,11 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
   /** 当前钻取层级下要画哪些人 */
   const visiblePeople = useMemo(() => {
-    // 聚焦某个人：只留 ta 和「直接相连的那一层」人（不分组时也生效）
-    if (drill.mode === "person") {
-      const ids = new Set<string>([drill.key ?? ""]);
-      for (const relation of relations) {
-        if (relation.fromId === drill.key) ids.add(relation.toId);
-        if (relation.toId === drill.key) ids.add(relation.fromId);
-      }
-      return people.filter((person) => ids.has(person.id));
-    }
     if (groupBy === "none") return people;
     if (drill.mode === "group")
       return people.filter((person) => groupOf(person) === (drill.key ?? ""));
     return people;
-  }, [people, relations, groupBy, drill, groupOf]);
+  }, [people, groupBy, drill, groupOf]);
 
   /** 关系网布局：默认一个大圆；按标签分组时每个圈层自成一簇。 */
   const graph = useMemo(() => {
@@ -511,14 +547,8 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
     // 只折叠完全相同方向、标签与方向性的重复记录；不同标签必须分别保留。
     const seen = new Set<string>();
-    // 聚焦某个人时，只画「和 ta 直接相连」的那一层关系，邻居之间的线不画
-    const focusId = drill.mode === "person" ? drill.key : null;
     const edges = relations
       .filter((relation) => relationFilter === "all" || relation.label === relationFilter)
-      .filter((relation) =>
-        focusId ? relation.fromId === focusId || relation.toId === focusId : true,
-      )
-
       .filter((relation) => {
         const key = `${relation.fromId}>${relation.toId}::${relation.label.trim()}::${
           isMutualRelation(relation) ? "mutual" : "directed"
@@ -666,11 +696,16 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     }));
 
     return { size, nodes, edges: labelled, clusters: shaped };
-  }, [visiblePeople, relations, relationFilter, groupBy, groupOf, positions, drill]);
+  }, [visiblePeople, relations, relationFilter, groupBy, groupOf, positions]);
 
   const relationLabels = useMemo(
     () => [...new Set(relations.map((relation) => relation.label).filter(Boolean))].sort(),
     [relations],
+  );
+
+  const relationSuggestions = useMemo(
+    () => [...new Set([...DEFAULT_RELATION_LABELS.map((item) => t(item)), ...relationLabels])],
+    [relationLabels],
   );
 
   /** 选中的人 + 他/她的所有关系 */
@@ -791,9 +826,8 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   };
 
   const focusPerson = (id: string) => {
-    setDrill({ mode: "person", key: id });
     setSelectedId(id);
-    setViewport({ scale: 1.15, tx: 0, ty: 0 });
+    setSelectedRelationId(null);
   };
 
   /** 返回：从某个人退回全部圈子总览 */
@@ -803,25 +837,63 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     setDrill({ mode: "blocks" });
   }, []);
 
-  /** Esc 退回上一层 */
+  /** Esc 依次退出建关系、人物聚焦或圈层钻取。 */
   useEffect(() => {
-    if (drill.mode === "blocks") return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") goBack();
+      if (event.key !== "Escape") return;
+      if (relationComposerOpen) {
+        closeRelationComposer();
+      } else if (selectedId) {
+        setSelectedId(null);
+      } else if (drill.mode !== "blocks") {
+        goBack();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drill.mode, goBack]);
+  }, [closeRelationComposer, drill.mode, goBack, relationComposerOpen, selectedId]);
+
+  const activateNode = (id: string) => {
+    if (!relationComposerOpen) {
+      focusPerson(id);
+      return;
+    }
+    if (relationPick === "from") {
+      setFromId(id);
+      if (toId === id) setToId("");
+      setRelationPick("to");
+      return;
+    }
+    if (id === fromId) {
+      toast.error(t("起点和终点不能是同一个人"));
+      return;
+    }
+    setToId(id);
+    setRelationPick("to");
+    window.setTimeout(() => relationLabelRef.current?.focus(), 0);
+  };
 
   const onPanPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
-    if (dragRef.current) return;
-    panRef.current = { x: event.clientX, y: event.clientY, tx: viewport.tx, ty: viewport.ty };
+    // 只有真正的画布空白启动平移。节点和关系边拥有自己的选择语义，不能在
+    // pointerup 时被误判为“点击空白”。圈层底色禁用了 pointer events，仍算空白。
+    const target = event.target as Element;
+    const isBackground =
+      target === event.currentTarget || target.getAttribute("data-graph-background") === "true";
+    if (dragRef.current || !isBackground) return;
+    panRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      tx: viewport.tx,
+      ty: viewport.ty,
+      moved: 0,
+    };
   };
   const onPanPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
     const pan = panRef.current;
     if (!pan || dragRef.current) return;
     const rect = svgRef.current?.getBoundingClientRect();
     const ratio = rect && rect.width ? viewSize / rect.width : 1;
+    pan.moved = Math.max(pan.moved, Math.hypot(event.clientX - pan.x, event.clientY - pan.y));
     setViewport((prev) => ({
       ...prev,
       tx: pan.tx + (event.clientX - pan.x) * ratio,
@@ -829,14 +901,21 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     }));
   };
   const onPanPointerUp = () => {
+    const pan = panRef.current;
     panRef.current = null;
+    if (!pan || pan.moved >= 4 || relationComposerOpen) return;
+    if (pendingNodeClickRef.current) {
+      window.clearTimeout(pendingNodeClickRef.current.timer);
+      pendingNodeClickRef.current = null;
+    }
+    setSelectedId(null);
+    setSelectedRelationId(null);
   };
 
   const onNodePointerDown = (
     event: React.PointerEvent<SVGGElement>,
     node: { id: string; x: number; y: number },
   ) => {
-    event.preventDefault();
     event.stopPropagation();
     (event.target as Element).setPointerCapture?.(event.pointerId);
     dragRef.current = {
@@ -866,15 +945,38 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     panRef.current = null;
     if (!drag) return;
     (event.target as Element).releasePointerCapture?.(event.pointerId);
-    // 没怎么动 = 点击：聚焦这个人，只看 ta 和相关联的人
+    // 没怎么动 = 点击：普通模式只高亮，建关系模式则依次选择起点和终点。
     if (drag.moved < 4) {
-      if (drill.mode === "person" && drill.key === drag.id) {
-        setSelectedId((prev) => (prev === drag.id ? null : drag.id));
-      } else {
-        focusPerson(drag.id);
+      if (relationComposerOpen) {
+        activateNode(drag.id);
+        return;
       }
+      const pending = pendingNodeClickRef.current;
+      if (pending?.id === drag.id) {
+        window.clearTimeout(pending.timer);
+        pendingNodeClickRef.current = null;
+        const person = people.find((item) => item.id === drag.id);
+        if (person) setEditing(person);
+        return;
+      }
+      if (pending) {
+        window.clearTimeout(pending.timer);
+        focusPerson(pending.id);
+      }
+      const timer = window.setTimeout(() => {
+        focusPerson(drag.id);
+        pendingNodeClickRef.current = null;
+      }, 320);
+      pendingNodeClickRef.current = { id: drag.id, timer };
     }
   };
+
+  useEffect(
+    () => () => {
+      if (pendingNodeClickRef.current) window.clearTimeout(pendingNodeClickRef.current.timer);
+    },
+    [],
+  );
 
   return (
     <section className="flex min-w-0 flex-col gap-5 rounded-2xl border border-border bg-card/60 p-5">
@@ -1151,50 +1253,14 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             )}
           </div>
 
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <select
-              value={fromId}
-              onChange={(event) => setFromId(event.target.value)}
-              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={openRelationComposer}
+              disabled={people.length < 2}
+              className="shrink-0 rounded-full px-4"
             >
-              <option value="">{t("选择 A")}</option>
-              {people.map((person) => (
-                <option key={person.id} value={person.id}>
-                  {person.name}
-                </option>
-              ))}
-            </select>
-            <Input
-              value={label}
-              onChange={(event) => setLabel(event.target.value)}
-              placeholder={t("关系，如同事")}
-              className="sm:max-w-[10rem]"
-            />
-            <select
-              value={toId}
-              onChange={(event) => setToId(event.target.value)}
-              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
-            >
-              <option value="">{t("选择 B")}</option>
-              {people.map((person) => (
-                <option key={person.id} value={person.id}>
-                  {person.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={dirMode}
-              onChange={(event) => setDirMode(event.target.value as typeof dirMode)}
-              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
-              title={t("关系方向")}
-            >
-              <option value="auto">{t("方向：自动")}</option>
-              <option value="mutual">{t("双向 ⇄")}</option>
-              <option value="directed">{t("单向 →")}</option>
-            </select>
-            <Button onClick={() => void addRelation()} className="shrink-0 rounded-full px-4">
-              <Network className="size-3.5" aria-hidden="true" />
-              {t("建立关系")}
+              <Plus className="size-3.5" aria-hidden="true" />
+              {t("新建关系")}
             </Button>
             <select
               value={groupBy}
@@ -1226,6 +1292,155 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
               {t("显示边标签")}
             </label>
           </div>
+
+          {relationComposerOpen && (
+            <div
+              className="space-y-3 rounded-xl border border-primary/35 bg-primary/5 p-3 shadow-sm"
+              role="region"
+              aria-label={t("新建关系")}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-medium">
+                    <Network className="size-4 text-primary" aria-hidden="true" />
+                    {t("在图上连接两个人")}
+                  </p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    {t("依次点击图中的起点和终点，再输入任意关系名称；候选标签只是快捷建议。")}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={closeRelationComposer}
+                  aria-label={t("取消新建关系")}
+                >
+                  <X className="size-3.5" aria-hidden="true" />
+                  {t("取消")}
+                </Button>
+              </div>
+
+              <div className="grid items-stretch gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+                <button
+                  type="button"
+                  aria-pressed={relationPick === "from"}
+                  className={cn(
+                    "min-h-16 rounded-lg border bg-background px-3 py-2 text-left transition-colors",
+                    relationPick === "from"
+                      ? "border-primary ring-1 ring-primary/30"
+                      : "border-border hover:border-primary/50",
+                  )}
+                  onClick={() => setRelationPick("from")}
+                >
+                  <span className="block text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                    1 · {t("起点")}
+                  </span>
+                  <span className="mt-1 block truncate text-sm font-medium">
+                    {fromId ? nameOf(fromId) : t("点击图中一个人物")}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="mx-auto flex size-9 self-center items-center justify-center rounded-full border border-border bg-background text-primary transition-colors hover:bg-accent disabled:opacity-40"
+                  disabled={!fromId && !toId}
+                  aria-label={t("交换关系方向")}
+                  onClick={() => {
+                    const previousFrom = fromId;
+                    setFromId(toId);
+                    setToId(previousFrom);
+                    setRelationPick(toId ? "to" : "from");
+                  }}
+                >
+                  <ArrowLeftRight className="size-4" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={relationPick === "to"}
+                  className={cn(
+                    "min-h-16 rounded-lg border bg-background px-3 py-2 text-left transition-colors",
+                    relationPick === "to"
+                      ? "border-primary ring-1 ring-primary/30"
+                      : "border-border hover:border-primary/50",
+                  )}
+                  onClick={() => setRelationPick("to")}
+                >
+                  <span className="block text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                    2 · {t("终点")}
+                  </span>
+                  <span className="mt-1 block truncate text-sm font-medium">
+                    {toId ? nameOf(toId) : t("再点击另一个人物")}
+                  </span>
+                </button>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                <div className="space-y-2">
+                  <Label htmlFor="new-relation-label" className="text-xs">
+                    {t("关系名称")}
+                    <span className="ml-1 font-normal text-muted-foreground">
+                      · {t("可自由输入新关系")}
+                    </span>
+                  </Label>
+                  <Input
+                    ref={relationLabelRef}
+                    id="new-relation-label"
+                    list="relation-label-suggestions"
+                    value={label}
+                    onChange={(event) => setLabel(event.target.value)}
+                    placeholder={t("例如：共同创业、表姐弟、摄影搭档")}
+                    autoComplete="off"
+                  />
+                  <datalist id="relation-label-suggestions">
+                    {relationSuggestions.map((item) => (
+                      <option key={item} value={item} />
+                    ))}
+                  </datalist>
+                  <div className="flex flex-wrap gap-1.5" aria-label={t("关系标签建议")}>
+                    {relationSuggestions.slice(0, 8).map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+                          label === item
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-border bg-background hover:border-primary/60",
+                        )}
+                        onClick={() => {
+                          setLabel(item);
+                          relationLabelRef.current?.focus();
+                        }}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={dirMode}
+                    onChange={(event) => setDirMode(event.target.value as typeof dirMode)}
+                    className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                    aria-label={t("关系方向")}
+                  >
+                    <option value="auto">{t("方向：自动")}</option>
+                    <option value="mutual">{t("双向 ⇄")}</option>
+                    <option value="directed">{t("单向 →")}</option>
+                  </select>
+                  <Button
+                    onClick={() => void addRelation()}
+                    disabled={!fromId || !toId || fromId === toId || !label.trim()}
+                    className="rounded-full px-4"
+                  >
+                    <Check className="size-3.5" aria-hidden="true" />
+                    {t("确认建立")}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {groupBy === "tag" && graph.clusters.length > 0 && (
             <div className="flex flex-wrap items-center gap-2" aria-label={t("圈层图例")}>
@@ -1275,11 +1490,15 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   ← {t("返回")}
                 </button>
                 <span className="rounded-full bg-primary/10 px-2 py-0.5 text-foreground">
-                  {drill.mode === "person" ? nameOf(drill.key!) : drill.key}
+                  {drill.key}
                 </span>
               </>
             )}
-            <span>{t("点圆点聚焦这个人和ta的关联人，按住可拖动")}</span>
+            <span>
+              {relationComposerOpen
+                ? t("连线模式：依次点击两个节点，按住节点仍可拖动")
+                : t("单击节点聚焦并淡化无关人物，双击打开人物卡，按住可拖动")}
+            </span>
 
             <span className="ml-auto flex items-center gap-1">
               <button
@@ -1437,6 +1656,8 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
               <dl className="grid gap-x-4 gap-y-1 text-[11px] sm:grid-cols-[auto_1fr_auto_1fr]">
                 <dt className="text-muted-foreground">{t("关系标签")}</dt>
                 <dd>{selectedRelation.label}</dd>
+                <dt className="text-muted-foreground">{t("关系依据")}</dt>
+                <dd className="break-words">{selectedRelation.basis || t("未记录")}</dd>
                 <dt className="text-muted-foreground">{t("方向语义")}</dt>
                 <dd className="space-y-1">
                   {isMutualRelation(selectedRelation) ? (
@@ -1512,10 +1733,23 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             data-relation-graph-frame="true"
             className={cn(
               "relative overflow-hidden rounded-xl border border-border bg-muted/20",
-              graphFullscreen &&
-                "flex h-screen w-screen items-center rounded-none border-0 bg-background p-4",
+              graphFullscreen
+                ? "flex h-screen w-screen items-center rounded-none border-0 bg-background p-4"
+                : "h-[clamp(26rem,58vh,42rem)]",
             )}
           >
+            {relationComposerOpen && (
+              <div className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[calc(100%-8rem)] items-center gap-2 rounded-full border border-primary/30 bg-background/90 px-3 py-1.5 text-[11px] shadow-sm backdrop-blur">
+                <MousePointer2 className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                <span className="truncate">
+                  {relationPick === "from"
+                    ? t("请选择关系起点")
+                    : fromId
+                      ? `${t("起点")}：${nameOf(fromId)} · ${t("请选择关系终点")}`
+                      : t("请选择关系终点")}
+                </span>
+              </div>
+            )}
             <Button
               type="button"
               size="icon"
@@ -1534,9 +1768,11 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             <svg
               ref={bindSvgRef}
               viewBox={`0 0 ${viewSize} ${viewSize}`}
+              preserveAspectRatio="xMidYMid meet"
               className={cn(
-                "w-full cursor-grab touch-none select-none active:cursor-grabbing",
-                graphFullscreen ? "h-full max-h-[calc(100vh-2rem)]" : "h-auto",
+                "h-full w-full touch-none select-none",
+                relationComposerOpen ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing",
+                graphFullscreen && "max-h-[calc(100vh-2rem)]",
               )}
               onPointerDown={onPanPointerDown}
               onPointerMove={onPanPointerMove}
@@ -1568,11 +1804,21 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   <path d="M 0 0 L 10 5 L 0 10 z" className="fill-primary" />
                 </marker>
               </defs>
+              <rect
+                data-graph-background="true"
+                x="0"
+                y="0"
+                width={viewSize}
+                height={viewSize}
+                fill="transparent"
+                pointerEvents="all"
+              />
               <g transform={`translate(${viewport.tx} ${viewport.ty}) scale(${viewport.scale})`}>
                 {graph.clusters.map((cluster) => (
                   <g key={cluster.name}>
                     <path
                       d={cluster.path}
+                      pointerEvents="none"
                       strokeWidth={1}
                       strokeDasharray="4 4"
                       style={{
@@ -1604,6 +1850,35 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   </g>
                 ))}
 
+                {relationComposerOpen &&
+                  fromId &&
+                  toId &&
+                  (() => {
+                    const from = graph.nodes.find((node) => node.id === fromId);
+                    const to = graph.nodes.find((node) => node.id === toId);
+                    if (!from || !to) return null;
+                    return (
+                      <g aria-hidden="true" className="pointer-events-none">
+                        <line
+                          x1={from.x}
+                          y1={from.y}
+                          x2={to.x}
+                          y2={to.y}
+                          className="stroke-primary"
+                          strokeWidth={3}
+                          strokeDasharray="8 6"
+                          markerEnd="url(#relation-arrow)"
+                          markerStart={
+                            dirMode === "mutual" ||
+                            (dirMode === "auto" && inferMutual(label.trim()))
+                              ? "url(#relation-arrow-start)"
+                              : undefined
+                          }
+                        />
+                      </g>
+                    );
+                  })()}
+
                 {graph.edges.map((edge) => {
                   const dx = edge.b!.x - edge.a!.x;
                   const dy = edge.b!.y - edge.a!.y;
@@ -1625,7 +1900,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                       key={edge.id}
                       role="button"
                       tabIndex={0}
-                      opacity={active ? 1 : 0.12}
+                      opacity={relationComposerOpen ? 0.18 : active ? 1 : 0.12}
                       className="cursor-pointer outline-none"
                       aria-label={`${t("查看关系详情")}：${edge.a!.name} ${edge.mutual ? "⇄" : "→"} ${edge.b!.name} · ${edge.label}`}
                       onClick={(event) => {
@@ -1683,6 +1958,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                 })}
                 {graph.nodes.map((node) => {
                   const linked =
+                    relationComposerOpen ||
                     !selectedId ||
                     node.id === selectedId ||
                     relations.some(
@@ -1690,45 +1966,60 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                         (relation.fromId === selectedId && relation.toId === node.id) ||
                         (relation.toId === selectedId && relation.fromId === node.id),
                     );
+                  const isRelationFrom = relationComposerOpen && node.id === fromId;
+                  const isRelationTo = relationComposerOpen && node.id === toId;
+                  const visuallySelected = node.id === selectedId || isRelationFrom || isRelationTo;
                   return (
                     <g
                       key={node.id}
                       role="button"
                       tabIndex={0}
                       opacity={linked ? 1 : 0.25}
-                      className="group cursor-grab outline-none active:cursor-grabbing"
+                      className={cn(
+                        "group outline-none",
+                        relationComposerOpen
+                          ? "cursor-crosshair"
+                          : "cursor-grab active:cursor-grabbing",
+                      )}
                       onPointerDown={(event) => onNodePointerDown(event, node)}
                       onPointerMove={onNodePointerMove}
                       onPointerUp={onNodePointerUp}
                       onPointerCancel={() => {
                         dragRef.current = null;
                       }}
-                      onDoubleClick={() => {
-                        const person = people.find((item) => item.id === node.id);
-                        if (person) setEditing(person);
-                      }}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter" && event.key !== " ") return;
                         event.preventDefault();
-                        if (drill.mode === "person" && drill.key === node.id) {
-                          setSelectedId((prev) => (prev === node.id ? null : node.id));
-                        } else {
-                          focusPerson(node.id);
-                        }
+                        activateNode(node.id);
                       }}
                     >
-                      <title>{`${node.name} · ${t("点选看关系，拖动可移动，双击开人物卡")}`}</title>
+                      <title>{`${node.name} · ${t(
+                        relationComposerOpen
+                          ? "点击选择为关系起点或终点"
+                          : "单击聚焦，拖动可移动，双击开人物卡",
+                      )}`}</title>
                       <circle cx={node.x} cy={node.y} r={22} className="fill-transparent" />
+                      {(isRelationFrom || isRelationTo) && (
+                        <circle
+                          cx={node.x}
+                          cy={node.y}
+                          r={24}
+                          fill="none"
+                          className="stroke-primary"
+                          strokeWidth={2.5}
+                          strokeDasharray={isRelationFrom ? undefined : "4 3"}
+                        />
+                      )}
                       <circle
                         cx={node.x}
                         cy={node.y}
-                        r={node.id === selectedId ? 19 : 16}
+                        r={visuallySelected ? 19 : 16}
                         className={cn(
                           "transition-opacity group-hover:opacity-80 group-focus-visible:stroke-foreground",
-                          node.id === selectedId && "stroke-foreground",
+                          visuallySelected && "stroke-foreground",
                         )}
                         style={{ fill: node.color.node }}
-                        strokeWidth={node.id === selectedId ? 2.5 : 2}
+                        strokeWidth={visuallySelected ? 2.5 : 2}
                       />
 
                       <text

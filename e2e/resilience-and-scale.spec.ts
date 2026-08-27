@@ -279,7 +279,7 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
   await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
   await page.getByRole("tab", { name: "关系网" }).click();
   const graph = page.locator("svg").filter({ has: page.locator("#relation-arrow") });
-  await expect(graph.getByRole("button", { name: /点选看关系/ })).toHaveCount(50);
+  await expect(graph.getByRole("button", { name: /单击聚焦/ })).toHaveCount(50);
   await expect(graph.getByRole("button", { name: /查看关系详情/ })).toHaveCount(80);
 
   await graph.scrollIntoViewIfNeeded();
@@ -309,7 +309,7 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
   await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
 
   await graph
-    .getByRole("button", { name: /点选看关系/ })
+    .getByRole("button", { name: /单击聚焦/ })
     .first()
     .click();
   await expect(page.getByRole("button", { name: "打开人物卡" })).toBeVisible();

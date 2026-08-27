@@ -65,7 +65,14 @@ import {
   type IntakeUndoBatch,
 } from "@/lib/intake-undo";
 import { inferMutual } from "@/lib/relation-kind";
+import {
+  isInferredRelationBasis,
+  KINSHIP_RULES_EN,
+  KINSHIP_RULES_ZH,
+  relationNeedsInferenceReview,
+} from "@/lib/kinship-rules";
 import { makeSource } from "@/lib/provenance";
+import { cn } from "@/lib/utils";
 import { runIntakeAgent } from "@/lib/intake-agent";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
@@ -85,7 +92,7 @@ function missingOf(person: DraftPerson) {
   });
 }
 
-const SCHEMA = `{"people":[{"name":"","note":"","age":"","gender":"","relation":"","birthday":"","circle":"","closeness":null,"likes":[],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[{"platform":"","account":"","alias":"","validFrom":"","validTo":""}],"confidence":null}],"facts":[{"person":"","key":"","value":"","validFrom":"","validTo":"","confidence":null}],"relations":[{"from":"","to":"","label":"","note":"","confidence":null}],"events":[{"title":"","detail":"","date":"","dateEnd":"","precision":"day|month|year|range","place":"","people":[],"kind":"","confidence":null}],"reminders":[{"title":"","detail":"","due":"","people":[],"kind":"birthday|festival|gift|custom","confidence":null}],"evidence":[{"kind":"note|audio|exhibit|frame","title":"","text":"","origin":"","confidence":null}],"summary":""}`;
+const SCHEMA = `{"people":[{"name":"","note":"","age":"","gender":"","relation":"","birthday":"","circle":"","closeness":null,"likes":[],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[{"platform":"","account":"","alias":"","validFrom":"","validTo":""}],"confidence":null}],"facts":[{"person":"","key":"","value":"","validFrom":"","validTo":"","confidence":null}],"relations":[{"from":"","to":"","label":"","note":"","basis":"","confidence":null}],"events":[{"title":"","detail":"","date":"","dateEnd":"","precision":"day|month|year|range","place":"","people":[],"kind":"","confidence":null}],"reminders":[{"title":"","detail":"","due":"","people":[],"kind":"birthday|festival|gift|custom","confidence":null}],"evidence":[{"kind":"note|audio|exhibit|frame","title":"","text":"","origin":"","confidence":null}],"summary":""}`;
 
 const CREATE_NEW_PERSON = "__create_new_person__";
 const CREATE_NEW_EVENT = "__create_new_event__";
@@ -181,7 +188,7 @@ function buildPrompt(text: string, known: string[], previous: Draft | null) {
     ? `你是个人人脉整理助手。把下面这段自然语言材料整理成结构化 JSON，只输出 JSON，不要解释、不要 markdown。
 严格使用这个结构：${SCHEMA}
 规则：
-- 材料里没写的字段留空字符串或空数组，绝对不要编造。
+- 材料里没写的普通事实字段留空字符串或空数组；关系推导只按下面的亲属规则进行。
 - title、部门、单位、项目、地址、忌口、礼物等人物字段只保留材料明确写出的值；“喜欢摄影”不能改写成“摄影师”。
 - relation 写这个人和「我」的关系，如大学同学、表哥、前同事。
 - circle 只能是：家人 / 亲戚 / 朋友 / 同学 / 同事 / 邻居 / 其它。closeness 仅在材料明确给出 1-5 数值时填写，否则留空；不要根据关系称呼推断。
@@ -189,15 +196,16 @@ function buildPrompt(text: string, known: string[], previous: Draft | null) {
 - identities 只记录材料明确出现的平台、账号、当时昵称与生效/失效时间；不要根据姓名猜账号或时间。
 - facts 只放材料明确表达、但不属于固定人物字段的事实；person 指人物姓名，key 是短字段名，value 是原文可支持的值。validFrom/validTo 仅在材料给出有效期时填写。
 - evidence 只保留能核对抽取结果的短摘要或必要原文片段，不要复制整份聊天、文档或转写稿，text 最多 500 字。
-- relations 写人和人之间的关系，如夫妻、父子、室友、同事。
+- relations 写人和人之间的关系。每条都填写 basis：明说关系写最短原文，推导关系写可复核依据。
 - events 放已经发生或计划发生、值得进入日历/时间线的事情；date 用 yyyy-mm-dd。只知道月份或年份时分别补为当月 01 日或当年 01-01，并把 precision 标为 month 或 year；一段时间用 range 和 dateEnd。people 写相关人物姓名。
 - reminders 放需要用户采取行动的待办，如「给小雨回电话」；due 仅在材料明确给出日期时使用 yyyy-mm-dd，people 写相关人物姓名。不要把同一件事同时放进 events 和 reminders，除非材料同时明确表达日历事件和后续行动。
 - confidence 是你对每一条抽取准确性的自评（0 到 1），无法判断时留空；它只是提示，不能代替用户确认。
-- summary 用一两句话说明这份材料讲了什么。`
+- summary 用一两句话说明这份材料讲了什么。
+${KINSHIP_RULES_ZH}`
     : `You organise a personal contact network. Convert the text below into structured JSON. Output JSON only, no markdown, no explanation.
 Use exactly this structure: ${SCHEMA}
 Rules:
-- Leave a field empty when the text does not state it. Never invent facts.
+- Leave ordinary fact fields empty when the text does not state them. Relation inference is allowed only under the auditable kinship rules below.
 - Keep role, department, organisation, projects, address, dislikes and gifts only when explicitly stated. An interest in photography does not make someone a photographer.
 - relation = how this person relates to me (college roommate, cousin, ex-colleague).
 - circle is one of family / relatives / friends / classmates / colleagues / neighbours / other. Set closeness only when the material explicitly gives a 1-5 score; never infer it from a relationship label.
@@ -205,11 +213,12 @@ Rules:
 - identities contains only explicitly stated platform/account/alias and validity dates. Never guess an account or date from a name.
 - facts contains only explicit facts that do not fit a fixed person field; person is the person's name and validity dates are included only when stated.
 - evidence is a short source summary or the minimum excerpt needed for review (at most 500 characters), never a copy of the complete chat, document, or transcript.
-- relations = ties between people (spouse, parent, roommate, colleague).
+- relations = ties between people. Every relation includes basis: a short quote for explicit ties or a checkable inference basis.
 - events are past or planned moments worth putting on a calendar/timeline. Use yyyy-mm-dd, with precision month/year/range when needed; people contains related names.
 - reminders are actions the user still needs to take. Set due only when the material gives a date. Do not duplicate one fact across events and reminders unless both a calendar moment and a follow-up action are explicit.
 - confidence is the model's 0-1 self-assessment for each extracted item and never replaces user confirmation.
-- summary = one or two sentences about the material.`;
+- summary = one or two sentences about the material.
+${KINSHIP_RULES_EN}`;
 
   const knownLine = zh
     ? `\n已有档案：${known.join("、").slice(0, 1_000) || "无"}`
@@ -1066,6 +1075,22 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       toast.error(`${t("请先确认人物是新建还是更新已有档案")}：${unresolvedPerson.name}`);
       return;
     }
+    const inferredWithoutBasis = (commitDraft.relations ?? []).find(
+      (item) =>
+        !item._audit?.humanEdited &&
+        relationNeedsInferenceReview({
+          basis: item.basis,
+          note: item.note,
+          confidence: item._audit?.confidence,
+        }) &&
+        !isInferredRelationBasis(item.basis),
+    );
+    if (inferredWithoutBasis) {
+      toast.error(
+        `${t("推导关系缺少可核验依据")}：${inferredWithoutBasis.from} → ${inferredWithoutBasis.to}`,
+      );
+      return;
+    }
     const invalidEvent = (commitDraft.events ?? []).find(
       (item) =>
         item.title?.trim() &&
@@ -1369,13 +1394,22 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           label: (item.label ?? "").trim() || t("认识"),
           mutual: inferMutual((item.label ?? "").trim()),
           note: item.note,
+          basis: item.basis?.trim() || undefined,
           sourceId: evidenceIds[0],
           createdAt: now,
           updatedAt: now,
           confirmationStatus: "confirmed",
           source: makeSource(
             item._audit?.humanEdited ? "manual" : "ai",
-            item._audit?.humanEdited ? t("草稿中人工编辑") : t("资料整理"),
+            item._audit?.humanEdited
+              ? t("草稿中人工编辑")
+              : relationNeedsInferenceReview({
+                    basis: item.basis,
+                    note: item.note,
+                    confidence: item._audit?.confidence,
+                  })
+                ? t("AI 推断，经人工确认")
+                : t("资料整理"),
           ),
         });
         batch.createdRelationIds.push(relationId);
@@ -2376,6 +2410,53 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                   >
                     <Trash2 className="size-3.5" aria-hidden="true" />
                   </button>
+                  <div
+                    className={cn(
+                      "w-full space-y-1.5 rounded-lg border px-2.5 py-2",
+                      relationNeedsInferenceReview({
+                        basis: relation.basis,
+                        note: relation.note,
+                        confidence: relation._audit?.confidence,
+                      })
+                        ? "border-amber-400/50 bg-amber-400/5"
+                        : "border-border bg-muted/25",
+                    )}
+                  >
+                    <div className="flex flex-wrap items-center gap-2 text-[10px]">
+                      <span
+                        className={cn(
+                          "rounded-full px-2 py-0.5 font-medium",
+                          relationNeedsInferenceReview({
+                            basis: relation.basis,
+                            note: relation.note,
+                            confidence: relation._audit?.confidence,
+                          })
+                            ? "bg-amber-400/15 text-amber-700 dark:text-amber-300"
+                            : "bg-primary/10 text-primary",
+                        )}
+                      >
+                        {relationNeedsInferenceReview({
+                          basis: relation.basis,
+                          note: relation.note,
+                          confidence: relation._audit?.confidence,
+                        })
+                          ? relation._audit?.confirmationStatus === "accepted"
+                            ? t("AI 推断，已人工接受")
+                            : t("AI 推断，待核验")
+                          : t("原文关系")}
+                      </span>
+                      {relation.note && (
+                        <span className="text-muted-foreground">{relation.note}</span>
+                      )}
+                    </div>
+                    <Input
+                      value={relation.basis ?? ""}
+                      onChange={(event) => patchRelation(index, { basis: event.target.value })}
+                      className="h-8 text-xs"
+                      aria-label={t("关系依据")}
+                      placeholder={t("原文：… / 推断依据：…")}
+                    />
+                  </div>
                 </div>
               ))}
             </div>

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { parseLooseJson } from "./ai-text";
 import { IMPORT_LIMITS } from "./doc-import";
+import { normalizeRelationConfidence } from "./kinship-rules";
 import type { PersonRecord } from "./face-db";
 
 const SUPPORTED_EXTENSIONS = [
@@ -120,6 +121,8 @@ export interface IngestRelation extends IngestAuditFields {
   to: string;
   label: string;
   note?: string;
+  /** “原文：…”或“推断依据：…”，用于区分事实关系与待核验推导。 */
+  basis?: string;
 }
 
 export interface IngestFact extends IngestAuditFields {
@@ -205,11 +208,16 @@ const ingestPersonSchema = z
     circle: shortText,
     closeness: z
       .number()
-      .int()
+      .finite()
       .min(1)
       .max(5)
       .nullish()
-      .transform((value) => value ?? undefined),
+      // 模型偶尔会把 1-5 档位输出成 3.5、4.2 等小数。亲密度在产品里
+      // 是离散档位，因此在解析边界就归到最近一档，避免一个小数字段
+      // 让整份人物草稿都无法展示。
+      .transform((value) =>
+        value === null || value === undefined ? undefined : Math.round(value),
+      ),
     likes: stringList,
     dislikes: stringList,
     gifts: stringList,
@@ -250,9 +258,14 @@ const ingestRelationSchema = z
     to: z.string().max(200),
     label: z.string().max(300),
     note: z.string().max(2_000).optional(),
+    basis: shortText,
     confidence: confidenceSchema,
   })
-  .strict();
+  .strict()
+  .transform((relation) => ({
+    ...relation,
+    confidence: normalizeRelationConfidence(relation.basis, relation.confidence),
+  }));
 
 const ingestEventSchema = z
   .object({
