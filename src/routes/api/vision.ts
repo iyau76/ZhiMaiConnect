@@ -78,16 +78,74 @@ function resolveTarget(body: VisionBody) {
   };
 }
 
-/** Convert the upstream SSE stream to the plain-text stream consumed by the UI. */
-function sseToText(upstream: ReadableStream<Uint8Array>, request: UpstreamRequest) {
+/** Validate the first SSE payload before committing a 200 response, then stream plain text. */
+async function sseToText(upstream: ReadableStream<Uint8Array>, request: UpstreamRequest) {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
+  const reader = upstream.getReader();
+  let ended = false;
+
+  const parse = (value: Uint8Array) => {
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    const chunks: Uint8Array[] = [];
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line.startsWith("data:")) continue;
+      const content = line.slice(5).trim();
+      if (!content) continue;
+      if (content === "[DONE]") {
+        ended = true;
+        break;
+      }
+      try {
+        const payload = JSON.parse(content) as {
+          choices?: Array<{ delta?: { content?: unknown } }>;
+        };
+        const delta = payload.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta) chunks.push(encoder.encode(delta));
+      } catch {
+        // Ignore heartbeats and provider metadata, but never count them as valid output.
+      }
+    }
+    return chunks;
+  };
+
+  const initial: Uint8Array[] = [];
+  try {
+    request.refreshTimeout();
+    while (!initial.length && !ended) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > 0) request.refreshTimeout();
+      initial.push(...parse(value));
+    }
+    if (!initial.length) {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+      request.dispose();
+      throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 未返回可用的流式内容");
+    }
+  } catch (error) {
+    if (!(error instanceof SafeApiError)) {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+      request.dispose();
+    }
+    throw error;
+  }
 
   return new ReadableStream<Uint8Array>({
     async start(controller) {
-      const reader = upstream.getReader();
       try {
+        for (const chunk of initial) controller.enqueue(chunk);
+        if (ended) {
+          await reader.cancel().catch(() => undefined);
+          controller.close();
+          return;
+        }
         // The initial deadline covers connection/headers. After that it becomes an
         // inactivity deadline refreshed by every upstream byte, including reasoning
         // chunks that are intentionally not forwarded to the UI.
@@ -96,32 +154,11 @@ function sseToText(upstream: ReadableStream<Uint8Array>, request: UpstreamReques
           const { done, value } = await reader.read();
           if (done) break;
           if (value.byteLength > 0) request.refreshTimeout();
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const raw of lines) {
-            const line = raw.trim();
-            if (!line.startsWith("data:")) continue;
-            const content = line.slice(5).trim();
-            if (!content) continue;
-            if (content === "[DONE]") {
-              try {
-                await reader.cancel();
-              } catch {
-                // The completion marker is authoritative even if cancellation fails.
-              }
-              controller.close();
-              return;
-            }
-            try {
-              const payload = JSON.parse(content) as {
-                choices?: Array<{ delta?: { content?: unknown } }>;
-              };
-              const delta = payload.choices?.[0]?.delta?.content;
-              if (typeof delta === "string" && delta) controller.enqueue(encoder.encode(delta));
-            } catch {
-              // Ignore non-data heartbeat lines without logging their content.
-            }
+          for (const chunk of parse(value)) controller.enqueue(chunk);
+          if (ended) {
+            await reader.cancel().catch(() => undefined);
+            controller.close();
+            return;
           }
         }
         controller.close();
@@ -148,8 +185,8 @@ function sseToText(upstream: ReadableStream<Uint8Array>, request: UpstreamReques
 export async function handleVisionPost(request: Request): Promise<Response> {
   let upstreamRequest: UpstreamRequest | undefined;
   try {
-    enforceRateLimit(request, "vision", 30);
     requireApiSession(request);
+    await enforceRateLimit(request, "vision", 30);
     const body = await parseJsonRequest(request, visionBodySchema, API_LIMITS.visionRequestBytes);
     const target = resolveTarget(body);
     const oneShot = body.action === "test" || body.action === "audit";
@@ -220,7 +257,14 @@ export async function handleVisionPost(request: Request): Promise<Response> {
       throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 没有返回内容");
     }
 
-    const stream = sseToText(upstream.body, upstreamRequest);
+    const contentType = upstream.headers.get("content-type")?.toLowerCase() ?? "";
+    if (!contentType.includes("text/event-stream")) {
+      upstreamRequest.dispose();
+      upstreamRequest = undefined;
+      throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 未返回 SSE 流");
+    }
+
+    const stream = await sseToText(upstream.body, upstreamRequest);
     upstreamRequest = undefined;
     return new Response(stream, {
       headers: noStoreHeaders({ "Content-Type": "text/plain; charset=utf-8" }),

@@ -59,6 +59,13 @@ describe("personal date helpers", () => {
     expect(daysUntilMd("12-31", new Date(2026, 0, 1, 12))).toBe(364);
   });
 
+  it("finds the next real leap day instead of normalising to March 1", () => {
+    expect(daysUntilMd("02-29", new Date(2026, 7, 26))).toBeGreaterThan(365);
+    expect(daysUntilMd("02-29", new Date(2028, 2, 1))).toBe(
+      Math.round((new Date(2032, 1, 29).getTime() - new Date(2028, 2, 1).getTime()) / 86400000),
+    );
+  });
+
   it.each(["", "not-a-date", "00-12", "12-00"])("rejects an unusable month-day: %s", (raw) => {
     expect(daysUntilMd(raw, new Date(2026, 7, 26))).toBeNull();
   });

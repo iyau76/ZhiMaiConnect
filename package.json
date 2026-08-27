@@ -14,8 +14,8 @@
   },
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
-    "build:dev": "vite build --mode development",
+    "build": "vite build && node scripts/configure-cloudflare-build.mjs",
+    "build:dev": "vite build --mode development && node scripts/configure-cloudflare-build.mjs",
     "preview": "wrangler dev --config .output/server/wrangler.json --ip 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings=0",

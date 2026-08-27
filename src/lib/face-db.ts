@@ -383,15 +383,23 @@ function relationMeaningChanged(previous: RelationRecord, next: RelationRecord) 
   );
 }
 
-async function invalidateDerivedRelations(baseRelationId: string) {
+async function invalidateDerivedRelationsBatch(baseRelationIds: Iterable<string>) {
+  const changed = new Set(baseRelationIds);
+  if (!changed.size) return;
   const relations = await run<RelationRecord[]>(RELATIONS, "readonly", (s) => s.getAll());
   const dependents = relations.filter((relation) =>
-    relation.derivedFromRelationIds?.includes(baseRelationId),
+    relation.derivedFromRelationIds?.some((id) => changed.has(id)),
   );
-  for (const relation of dependents) {
-    const notice = "基础关系已变更，需重新核验";
-    await run<void>(RELATIONS, "readwrite", (s) =>
-      s.put({
+  if (!dependents.length) return;
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(RELATIONS, "readwrite");
+    const store = tx.objectStore(RELATIONS);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error("推导关系失效处理失败"));
+    for (const relation of dependents) {
+      const notice = "基础关系已变更，需重新核验";
+      store.put({
         ...relation,
         confirmationStatus: "pending",
         recommendationPolicy: "avoid",
@@ -399,29 +407,171 @@ async function invalidateDerivedRelations(baseRelationId: string) {
         note: relation.note?.includes(notice)
           ? relation.note
           : [relation.note?.trim(), notice].filter(Boolean).join("；"),
+      });
+    }
+  });
+}
+
+async function invalidateDerivedRelations(baseRelationId: string) {
+  await invalidateDerivedRelationsBatch([baseRelationId]);
+}
+
+function deletePersonAndDetachReferences(id: string) {
+  return openDb().then(
+    (db) =>
+      new Promise<string[]>((resolve, reject) => {
+        const stores = [
+          PERSONS,
+          SIGHTINGS,
+          RELATIONS,
+          EVIDENCE,
+          VOICEPRINTS,
+          CASE_EVENTS,
+          TASKS,
+          PROJECTS,
+          LIFE_EVENTS,
+          REMINDERS,
+        ];
+        const tx = db.transaction(stores, "readwrite");
+        const removedRelationIds: string[] = [];
+        tx.onerror = () => reject(tx.error ?? new Error("删除人物失败"));
+        tx.onabort = () => reject(tx.error ?? new Error("删除人物事务已中止"));
+        tx.oncomplete = () => resolve(removedRelationIds);
+
+        tx.objectStore(PERSONS).delete(id);
+
+        const detach = <T>(storeName: string, update: (record: T) => T | null) => {
+          const store = tx.objectStore(storeName);
+          const request = store.getAll();
+          request.onsuccess = () => {
+            for (const record of request.result as T[]) {
+              const next = update(record);
+              if (next) store.put(next);
+            }
+          };
+        };
+
+        const relationStore = tx.objectStore(RELATIONS);
+        const relationRequest = relationStore.getAll();
+        relationRequest.onsuccess = () => {
+          for (const relation of relationRequest.result as RelationRecord[]) {
+            if (relation.fromId === id || relation.toId === id) {
+              relationStore.delete(relation.id);
+              removedRelationIds.push(relation.id);
+            }
+          }
+        };
+        detach<SightingRecord>(SIGHTINGS, (record) =>
+          record.personId === id ? { ...record, personId: null } : null,
+        );
+        detach<VoiceprintRecord>(VOICEPRINTS, (record) =>
+          record.personId === id ? { ...record, personId: null } : null,
+        );
+        detach<EvidenceRecord>(EVIDENCE, (record) => {
+          const linkedPersonIds = record.linkedPersonIds?.filter((personId) => personId !== id);
+          const entities = record.entities?.map((entity) =>
+            entity.personId === id ? { ...entity, personId: undefined } : entity,
+          );
+          return linkedPersonIds?.length !== record.linkedPersonIds?.length ||
+            entities?.some((entity, index) => entity !== record.entities?.[index])
+            ? { ...record, linkedPersonIds, entities }
+            : null;
+        });
+        const detachPersonIds = <T extends { personIds?: string[] }>(record: T) => {
+          const personIds = record.personIds?.filter((personId) => personId !== id);
+          return personIds?.length !== record.personIds?.length ? { ...record, personIds } : null;
+        };
+        detach<CaseEventRecord>(CASE_EVENTS, detachPersonIds);
+        detach<TaskRecord>(TASKS, detachPersonIds);
+        detach<LifeEventRecord>(LIFE_EVENTS, detachPersonIds);
+        detach<ReminderRecord>(REMINDERS, detachPersonIds);
+        detach<ProjectRecord>(PROJECTS, (record) => {
+          const ownerChanged = record.ownerId === id;
+          const memberIds = record.memberIds?.filter((personId) => personId !== id);
+          const membersChanged = memberIds?.length !== record.memberIds?.length;
+          return ownerChanged || membersChanged
+            ? {
+                ...record,
+                ownerId: ownerChanged ? null : record.ownerId,
+                memberIds,
+                updatedAt: Date.now(),
+              }
+            : null;
+        });
       }),
-    );
+  );
+}
+
+export function assertValidPersonName(raw: string) {
+  const name = raw.trim();
+  if (!name) throw new Error("人物姓名不能为空");
+  if (Array.from(name).length > 40) throw new Error("人物姓名不能超过 40 个字符");
+  if ([...name].some((char) => char.charCodeAt(0) <= 31 || char.charCodeAt(0) === 127)) {
+    throw new Error("人物姓名包含不支持的控制字符");
   }
 }
 
+export interface FacesDbWriteBatch {
+  persons?: PersonRecord[];
+  relations?: RelationRecord[];
+  evidence?: EvidenceRecord[];
+  lifeEvents?: LifeEventRecord[];
+  reminders?: ReminderRecord[];
+}
+
+async function putBatch(batch: FacesDbWriteBatch) {
+  for (const person of batch.persons ?? []) assertValidPersonName(person.name);
+  const previousRelations = batch.relations?.length
+    ? await run<RelationRecord[]>(RELATIONS, "readonly", (store) => store.getAll())
+    : [];
+  const rows = [
+    [PERSONS, batch.persons ?? []],
+    [RELATIONS, batch.relations ?? []],
+    [EVIDENCE, batch.evidence ?? []],
+    [LIFE_EVENTS, batch.lifeEvents ?? []],
+    [REMINDERS, batch.reminders ?? []],
+  ] as const;
+  const activeRows = rows.filter(([, records]) => records.length);
+  if (!activeRows.length) return;
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(
+      activeRows.map(([store]) => store),
+      "readwrite",
+    );
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error("批量写入失败"));
+    tx.onabort = () => reject(tx.error ?? new Error("批量写入事务已中止"));
+    for (const [storeName, records] of activeRows) {
+      const store = tx.objectStore(storeName);
+      for (const record of records) store.put(record);
+    }
+  });
+  const previousById = new Map(previousRelations.map((relation) => [relation.id, relation]));
+  await invalidateDerivedRelationsBatch(
+    (batch.relations ?? [])
+      .filter((relation) => {
+        const previous = previousById.get(relation.id);
+        return previous ? relationMeaningChanged(previous, relation) : false;
+      })
+      .map((relation) => relation.id),
+  );
+}
+
 export const facesDb = {
+  putBatch,
   listPersons: () =>
     run<PersonRecord[]>(PERSONS, "readonly", (s) => s.getAll()).then((rows) =>
       rows.sort((a, b) => b.createdAt - a.createdAt),
     ),
-  putPerson: (person: PersonRecord) => run<void>(PERSONS, "readwrite", (s) => s.put(person)),
+  putPerson: (person: PersonRecord) => {
+    assertValidPersonName(person.name);
+    return run<void>(PERSONS, "readwrite", (s) => s.put(person));
+  },
   /** 删除人物时，级联删除与其相关的所有关系 */
   deletePerson: async (id: string) => {
-    await run<void>(PERSONS, "readwrite", (s) => s.delete(id));
-    const relations = await run<RelationRecord[]>(RELATIONS, "readonly", (s) => s.getAll());
-    const removedRelationIds: string[] = [];
-    for (const relation of relations) {
-      if (relation.fromId === id || relation.toId === id) {
-        await run<void>(RELATIONS, "readwrite", (s) => s.delete(relation.id));
-        removedRelationIds.push(relation.id);
-      }
-    }
-    for (const relationId of removedRelationIds) await invalidateDerivedRelations(relationId);
+    const removedRelationIds = await deletePersonAndDetachReferences(id);
+    await invalidateDerivedRelationsBatch(removedRelationIds);
   },
   /** 清掉指向已不存在人物的孤儿关系 */
   pruneOrphanRelations: async () => {
@@ -430,14 +580,15 @@ export const facesDb = {
       run<RelationRecord[]>(RELATIONS, "readonly", (s) => s.getAll()),
     ]);
     const ids = new Set(persons.map((person) => person.id));
-    let removed = 0;
+    const removedRelationIds: string[] = [];
     for (const relation of relations) {
       if (!ids.has(relation.fromId) || !ids.has(relation.toId)) {
         await run<void>(RELATIONS, "readwrite", (s) => s.delete(relation.id));
-        removed += 1;
+        removedRelationIds.push(relation.id);
       }
     }
-    return removed;
+    await invalidateDerivedRelationsBatch(removedRelationIds);
+    return removedRelationIds.length;
   },
   listSightings: () =>
     run<SightingRecord[]>(SIGHTINGS, "readonly", (s) => s.getAll()).then((rows) =>

@@ -38,6 +38,7 @@ describe("intake draft audit", () => {
     expect(draft.people).toHaveLength(2);
     expect(draft.facts).toHaveLength(1);
     expect(draft.relations).toHaveLength(1);
+    expect(draft.relations?.[0].basis).toMatch(/^原文：/);
     expect(draft.events).toHaveLength(1);
     expect(draft.reminders).toHaveLength(1);
     expect(draft.evidence?.[0]?._audit).toMatchObject({
@@ -125,6 +126,9 @@ describe("intake prompt budget", () => {
     expect(result.prompt).toHaveLength(11_800);
     expect(result.materialCharacters).toBe(7_800);
     expect(fitPromptMaterial("P".repeat(12_000), "M", 11_800).prompt).toHaveLength(11_800);
+    const crowded = fitPromptMaterial("P".repeat(20_000), "M".repeat(10_000), 11_800);
+    expect(crowded.materialCharacters).toBe(3_000);
+    expect(crowded.prompt.endsWith("M".repeat(3_000))).toBe(true);
   });
 });
 

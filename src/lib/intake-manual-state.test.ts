@@ -57,4 +57,28 @@ describe("carryManualState", () => {
       },
     });
   });
+
+  test("does not leak a manual field between people who share the same name", () => {
+    const audit = {
+      sourceSummary: "manual",
+      extractedAt: 1,
+      confirmationStatus: "accepted" as const,
+      humanEdited: true,
+    };
+    const previous: IngestCandidate = {
+      people: [
+        {
+          name: "王晨",
+          birthday: "01-01",
+          _draftId: "wang-1",
+          _fieldGrounding: { birthday: { status: "manual" } },
+          _audit: audit,
+        },
+        { name: "王晨", birthday: "02-02", _draftId: "wang-2" },
+      ],
+    };
+    const result = carryManualState({ people: [{ name: "王晨" }, { name: "王晨" }] }, previous);
+    expect(result.people?.filter((person) => person.birthday === "01-01")).toHaveLength(1);
+    expect(result.people?.find((person) => person.birthday === "01-01")?._draftId).toBe("wang-1");
+  });
 });

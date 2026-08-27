@@ -48,6 +48,13 @@ describe("target intent", () => {
   it("does not guess when multiple named targets are requested", () => {
     expect(detectTargetIntent("想联系贾母和贾琏", persons).mode).toBe("ambiguous");
   });
+
+  it("recognizes a one-character archived name", () => {
+    expect(detectTargetIntent("我想找婷办事", [person("ting", "婷")])).toMatchObject({
+      mode: "target",
+      target: { id: "ting" },
+    });
+  });
 });
 
 describe("connection path ranking", () => {
@@ -139,5 +146,28 @@ describe("connection path ranking", () => {
         now: NOW,
       }),
     ).toHaveLength(1);
+  });
+
+  it("keeps a dense 40-person graph bounded at five hops", () => {
+    const persons = Array.from({ length: 40 }, (_, index) =>
+      person(`p${index}`, `人物${index}`, index === 0 ? 5 : undefined),
+    );
+    const relations: RelationRecord[] = [];
+    for (let left = 0; left < persons.length; left += 1) {
+      for (let right = left + 1; right < persons.length; right += 1) {
+        relations.push(relation(`r${left}-${right}`, persons[left].id, persons[right].id));
+      }
+    }
+    const started = performance.now();
+    const result = rankConnectionPaths({
+      persons,
+      relations,
+      events: [],
+      targetId: "p39",
+      maxHops: 5,
+      now: NOW,
+    });
+    expect(result.length).toBeGreaterThan(0);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

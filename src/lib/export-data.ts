@@ -1,8 +1,9 @@
 /** 把人物关系库和事务导出成 Markdown / Word / PDF（浏览器本地生成，不上传） */
 
 import { facesDb, type PersonRecord, type ProjectRecord, type RelationRecord } from "./face-db";
+import { inferMutual } from "./relation-kind";
 
-export type ExportFormat = "md" | "docx" | "pdf";
+export type ExportFormat = "json" | "md" | "docx" | "pdf";
 export type ExportScope = "people" | "projects";
 
 const STATUS_LABEL: Record<ProjectRecord["status"], string> = {
@@ -27,6 +28,8 @@ interface Sheet {
 interface ExportPayload {
   title: string;
   sheets: Sheet[];
+  /** Lossless, versioned data for backup/re-import; presentation sheets are intentionally lossy. */
+  machineData: Record<string, unknown>;
 }
 
 function nameMap(persons: PersonRecord[]) {
@@ -53,13 +56,24 @@ async function buildPeople(): Promise<ExportPayload> {
       (p.projects ?? []).join("、"),
       (p.tags ?? []).join("、"),
       p.contact ?? "",
+      p.birthday ?? "",
+      p.circle ?? "",
+      Number.isFinite(p.closeness) ? String(p.closeness) : "",
+      (p.likes ?? []).join("、"),
+      (p.gifts ?? []).join("、"),
+      (p.identities ?? [])
+        .map((identity) =>
+          [identity.platform, identity.account, identity.alias].filter(Boolean).join(":"),
+        )
+        .join("；"),
+      JSON.stringify(p.extra ?? {}),
       (person.note ?? "").replace(/\s+/g, " "),
     ];
   });
 
   const relationRows = relations.map((relation: RelationRecord) => [
     nameOf(relation.fromId),
-    relation.mutual ? "↔ 双向" : "→ 单向",
+    (relation.mutual ?? inferMutual(relation.label)) ? "↔ 双向" : "→ 单向",
     nameOf(relation.toId),
     relation.label,
     relation.evidenceMode === "inferred"
@@ -71,6 +85,8 @@ async function buildPeople(): Promise<ExportPayload> {
     relation.confirmationStatus ?? "confirmed",
     relation.visibility ?? "auto",
     relation.recommendationPolicy ?? "allow",
+    relation.semanticKind ?? "",
+    (relation.derivedFromRelationIds ?? []).join("、"),
     (relation.basis ?? "").replace(/\s+/g, " "),
     (relation.note ?? "").replace(/\s+/g, " "),
   ]);
@@ -97,10 +113,34 @@ async function buildPeople(): Promise<ExportPayload> {
 
   return {
     title: "知脉 Connect · 人物关系库",
+    machineData: {
+      schema: "zhimai-connect/archive@1",
+      exportedAt: new Date().toISOString(),
+      persons,
+      relations,
+      lifeEvents: events,
+      reminders,
+    },
     sheets: [
       {
         name: "人物档案",
-        head: ["姓名", "职位", "部门", "单位", "负责事项", "标签", "联系方式", "备注"],
+        head: [
+          "姓名",
+          "职位",
+          "部门",
+          "单位",
+          "负责事项",
+          "标签",
+          "联系方式",
+          "生日",
+          "圈子",
+          "亲密度",
+          "喜好",
+          "礼物记录",
+          "身份别名",
+          "扩展字段",
+          "备注",
+        ],
         rows: personRows,
       },
       {
@@ -115,6 +155,8 @@ async function buildPeople(): Promise<ExportPayload> {
           "确认状态",
           "展示策略",
           "推荐策略",
+          "语义类型",
+          "依赖关系 ID",
           "依据",
           "备注",
         ],
@@ -155,6 +197,12 @@ async function buildProjects(): Promise<ExportPayload> {
 
   return {
     title: "知脉 Connect · 事务清单",
+    machineData: {
+      schema: "zhimai-connect/projects@1",
+      exportedAt: new Date().toISOString(),
+      persons,
+      projects,
+    },
     sheets: [
       {
         name: "事务",
@@ -338,6 +386,14 @@ export async function exportData(scope: ExportScope, format: ExportFormat) {
   const base = `${scope === "people" ? "知脉-人物关系库" : "知脉-事务清单"}-${stamp()}`;
 
   switch (format) {
+    case "json":
+      download(
+        new Blob([JSON.stringify(payload.machineData, null, 2)], {
+          type: "application/json;charset=utf-8",
+        }),
+        `${base}.json`,
+      );
+      break;
     case "md":
       download(
         new Blob([toMarkdown(payload)], { type: "text/markdown;charset=utf-8" }),

@@ -216,6 +216,123 @@ describe("facesDb people and relations", () => {
       relation("keep-me", "person-2", "person-3"),
     ]);
   });
+
+  it("invalidates dependents when pruning an orphaned supporting relation", async () => {
+    const { facesDb } = await import("./face-db");
+    await Promise.all([
+      facesDb.putPerson(person("a")),
+      facesDb.putPerson(person("b")),
+      facesDb.putPerson(person("c")),
+    ]);
+    await facesDb.putRelation(relation("orphan-base", "missing", "b"));
+    await facesDb.putRelation({
+      ...relation("derived", "a", "c"),
+      evidenceMode: "inferred",
+      confirmationStatus: "confirmed",
+      recommendationPolicy: "allow",
+      derivedFromRelationIds: ["orphan-base"],
+    });
+
+    await expect(facesDb.pruneOrphanRelations()).resolves.toBe(1);
+    await expect(facesDb.listRelations()).resolves.toEqual([
+      expect.objectContaining({
+        id: "derived",
+        confirmationStatus: "pending",
+        recommendationPolicy: "avoid",
+      }),
+    ]);
+  });
+
+  it("detaches a deleted person from every retained record in one operation", async () => {
+    const { facesDb } = await import("./face-db");
+    await facesDb.putPerson(person("remove"));
+    await Promise.all([
+      facesDb.addSighting({
+        id: "s",
+        personId: "remove",
+        name: "snapshot",
+        distance: 0,
+        thumb: "",
+        at: 1,
+      }),
+      facesDb.putVoiceprint({
+        id: "v",
+        personId: "remove",
+        name: "snapshot",
+        vector: [],
+        durationMs: 1,
+        createdAt: 1,
+      }),
+      facesDb.putEvidence({
+        id: "e",
+        kind: "note",
+        title: "evidence",
+        text: "text",
+        linkedPersonIds: ["remove"],
+        entities: [{ type: "person", value: "snapshot", personId: "remove" }],
+        createdAt: 1,
+      }),
+      facesDb.putLifeEvent({
+        id: "life",
+        date: "2026-08-28",
+        title: "event",
+        personIds: ["remove"],
+        createdAt: 1,
+      }),
+      facesDb.putReminder({
+        id: "reminder",
+        title: "reminder",
+        personIds: ["remove"],
+        done: false,
+        createdAt: 1,
+      }),
+      facesDb.putTask({
+        id: "task",
+        title: "task",
+        personIds: ["remove"],
+        priority: "normal",
+        status: "todo",
+        createdAt: 1,
+      }),
+      facesDb.putProject({
+        id: "project",
+        title: "project",
+        ownerId: "remove",
+        memberIds: ["remove"],
+        priority: "normal",
+        status: "active",
+        createdAt: 1,
+      }),
+    ]);
+
+    await facesDb.deletePerson("remove");
+
+    await expect(facesDb.listSightings()).resolves.toEqual([
+      expect.objectContaining({ id: "s", personId: null }),
+    ]);
+    await expect(facesDb.listVoiceprints()).resolves.toEqual([
+      expect.objectContaining({ id: "v", personId: null }),
+    ]);
+    await expect(facesDb.listEvidence()).resolves.toEqual([
+      expect.objectContaining({
+        id: "e",
+        linkedPersonIds: [],
+        entities: [expect.not.objectContaining({ personId: "remove" })],
+      }),
+    ]);
+    await expect(facesDb.listLifeEvents()).resolves.toEqual([
+      expect.objectContaining({ id: "life", personIds: [] }),
+    ]);
+    await expect(facesDb.listReminders()).resolves.toEqual([
+      expect.objectContaining({ id: "reminder", personIds: [] }),
+    ]);
+    await expect(facesDb.listTasks()).resolves.toEqual([
+      expect.objectContaining({ id: "task", personIds: [] }),
+    ]);
+    await expect(facesDb.listProjects()).resolves.toEqual([
+      expect.objectContaining({ id: "project", ownerId: null, memberIds: [] }),
+    ]);
+  });
 });
 
 describe("facesDb life events and reminders", () => {

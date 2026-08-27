@@ -53,6 +53,11 @@ function parseJson(text: string) {
 const toList = (value: unknown) =>
   Array.isArray(value) ? value.map(String).filter(Boolean) : undefined;
 
+function validCloseness(value: unknown) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? Math.max(1, Math.min(5, Math.round(numeric))) : undefined;
+}
+
 export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props) {
   const [raw, setRaw] = useState("");
   const [profile, setProfile] = useState<PersonProfile>({});
@@ -102,7 +107,7 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
         relation: str(parsed.relation) ?? prev.relation,
         birthday: str(parsed.birthday) ?? prev.birthday,
         circle: str(parsed.circle) ?? prev.circle,
-        closeness: typeof parsed.closeness === "number" ? parsed.closeness : prev.closeness,
+        closeness: validCloseness(parsed.closeness) ?? prev.closeness,
         likes: toList(parsed.likes) ?? prev.likes,
         dislikes: toList(parsed.dislikes) ?? prev.dislikes,
         gifts: toList(parsed.gifts) ?? prev.gifts,
@@ -135,11 +140,23 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
     if (!person) return;
     setSaving(true);
     try {
+      const latest = (await facesDb.listPersons()).find((record) => record.id === person.id);
+      if (!latest) {
+        toast.error(t("这份人物档案已被删除，无法保存"));
+        onClose();
+        return;
+      }
+      if (
+        (latest.updatedAt ?? latest.createdAt) !== (person.updatedAt ?? person.createdAt) &&
+        !window.confirm(t("这份档案已在其他窗口更新。仍要用当前编辑内容覆盖吗？"))
+      ) {
+        return;
+      }
       await facesDb.putPerson({
-        ...person,
-        name: name.trim() || person.name,
+        ...latest,
+        name: name.trim() || latest.name,
         note,
-        profile,
+        profile: { ...profile, closeness: validCloseness(profile.closeness) },
         rawProfileText: raw,
         photos,
         updatedAt: Date.now(),
@@ -147,6 +164,8 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
       await onSaved();
       toast.success(t("资料已保存"));
       onClose();
+    } catch (error) {
+      toast.error((error as Error).message);
     } finally {
       setSaving(false);
     }
@@ -241,6 +260,7 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
             <Label className="text-xs text-muted-foreground">{t("姓名")}</Label>
             <Input
               value={name}
+              maxLength={80}
               onChange={(event) => setName(event.target.value)}
               className="h-8 text-xs"
             />
@@ -280,7 +300,7 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
                 onChange={(event) =>
                   setProfile((prev) => ({
                     ...prev,
-                    closeness: event.target.value ? Number(event.target.value) : undefined,
+                    closeness: event.target.value ? validCloseness(event.target.value) : undefined,
                   }))
                 }
                 className="h-8 text-xs"

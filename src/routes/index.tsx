@@ -297,8 +297,8 @@ function Index() {
               </h1>
               <PageGuide
                 id={view}
-                title={heading.guide}
-                points={heading.points}
+                title={t(heading.guide)}
+                points={heading.points.map(t)}
                 className="mt-3.5"
               />
             </header>

@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import { PhotoNotes } from "@/components/photo-notes";
 import { Button } from "@/components/ui/button";
@@ -38,7 +39,7 @@ import {
   touchesMonth,
   type FuzzyParse,
 } from "@/lib/fuzzy-date";
-import { t } from "@/lib/i18n";
+import { getLang, t } from "@/lib/i18n";
 import { birthdayMd, festivalsForYear, lunarDateLabel, pad, todayStr } from "@/lib/personal";
 import { cn } from "@/lib/utils";
 import type { ProviderPreset } from "@/lib/vision-providers";
@@ -249,6 +250,21 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
       dateEnd = parsed.dateEnd;
       stored = parsed.precision;
     }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      toast.error(t("请先选择有效日期"));
+      return;
+    }
+    const [dateYear, dateMonth, dateDay] = date.split("-").map(Number);
+    const dateProbe = new Date(dateYear, dateMonth - 1, dateDay);
+    if (
+      dateYear < 1900 ||
+      dateProbe.getFullYear() !== dateYear ||
+      dateProbe.getMonth() !== dateMonth - 1 ||
+      dateProbe.getDate() !== dateDay
+    ) {
+      toast.error(t("请先选择有效日期"));
+      return;
+    }
 
     // 一栏输入：第一行当标题，剩下的当细节
     const raw = title.trim().replace(/\r/g, "");
@@ -279,7 +295,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
 
   const names = (ids?: string[]) =>
     (ids ?? [])
-      .map((id) => persons.find((person) => person.id === id)?.name ?? "已删除")
+      .map((id) => persons.find((person) => person.id === id)?.name ?? t("已删除"))
       .join("、");
 
   const dayEvents = byDate.get(selected) ?? [];
@@ -307,7 +323,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
         {reminder.detail && <p className="text-xs text-muted-foreground">{reminder.detail}</p>}
         {reminder.personIds && reminder.personIds.length > 0 && (
           <p className="mt-1 text-[11px] text-muted-foreground">
-            相关人物：{names(reminder.personIds)}
+            {t("相关人物")}：{names(reminder.personIds)}
           </p>
         )}
       </div>
@@ -320,8 +336,8 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
             ? "border-primary bg-primary text-primary-foreground"
             : "border-border bg-background hover:border-primary hover:text-primary",
         )}
-        aria-label={`${reminder.done ? "恢复待办" : "完成待办"}：${reminder.title}`}
-        title={reminder.done ? "标记为未完成" : "标记为已完成"}
+        aria-label={`${t(reminder.done ? "恢复待办" : "完成待办")}：${reminder.title}`}
+        title={t(reminder.done ? "标记为未完成" : "标记为已完成")}
       >
         {reminder.done ? (
           <Check className="size-3.5" aria-hidden="true" />
@@ -349,7 +365,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
             )}
           >
             {formatFuzzy(event)}
-            {!isExact(event) && " · 大概"}
+            {!isExact(event) && ` · ${t("大概")}`}
           </p>
         )}
         <p className="text-sm">{event.title}</p>
@@ -368,7 +384,9 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
           </div>
         )}
         {event.personIds && event.personIds.length > 0 && (
-          <p className="mt-1 text-[11px] text-muted-foreground">和：{names(event.personIds)}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {t("和")}：{names(event.personIds)}
+          </p>
         )}
       </div>
       <div className="flex shrink-0 gap-1">
@@ -401,7 +419,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
           onClick={() => setView("month")}
         >
           <CalendarDays className="size-4" aria-hidden="true" />
-          月历
+          {t("月历")}
         </Button>
         <Button
           size="sm"
@@ -409,7 +427,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
           onClick={() => setView("timeline")}
         >
           <ListTree className="size-4" aria-hidden="true" />
-          时间轴
+          {t("时间轴")}
         </Button>
       </div>
 
@@ -418,10 +436,10 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h2 className="font-display text-base tracking-tight md:text-lg">
-                {year} 年 {month + 1} 月
+                {getLang() === "en" ? `${year}-${pad(month + 1)}` : `${year} 年 ${month + 1} 月`}
               </h2>
               <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
-                公历 · 农历
+                {t("公历 · 农历")}
               </span>
             </div>
             <div className="flex gap-1.5">
@@ -443,7 +461,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
                   setSelected(todayStr(today));
                 }}
               >
-                今天
+                {t("今天")}
               </Button>
               <Button
                 size="icon"
@@ -458,7 +476,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
 
           <div className="mt-3 grid grid-cols-7 gap-1 text-center text-[10px] text-muted-foreground">
             {WEEK.map((day) => (
-              <span key={day}>{day}</span>
+              <span key={day}>{t(`星期${day}`)}</span>
             ))}
           </div>
           <div className="mt-1 grid grid-cols-7 gap-1">
@@ -473,7 +491,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
               const isToday = date === todayStr();
               const lunar = lunarByDate.get(date);
               const reminderLabel = dateReminders.length
-                ? `${dateReminders.length} 个待办${hasOpenReminder ? "" : "，均已完成"}`
+                ? `${dateReminders.length} ${t("个待办")}${hasOpenReminder ? "" : t("，均已完成")}`
                 : "";
               return (
                 <button
@@ -513,24 +531,24 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
           </div>
           <p className="mt-3 text-[11px] text-muted-foreground">
             <i className="mr-1 inline-block size-1.5 rounded-full bg-primary align-middle" />
-            生日
+            {t("生日")}
             <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-amber-400 align-middle" />
-            节日
+            {t("节日")}
             <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-foreground align-middle" />
-            记清了的事
+            {t("记清了的事")}
             <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-rose-500 align-middle" />
-            未完成待办
+            {t("未完成待办")}
             <i className="ml-3 mr-1 inline-block size-1.5 rounded-full bg-emerald-500 align-middle" />
-            已完成待办
+            {t("已完成待办")}
             <span className="ml-3 inline-block rounded bg-primary/10 px-1 align-middle">
-              底色
+              {t("底色")}
             </span>{" "}
-            一段时间里的事
+            {t("一段时间里的事")}
           </p>
 
           {fuzzyThisMonth.length > 0 && (
             <div className="mt-4 border-t border-border pt-3">
-              <p className="text-xs text-muted-foreground">这个月前后，记不清具体哪天的：</p>
+              <p className="text-xs text-muted-foreground">{t("这个月前后，记不清具体哪天的：")}</p>
               <ul className="mt-2 space-y-1.5">
                 {fuzzyThisMonth.map((event) => renderEvent(event, true))}
               </ul>
@@ -539,14 +557,16 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
         </section>
       ) : (
         <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
-          <h2 className="font-display text-lg tracking-tight">时间轴</h2>
+          <h2 className="font-display text-lg tracking-tight">{t("时间轴")}</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            事件和有截止日期的待办按年份倒序；模糊日期事件使用虚线显示。
+            {t("事件和有截止日期的待办按年份倒序；模糊日期事件使用虚线显示。")}
           </p>
           <div className="mt-4 space-y-5">
             {timeline.map(([y, list]) => (
               <div key={y}>
-                <h3 className="text-sm font-medium text-primary">{y} 年</h3>
+                <h3 className="text-sm font-medium text-primary">
+                  {getLang() === "en" ? y : `${y} 年`}
+                </h3>
                 <ul className="mt-2 space-y-1.5 border-l border-border pl-3">
                   {list.map((item) =>
                     item.kind === "event"
@@ -558,7 +578,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
             ))}
             {timeline.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                还没有事件或带日期的待办，先在下面写一条。
+                {t("还没有事件或带日期的待办，先在下面写一条。")}
               </p>
             )}
           </div>
@@ -567,16 +587,18 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
 
       <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-medium">{editingId ? "编辑这件事" : "记一件事"}</h3>
+          <h3 className="text-sm font-medium">{t(editingId ? "编辑这件事" : "记一件事")}</h3>
           {editingId && (
             <Button size="sm" variant="ghost" onClick={resetForm}>
               <X className="size-3.5" aria-hidden="true" />
-              取消编辑
+              {t("取消编辑")}
             </Button>
           )}
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          记不清哪天没关系，选「不记得具体哪天」，随手写句「去年夏天」，AI 会自己放到时间轴上。
+          {t(
+            "记不清哪天没关系，选「不记得具体哪天」，随手写句「去年夏天」，AI 会自己放到时间轴上。",
+          )}
         </p>
 
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -592,7 +614,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
                   : "border-border text-muted-foreground hover:bg-accent/50",
               )}
             >
-              {PRECISION_TABS[item]}
+              {t(PRECISION_TABS[item])}
             </button>
           ))}
         </div>
@@ -609,10 +631,10 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
               <Input
                 value={fuzzyText}
                 onChange={(event) => setFuzzyText(event.target.value)}
-                placeholder="大概什么时候？例如：去年夏天、2019年前后、三年前秋天"
+                placeholder={t("大概什么时候？例如：去年夏天、2019年前后、三年前秋天")}
               />
               <p className="text-[11px] text-muted-foreground">
-                {fuzzyHint ? fuzzyHint : "随手写个大概，保存时自动整理成时间轴上的位置。"}
+                {fuzzyHint ? t(fuzzyHint) : t("随手写个大概，保存时自动整理成时间轴上的位置。")}
               </p>
             </div>
           )}
@@ -620,7 +642,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
 
         {precision === "day" && (dayMarks.birthdays.length > 0 || dayMarks.festival) && (
           <p className="mt-2 text-xs text-primary">
-            {dayMarks.birthdays.map((person) => `${person.name} 生日`).join("、")}
+            {dayMarks.birthdays.map((person) => `${person.name} ${t("生日")}`).join("、")}
             {dayMarks.birthdays.length > 0 && dayMarks.festival ? " · " : ""}
             {dayMarks.festival?.name ?? ""}
           </p>
@@ -632,11 +654,12 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
               <section
                 className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-3"
                 role="region"
-                aria-label={`${selected} 的待办`}
+                aria-label={`${selected} ${t("的待办")}`}
               >
                 <h4 className="flex items-center gap-1.5 text-xs font-medium">
                   <BellRing className="size-3.5 text-rose-500" aria-hidden="true" />
-                  当天待办 · {dayReminders.filter((reminder) => !reminder.done).length} 项未完成
+                  {t("当天待办")} · {dayReminders.filter((reminder) => !reminder.done).length}{" "}
+                  {t("项未完成")}
                 </h4>
                 <ul className="mt-2 space-y-1.5">
                   {dayReminders.map((reminder) => renderReminder(reminder))}
@@ -646,7 +669,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
             <ul className="space-y-1.5">
               {dayEvents.map((event) => renderEvent(event))}
               {dayEvents.length === 0 && dayReminders.length === 0 && (
-                <li className="text-xs text-muted-foreground">这天还没有记录，写一条吧。</li>
+                <li className="text-xs text-muted-foreground">{t("这天还没有记录，写一条吧。")}</li>
               )}
             </ul>
           </div>
@@ -657,7 +680,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             rows={3}
-            placeholder="发生了什么？例如：和小雨吃火锅，聊到她想换工作，答应帮她看简历"
+            placeholder={t("发生了什么？例如：和小雨吃火锅，聊到她想换工作，答应帮她看简历")}
           />
 
           <PhotoNotes photos={photos} onChange={setPhotos} />
@@ -690,7 +713,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
           <div className="flex justify-end">
             <Button onClick={() => void add()} disabled={!title.trim() || saving}>
               <Plus className="size-4" aria-hidden="true" />
-              {saving ? "整理中…" : editingId ? "保存修改" : "记下来"}
+              {saving ? t("整理中…") : editingId ? t("保存修改") : t("记下来")}
             </Button>
           </div>
         </div>

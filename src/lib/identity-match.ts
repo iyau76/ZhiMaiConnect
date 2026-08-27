@@ -16,11 +16,17 @@ function normalizeName(value?: string) {
   return (value ?? "").trim().toLocaleLowerCase("zh-CN").replace(/\s+/g, "");
 }
 
-function normalizeContact(value?: string) {
-  const raw = (value ?? "").trim().toLowerCase();
+export function normalizeContact(value?: string) {
+  const raw = (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[０-９]/g, (digit) => String(digit.charCodeAt(0) - "０".charCodeAt(0)));
   if (!raw) return "";
   if (raw.includes("@")) return raw;
-  return raw.replace(/[^\d+]/g, "");
+  let digits = raw.replace(/\D/g, "");
+  if (digits.length === 15 && digits.startsWith("0086")) digits = digits.slice(4);
+  if (digits.length === 13 && digits.startsWith("86")) digits = digits.slice(2);
+  return digits;
 }
 
 function normalizeAccount(value?: string) {

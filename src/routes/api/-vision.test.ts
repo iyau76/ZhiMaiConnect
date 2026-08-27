@@ -127,4 +127,40 @@ describe("POST /api/vision", () => {
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "整理完成");
   });
+
+  test("rejects a 200 HTML error page instead of returning an empty successful stream", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<html>Bad Gateway</html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+    const response = await handleVisionPost(
+      await routeRequest(
+        "vision",
+        JSON.stringify({ ...validBody, action: "chat", prompt: "test", history: [] }),
+        { authenticated: true },
+      ),
+    );
+    assert.equal(response.status, 502);
+    assert.equal((await responseBody(response)).code, "UPSTREAM_INVALID_RESPONSE");
+  });
+
+  test("rejects an SSE response that completes without any content delta", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("data: [DONE]\n\n", {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+    const response = await handleVisionPost(
+      await routeRequest(
+        "vision",
+        JSON.stringify({ ...validBody, action: "chat", prompt: "test", history: [] }),
+        { authenticated: true },
+      ),
+    );
+    assert.equal(response.status, 502);
+    assert.equal((await responseBody(response)).code, "UPSTREAM_INVALID_RESPONSE");
+  });
 });

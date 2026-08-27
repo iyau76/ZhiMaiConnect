@@ -268,7 +268,6 @@ const EN: Record<string, string> = {
   "点选看关系，拖动可移动，双击开人物卡":
     "Click to see relations, drag to move, double-click to open the profile",
   状态: "Status",
-  生日: "Birthday",
   "生日、节日与待办": "Birthdays, festivals and to-dos",
   "生日（MM-DD）": "Birthday (MM-DD)",
   用顿号或逗号分隔: "Separate with commas",
@@ -556,7 +555,6 @@ const EN: Record<string, string> = {
   取消: "Cancel",
   确认: "Confirm",
   请先在上面填写摄像头地址: "Enter the camera address above first",
-  识别失败: "Recognition failed",
   无: "none",
 
   // profile dialog
@@ -686,7 +684,6 @@ const EN: Record<string, string> = {
   "AI 建档并连线": "AI create & link",
   "AI 梳理人际关系": "AI analyse network",
   "AI 没有返回可解析的内容": "AI returned nothing parsable",
-  已删除: "Deleted",
   已有同名档案: "A profile with that name already exists",
   已建档: "Profile created",
   请选择两个不同的人: "Pick two different people",
@@ -886,6 +883,185 @@ const EN: Record<string, string> = {
   尽量避免: "Avoid when possible",
   禁止用于推荐: "Block from recommendations",
   自动: "Auto",
+  月历: "Month",
+  时间轴: "Timeline",
+  "公历 · 农历": "Gregorian · Lunar",
+  今天: "Today",
+  星期一: "Mon",
+  星期二: "Tue",
+  星期三: "Wed",
+  星期四: "Thu",
+  星期五: "Fri",
+  星期六: "Sat",
+  星期日: "Sun",
+  个待办: "to-dos",
+  "，均已完成": ", all done",
+  生日: "Birthday",
+  节日: "Festival",
+  记清了的事: "Exact-date events",
+  未完成待办: "Open to-do",
+  已完成待办: "Completed to-do",
+  底色: "Shading",
+  一段时间里的事: "Date-range event",
+  "这个月前后，记不清具体哪天的：": "Around this month, without an exact date:",
+  "事件和有截止日期的待办按年份倒序；模糊日期事件使用虚线显示。":
+    "Events and dated to-dos are ordered by year; fuzzy dates use dashed borders.",
+  "还没有事件或带日期的待办，先在下面写一条。": "No events or dated to-dos yet — add one below.",
+  编辑这件事: "Edit event",
+  记一件事: "Add event",
+  取消编辑: "Cancel editing",
+  "记不清哪天没关系，选「不记得具体哪天」，随手写句「去年夏天」，AI 会自己放到时间轴上。":
+    "If the date is fuzzy, choose that option and write something like “last summer”; AI will place it on the timeline.",
+  记得具体哪天: "Exact date",
+  不记得具体哪天: "Fuzzy date",
+  "大概什么时候？例如：去年夏天、2019年前后、三年前秋天":
+    "Roughly when? e.g. last summer, around 2019, autumn three years ago",
+  "随手写个大概，保存时自动整理成时间轴上的位置。":
+    "Describe it roughly; it will be placed on the timeline when saved.",
+  当天待办: "To-dos for the day",
+  项未完成: "open",
+  "这天还没有记录，写一条吧。": "Nothing recorded for this day — add one.",
+  "发生了什么？例如：和小雨吃火锅，聊到她想换工作，答应帮她看简历":
+    "What happened? e.g. had dinner with Xiaoyu, discussed her job change, offered to review her CV",
+  "整理中…": "Organising…",
+  记下来: "Save event",
+  相关人物: "People",
+  和: "With",
+  恢复待办: "Reopen to-do",
+  完成待办: "Complete to-do",
+  标记为未完成: "Mark incomplete",
+  标记为已完成: "Mark complete",
+  的待办: "to-dos",
+  请先选择有效日期: "Choose a valid date first",
+  最近60天: "Next 60 days",
+  "最近 60 天": "Next 60 days",
+  "还没有生日信息。到「人物关系」给人物填上生日，这里就会自动提醒。":
+    "No birthdays yet. Add one under People and it will appear here automatically.",
+  就是今天: "Today",
+  还有: "in",
+  天: "days",
+  "祝福 / 礼物": "Wish / gift",
+  待办: "To-do",
+  "依据人物卡中的关系、喜好、忌口与送礼记录；缺失信息须由模型明确说明":
+    "Based on profile relations, likes, dislikes and gift history; missing evidence must be stated.",
+  "依据本地节日表生成；发送前请自行确认语气与对象":
+    "Based on the local festival calendar; review tone and recipient before sending.",
+  "已复制；系统不会自动发送": "Copied; the system will not send it automatically",
+  复制: "Copy",
+  长期未联系: "Out of touch",
+  "暂无超过 90 天未互动的人物；这里只依据本地共同事件记录计算。":
+    "No one has gone over 90 days without an interaction; this uses local shared-event records only.",
+  上次记录: "Last record",
+  尚无共同事件: "No shared events",
+  约: "about",
+  我的待办: "My to-dos",
+  "例如：周末给外婆打个电话": "e.g. Call grandma this weekend",
+  添加: "Add",
+  "填写日期的待办会同步显示在日历；不填日期时只保留在本页。":
+    "Dated to-dos also appear in Calendar; undated ones stay on this page.",
+  "还没有待办，可以从上面的生日 / 节日一键加入。":
+    "No to-dos yet — add one from a birthday or festival above.",
+  这事该拜托谁: "Who should I ask?",
+  "例如：我想找人帮忙看一下租房合同，谁比较合适？":
+    "e.g. Who could help me review a rental contract?",
+  选择目标人物: "Choose target person",
+  请选择目标人物: "Choose a target person",
+  "AI 全库分析": "AI archive analysis",
+  "小档案一次提交；档案较多时由 AI 多轮按需读取人物、关系与事件":
+    "Small archives are sent once; large archives are disclosed to AI over multiple on-demand rounds.",
+  "不提交照片、人脸特征、联系方式原文；天气与资讯查询不携带人物档案":
+    "Photos, face features and raw contact details are excluded; weather/news queries carry no profile data.",
+  允许已确认的推导关系参与引荐: "Allow confirmed inferred relations in referrals",
+  "离线演示问题（合成数据）": "Offline demo question (synthetic data)",
+  本地筛选候选: "Run local ranking",
+  生成比较与话术: "Generate comparison and message",
+  路径分: "Path score",
+  AI建议分: "AI score",
+  本地锁定分: "Locally locked score",
+  本地分: "Local score",
+  置信度: "confidence",
+  可直接联系: "Directly contact",
+  目标人物: "target person",
+  我: "Me",
+  未知人物: "Unknown person",
+  暂无直接匹配理由: "No direct matching reason",
+  依据: "Evidence",
+  信息更新: "Updated",
+  风险: "Risk",
+  "已复制，可继续编辑后自行发送": "Copied; edit it before sending yourself",
+  "已加入待办，并同步显示在日历": "Added to to-dos and Calendar",
+  已加入待办: "Added to to-dos",
+  "AI 请求失败": "AI request failed",
+  "AI 全库分析失败": "Full-archive AI analysis failed",
+  "问题中出现了多个可能的目标人物，请先选择要联系的对象。":
+    "The question matches several possible targets. Choose who you want to contact.",
+  "开放求助模式：按任务匹配、可联系程度和近期互动筛选候选。":
+    "Open-help mode: candidates are ranked by task fit, reachability and recent interaction.",
+  "开放求助模式：使用合成演示数据进行本地确定性筛选。":
+    "Open-help mode: deterministic local ranking on synthetic demo data.",
+  "已用本地规则生成演示候选；人物与结果均须使用合成演示数据":
+    "Demo candidates generated locally; both people and results must use synthetic demo data.",
+  请先在设置中载入合成演示数据: "Load synthetic demo data in Settings first",
+  "人物库还是空的，请先录入人物资料": "No people yet; add profiles first",
+  "目标模式：候选、分数和路径由本地确定性工具锁定，AI 只负责解释与措辞。":
+    "Target mode: candidates, scores and paths are locked by local deterministic logic; AI only explains and drafts wording.",
+  "开放求助模式：AI 已按需读取档案，候选仍需人工复核。":
+    "Open-help mode: AI read profiles on demand; candidates still require human review.",
+  "长期未联系提醒，请先确认对方近况再发送消息。":
+    "Long-time-no-contact reminder; check their current situation before messaging.",
+  识别失败: "Recognition failed",
+  人脸录入: "Face enrolment",
+  已补充人脸样本: "Face sample added",
+  已录入: "Saved",
+  已删除: "Deleted",
+  到访记录补标: "Visit record relabelling",
+  "先写一句大概的时间，比如「去年夏天」。":
+    "Describe the approximate time first, for example “last summer”.",
+  "正在整理时间…": "Interpreting the time…",
+  "这个时间没看懂，换个说法试试，比如「2019 年秋天」。":
+    "That time was not understood. Try wording it like “autumn 2019”.",
+  大概: "approximate",
+  第: "Face",
+  张样本: "samples",
+  负责: "Projects",
+  汇报: "Reports to",
+  人物姓名不能为空: "Person name cannot be empty",
+  "人物姓名不能超过 40 个字符": "Person name cannot exceed 40 characters",
+  人物姓名包含不支持的控制字符: "Person name contains unsupported control characters",
+  "这一页：把认识的人写下来": "On this page: capture the people you know",
+  "像发消息一样写：「张伟是我大学同学，喜欢篮球，生日 3 月 12 日」。":
+    "Write naturally: “Zhang Wei is my college classmate, likes basketball, birthday March 12.”",
+  "也可以直接粘贴截图、聊天记录或简历文件。":
+    "You can also paste screenshots, chat logs or resumes.",
+  "点「AI 整理」自动拆成人物卡和关系。":
+    "Choose AI Organise to split it into profiles and relationships.",
+  "这一页：看关系、补资料": "On this page: inspect relations and complete profiles",
+  "点圆点改人物卡：生日、圈子、亲密度、喜好、送过什么礼。":
+    "Double-click a node to edit birthday, circle, closeness, likes and gift history.",
+  "双箭头 ⇄ 对等关系（朋友、夫妻），单箭头 → 有方向（父母、师徒）。":
+    "⇄ marks mutual relations; → marks directed relations.",
+  别错过重要的: "Never miss important",
+  日子: "moments",
+  "这一页：谁快过生日、该说点什么": "On this page: upcoming occasions and what to say",
+  "填了生日的人会自动出现在「最近 60 天」。":
+    "People with birthdays automatically appear under Next 60 days.",
+  "点「祝福 / 礼物」，AI 结合喜好和送礼记录给具体建议。":
+    "Use Wish / gift for suggestions grounded in interests and gift history.",
+  "「这事该拜托谁」会从你的人脉里挑合适的人。":
+    "Who should I ask? ranks suitable people from your network.",
+  记住和谁的: "Remember each day",
+  每一天: "with people",
+  "这一页：一天一条，日子就有迹可循": "On this page: keep a trace of each day",
+  "紫点是生日，黄点是节日，灰点是你自己的记录。":
+    "Purple marks birthdays, yellow festivals and grey your own records.",
+  "点某一天写下和谁做了什么，以后翻回来一目了然。":
+    "Choose a day and record what happened with whom.",
+  挑一个顺手的: "Choose the right",
+  "这一页：选模型、问建议": "On this page: choose a model and ask for advice",
+  "自定义接口要填 API Key，否则会返回 401。":
+    "Custom endpoints require an API key or will return 401.",
+  "可以带上人物和关系数据，直接问 AI 该怎么处理某段关系。":
+    "You can include profile and relationship data when asking AI for advice.",
   中文: "中文",
   English: "English",
 };

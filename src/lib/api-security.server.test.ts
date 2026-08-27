@@ -19,6 +19,7 @@ import {
   validateCustomBaseUrl,
   visionBodySchema,
 } from "./api-security.server.ts";
+import { registerRuntimeBindings } from "./runtime-bindings.server.ts";
 
 function jsonRequest(body: string, headers?: HeadersInit): Request {
   return new Request("https://connect.example/api/vision", {
@@ -228,10 +229,10 @@ test("upstream errors never echo sensitive response bodies and disable caching",
 
 test("rate limiter returns a safe 429 with Retry-After", async () => {
   const request = jsonRequest("{}", { "CF-Connecting-IP": `test-${crypto.randomUUID()}` });
-  enforceRateLimit(request, "test", 1);
+  await enforceRateLimit(request, "test", 1);
   let caught: unknown;
   try {
-    enforceRateLimit(request, "test", 1);
+    await enforceRateLimit(request, "test", 1);
   } catch (error) {
     caught = error;
   }
@@ -239,6 +240,39 @@ test("rate limiter returns a safe 429 with Retry-After", async () => {
   assert.equal(response.status, 429);
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.ok(Number(response.headers.get("retry-after")) >= 1);
+});
+
+test("rate limiter does not trust forged forwarding headers outside Cloudflare", async () => {
+  const route = `spoof-${crypto.randomUUID()}`;
+  await enforceRateLimit(jsonRequest("{}", { "X-Forwarded-For": "1.1.1.1" }), route, 1);
+  await assert.rejects(
+    enforceRateLimit(jsonRequest("{}", { "X-Forwarded-For": "2.2.2.2" }), route, 1),
+    (error: unknown) => error instanceof SafeApiError && error.code === "RATE_LIMITED",
+  );
+});
+
+test("production rate limiter uses the Cloudflare binding and validated session actor", async () => {
+  const seen: string[] = [];
+  registerRuntimeBindings({
+    ZHIMAI_VISION_LIMITER: {
+      async limit({ key }: { key: string }) {
+        seen.push(key);
+        return { success: seen.length === 1 };
+      },
+    },
+  });
+  const session = crypto.randomUUID();
+  const request = jsonRequest("{}", { "X-Zhimai-Session": session });
+  try {
+    await enforceRateLimit(request, "vision", 30);
+    await assert.rejects(
+      enforceRateLimit(request, "vision", 30),
+      (error: unknown) => error instanceof SafeApiError && error.code === "RATE_LIMITED",
+    );
+    assert.deepEqual(seen, [`vision:session:${session}`, `vision:session:${session}`]);
+  } finally {
+    registerRuntimeBindings({});
+  }
 });
 
 test("AI routes require a matching in-memory session header and SameSite cookie", () => {

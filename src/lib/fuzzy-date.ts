@@ -2,6 +2,7 @@
 
 import type { DatePrecision, LifeEventRecord } from "./face-db";
 import { pad } from "./personal";
+import solarLunar from "solarlunar";
 
 export const PRECISION_LABEL: Record<DatePrecision, string> = {
   day: "具体某天",
@@ -109,6 +110,7 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
   const explicit = s.match(/((?:19|20)\d{2})\s*年?/);
   if (explicit) year = Number(explicit[1]);
   else if (/今年/.test(s)) year = thisYear;
+  else if (/明年|下一?年/.test(s)) year = thisYear + 1;
   else if (/去年|上一?年/.test(s)) year = thisYear - 1;
   else if (/前年/.test(s)) year = thisYear - 2;
   else {
@@ -120,6 +122,23 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
   const span = s.match(/((?:19|20)\d{2})\s*年?\s*(?:到|至|-|—|~)\s*((?:19|20)\d{2})/);
   if (span) {
     return { date: `${span[1]}-01-01`, dateEnd: `${span[2]}-12-31`, precision: "range" };
+  }
+
+  /** 常见农历节日精确换算为公历；除夕是下一农历年的春节前一天。 */
+  if (/春节|除夕/.test(s)) {
+    const lunarYear = year ?? thisYear;
+    const springFestival = solarLunar.lunar2solar(lunarYear, 1, 1, false);
+    if (springFestival !== -1) {
+      const date = new Date(
+        springFestival.cYear,
+        springFestival.cMonth - 1,
+        springFestival.cDay - (/除夕/.test(s) ? 1 : 0),
+      );
+      return {
+        date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+        precision: "day",
+      };
+    }
   }
 
   /** 月份 */

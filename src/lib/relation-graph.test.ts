@@ -65,6 +65,25 @@ describe("relationship graph visibility", () => {
     ]);
   });
 
+  it("does not let a high-score hidden parallel edge suppress a visible edge", () => {
+    const hidden = relation("hidden-high", "a", "b", {
+      visibility: "hidden",
+      confidence: 1,
+    });
+    const visible = relation("visible-low", "a", "b", {
+      visibility: "auto",
+      confidence: 0.2,
+    });
+    const result = selectVisibleRelations({
+      relations: [hidden, visible],
+      mode: "overview",
+      overviewMinScore: 0,
+      now: NOW,
+    });
+    expect(result.visible).toContain(visible);
+    expect(result.hidden).toContainEqual({ relation: hidden, reason: "user-hidden" });
+  });
+
   it("preserves a low-salience bridge in overview", () => {
     const left = relation("left", "a", "b", { confidence: 0, createdAt: 1 });
     const bridge = relation("bridge", "b", "c", { confidence: 0, createdAt: 1 });

@@ -28,7 +28,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { startRecording, transcribeAudio, type Recorder } from "@/lib/audio-client";
 import { IMPORT_LIMITS, importFiles } from "@/lib/doc-import";
 import { claimIntakeJob, getIntakeJob, startIntakeJob, subscribeIntakeJob } from "@/lib/intake-job";
-import { facesDb, type LifeEventRecord, type PersonRecord } from "@/lib/face-db";
+import {
+  facesDb,
+  type EvidenceRecord,
+  type LifeEventRecord,
+  type PersonRecord,
+  type RelationRecord,
+  type ReminderRecord,
+} from "@/lib/face-db";
 import { matchIdentity } from "@/lib/identity-match";
 import { getLang, t } from "@/lib/i18n";
 import { carryManualState } from "@/lib/intake-manual-state";
@@ -61,10 +68,16 @@ import {
 import {
   getLatestIntakeBatch,
   rememberIntakeBatch,
+  rollbackIntakeBatch,
   undoLatestIntakeBatch,
   type IntakeUndoBatch,
 } from "@/lib/intake-undo";
 import { inferMutual } from "@/lib/relation-kind";
+import {
+  findRelationDependencies,
+  normalizeRelationSemanticKind,
+  relationSemanticKey,
+} from "@/lib/relation-semantics";
 import {
   isInferredRelationBasis,
   KINSHIP_RULES_EN,
@@ -75,6 +88,8 @@ import { makeSource } from "@/lib/provenance";
 import { cn } from "@/lib/utils";
 import { runIntakeAgent } from "@/lib/intake-agent";
 import type { ProviderPreset } from "@/lib/vision-providers";
+
+const SELF_PERSON_ID = "zhimai:self";
 
 /** 一个人物档案里希望齐全的字段 */
 const REQUIRED: Array<{ key: keyof DraftPerson; zh: string; en: string }> = [
@@ -132,23 +147,64 @@ function prepareIdentityDecisions(
   persons: PersonRecord[],
   events: LifeEventRecord[] = [],
 ): Draft {
+  const people = (draft.people ?? []).map((person) => ({
+    ...withIdentityDecision(person, persons),
+    _draftId: person._draftId ?? crypto.randomUUID(),
+  }));
+  const uniqueDraftId = (name: string) => {
+    const matches = people.filter((person) => person.name.trim() === name.trim());
+    return matches.length === 1 ? matches[0]._draftId : undefined;
+  };
   return {
     ...draft,
-    people: (draft.people ?? []).map((person) => withIdentityDecision(person, persons)),
+    people,
+    facts: (draft.facts ?? []).map((fact) => ({
+      ...fact,
+      personDraftId:
+        fact.personDraftId && people.some((person) => person._draftId === fact.personDraftId)
+          ? fact.personDraftId
+          : uniqueDraftId(fact.person),
+    })),
+    relations: (draft.relations ?? []).map((relation) => ({
+      ...relation,
+      fromDraftId:
+        relation.fromDraftId && people.some((person) => person._draftId === relation.fromDraftId)
+          ? relation.fromDraftId
+          : uniqueDraftId(relation.from),
+      toDraftId:
+        relation.toDraftId && people.some((person) => person._draftId === relation.toDraftId)
+          ? relation.toDraftId
+          : uniqueDraftId(relation.to),
+    })),
     events: (draft.events ?? []).map((event) => ({
       ...event,
+      peopleDraftIds: (event.people ?? []).map(
+        (name, index) => event.peopleDraftIds?.[index] ?? uniqueDraftId(name),
+      ),
       targetEventId:
         event.targetEventId && events.some((existing) => existing.id === event.targetEventId)
           ? event.targetEventId
           : CREATE_NEW_EVENT,
       _eventChecked: true,
     })),
+    reminders: (draft.reminders ?? []).map((reminder) => ({
+      ...reminder,
+      peopleDraftIds: (reminder.people ?? []).map(
+        (name, index) => reminder.peopleDraftIds?.[index] ?? uniqueDraftId(name),
+      ),
+    })),
   };
 }
 
 function serializeDraftForPrompt(draft: Draft) {
   return JSON.stringify(draft, (key, value: unknown) => {
-    if (key === "targetPersonId" || key === "targetEventId" || key.startsWith("_")) {
+    if (
+      key === "targetPersonId" ||
+      key === "targetEventId" ||
+      key === "targetRelationId" ||
+      key.includes("DraftId") ||
+      key.startsWith("_")
+    ) {
       return undefined;
     }
     return value;
@@ -418,6 +474,104 @@ function DraftAuditLine({
   );
 }
 
+function DraftPersonReferenceInput({
+  name,
+  draftId,
+  people,
+  placeholder,
+  className,
+  onChange,
+}: {
+  name: string;
+  draftId?: string;
+  people: DraftPerson[];
+  placeholder: string;
+  className?: string;
+  onChange: (name: string, draftId?: string) => void;
+}) {
+  const matches = people.filter((person) => person.name.trim() === name.trim());
+  if (matches.length <= 1) {
+    return (
+      <Input
+        value={name}
+        onChange={(event) => onChange(event.target.value, undefined)}
+        className={className}
+        placeholder={placeholder}
+      />
+    );
+  }
+  return (
+    <select
+      value={draftId ?? ""}
+      onChange={(event) => {
+        const selected = matches.find((person) => person._draftId === event.target.value);
+        onChange(selected?.name ?? name, selected?._draftId);
+      }}
+      className={cn(
+        "rounded-md border border-amber-400/60 bg-background px-2 text-xs text-foreground",
+        className,
+      )}
+      aria-label={`${placeholder}（同名人物消歧）`}
+    >
+      <option value="">{t("请选择同名人物")}</option>
+      {matches.map((person, index) => (
+        <option key={person._draftId} value={person._draftId}>
+          {person.name} #{index + 1}
+          {person.org || person.title ? ` · ${person.org || person.title}` : ""}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function DraftAmbiguousPeopleRefs({
+  names,
+  draftIds,
+  people,
+  onChange,
+}: {
+  names: string[];
+  draftIds?: Array<string | undefined>;
+  people: DraftPerson[];
+  onChange: (draftIds: Array<string | undefined>) => void;
+}) {
+  const ambiguous = names
+    .map((name, index) => ({
+      name,
+      index,
+      matches: people.filter((person) => person.name.trim() === name.trim()),
+    }))
+    .filter((item) => item.matches.length > 1);
+  if (!ambiguous.length) return null;
+  return (
+    <div className="mt-1 space-y-1 rounded-md border border-amber-400/50 bg-amber-400/5 p-1.5">
+      {ambiguous.map((item) => (
+        <label key={`${item.name}-${item.index}`} className="flex items-center gap-2 text-[10px]">
+          <span className="shrink-0 text-amber-700 dark:text-amber-300">{item.name}</span>
+          <select
+            value={draftIds?.[item.index] ?? ""}
+            onChange={(event) => {
+              const next = Array.from({ length: names.length }, (_, index) => draftIds?.[index]);
+              next[item.index] = event.target.value || undefined;
+              onChange(next);
+            }}
+            className="h-7 min-w-0 flex-1 rounded border border-input bg-background px-2"
+            aria-label={`${item.name}（同名人物消歧）`}
+          >
+            <option value="">{t("请选择同名人物")}</option>
+            {item.matches.map((person, index) => (
+              <option key={person._draftId} value={person._draftId}>
+                {person.name} #{index + 1}
+                {person.org || person.title ? ` · ${person.org || person.title}` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   // Keep the first client render identical to SSR; restore browser-only draft
   // state after hydration to avoid rendering localStorage data on one side only.
@@ -434,6 +588,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   const [known, setKnown] = useState<string[]>([]);
   const [existingPeople, setExistingPeople] = useState<PersonRecord[]>([]);
   const [existingEvents, setExistingEvents] = useState<LifeEventRecord[]>([]);
+  const [existingRelations, setExistingRelations] = useState<RelationRecord[]>([]);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
   const [allowArchiveTools, setAllowArchiveTools] = useState(true);
   const [reading, setReading] = useState<string | null>(null);
@@ -464,10 +619,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   }, []);
 
   useEffect(() => {
-    void Promise.all([facesDb.listPersons(), facesDb.listLifeEvents()])
-      .then(([people, events]) => {
+    void Promise.all([facesDb.listPersons(), facesDb.listLifeEvents(), facesDb.listRelations()])
+      .then(([people, events, relations]) => {
         setExistingPeople(people);
         setExistingEvents(events);
+        setExistingRelations(relations);
         setKnown(people.map((row) => row.name));
       })
       .finally(() => setPeopleLoaded(true));
@@ -569,10 +725,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         (step) => setReading(step),
         (done, total) => setProgress(total ? Math.round((done / total) * 100) : 0),
       );
-      const failures = docs.filter((doc) => doc.text.trim().startsWith("[读取失败："));
-      failures.forEach((doc) => toast.error(`${doc.name}：${doc.text.trim()}`));
+      const failures = docs.filter((doc) => doc.error);
+      failures.forEach((doc) => toast.error(`${doc.name}：${doc.error}`));
       const entries = docs
-        .filter((doc) => doc.text.trim() && !doc.text.trim().startsWith("[读取失败："))
+        .filter((doc) => doc.text.trim() && !doc.error)
         .map((doc) => ({
           name: doc.name,
           block: `【${t("来自文件")}：${doc.name}】\n${doc.text.trim()}`,
@@ -690,6 +846,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           extractionPrompt: builtPrompt.prompt,
           persons: allowArchiveTools ? existingPeople : [],
           events: allowArchiveTools ? existingEvents : [],
+          relations: allowArchiveTools ? existingRelations : [],
           includeArchive: allowArchiveTools,
           onTrace: (event) =>
             report(
@@ -747,6 +904,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         Object.prototype.hasOwnProperty.call(patch, "identities");
       const previousName = current.name.trim();
       const nextName = (prospective.name ?? "").trim();
+      const oldNameUnique =
+        prev.people.filter((person) => person.name.trim() === previousName).length === 1;
       let people = prev.people.map((person, i) => {
         if (i !== index) return person;
         const next = markSensitiveFieldsManual(
@@ -771,35 +930,71 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         people,
         facts: nameChanged
           ? (prev.facts ?? []).map((fact) =>
-              fact.person.trim() === previousName
+              fact.personDraftId === current._draftId ||
+              (!fact.personDraftId && oldNameUnique && fact.person.trim() === previousName)
                 ? mergeDraftPatch(fact, { person: nextName })
                 : fact,
             )
           : prev.facts,
         relations: nameChanged
           ? (prev.relations ?? []).map((relation) =>
-              relation.from.trim() === previousName || relation.to.trim() === previousName
+              relation.fromDraftId === current._draftId ||
+              relation.toDraftId === current._draftId ||
+              (oldNameUnique &&
+                !relation.fromDraftId &&
+                !relation.toDraftId &&
+                (relation.from.trim() === previousName || relation.to.trim() === previousName))
                 ? mergeDraftPatch(relation, {
-                    from: rename(relation.from),
-                    to: rename(relation.to),
+                    from:
+                      relation.fromDraftId === current._draftId ||
+                      (!relation.fromDraftId && oldNameUnique)
+                        ? rename(relation.from)
+                        : relation.from,
+                    to:
+                      relation.toDraftId === current._draftId ||
+                      (!relation.toDraftId && oldNameUnique)
+                        ? rename(relation.to)
+                        : relation.to,
                   })
                 : relation,
             )
           : prev.relations,
         events: nameChanged
           ? (prev.events ?? []).map((event) =>
-              (event.people ?? []).some((name) => name.trim() === previousName)
+              (event.people ?? []).some(
+                (name, personIndex) =>
+                  event.peopleDraftIds?.[personIndex] === current._draftId ||
+                  (!event.peopleDraftIds?.[personIndex] &&
+                    oldNameUnique &&
+                    name.trim() === previousName),
+              )
                 ? mergeDraftPatch(event, {
-                    people: (event.people ?? []).map(rename),
+                    people: (event.people ?? []).map((name, personIndex) =>
+                      event.peopleDraftIds?.[personIndex] === current._draftId ||
+                      (!event.peopleDraftIds?.[personIndex] && oldNameUnique)
+                        ? rename(name)
+                        : name,
+                    ),
                   })
                 : event,
             )
           : prev.events,
         reminders: nameChanged
           ? (prev.reminders ?? []).map((reminder) =>
-              (reminder.people ?? []).some((name) => name.trim() === previousName)
+              (reminder.people ?? []).some(
+                (name, personIndex) =>
+                  reminder.peopleDraftIds?.[personIndex] === current._draftId ||
+                  (!reminder.peopleDraftIds?.[personIndex] &&
+                    oldNameUnique &&
+                    name.trim() === previousName),
+              )
                 ? mergeDraftPatch(reminder, {
-                    people: (reminder.people ?? []).map(rename),
+                    people: (reminder.people ?? []).map((name, personIndex) =>
+                      reminder.peopleDraftIds?.[personIndex] === current._draftId ||
+                      (!reminder.peopleDraftIds?.[personIndex] && oldNameUnique)
+                        ? rename(name)
+                        : name,
+                    ),
                   })
                 : reminder,
             )
@@ -985,12 +1180,14 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         toast.info(t("没有可撤销的录入批次"));
         return;
       }
-      const [nextPeople, nextEvents] = await Promise.all([
+      const [nextPeople, nextEvents, nextRelations] = await Promise.all([
         facesDb.listPersons(),
         facesDb.listLifeEvents(),
+        facesDb.listRelations(),
       ]);
       setExistingPeople(nextPeople);
       setExistingEvents(nextEvents);
+      setExistingRelations(nextRelations);
       setKnown(nextPeople.map((person) => person.name));
       setLatestBatch(null);
       toast.success(t("已撤销最近一次录入批次"));
@@ -1075,6 +1272,15 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       toast.error(`${t("请先确认人物是新建还是更新已有档案")}：${unresolvedPerson.name}`);
       return;
     }
+    const aiRelationWithoutBasis = (commitDraft.relations ?? []).find(
+      (item) => !item._audit?.humanEdited && !item.basis?.trim(),
+    );
+    if (aiRelationWithoutBasis) {
+      toast.error(
+        `${t("AI 关系缺少原文或推断依据")}：${aiRelationWithoutBasis.from} → ${aiRelationWithoutBasis.to}`,
+      );
+      return;
+    }
     const inferredWithoutBasis = (commitDraft.relations ?? []).find(
       (item) =>
         !item._audit?.humanEdited &&
@@ -1120,6 +1326,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       createdReminderIds: [],
       previousPeople: [],
       previousEvents: [],
+      previousRelations: [],
     };
     const batchHasChanges = () =>
       batch.createdPersonIds.length > 0 ||
@@ -1128,33 +1335,110 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       batch.createdEventIds.length > 0 ||
       batch.createdReminderIds.length > 0 ||
       batch.previousPeople.length > 0 ||
-      (batch.previousEvents?.length ?? 0) > 0;
+      (batch.previousEvents?.length ?? 0) > 0 ||
+      (batch.previousRelations?.length ?? 0) > 0;
     try {
-      const [current, currentEvents] = await Promise.all([
+      const [current, currentEvents, currentRelations] = await Promise.all([
         facesDb.listPersons(),
         facesDb.listLifeEvents(),
+        facesDb.listRelations(),
       ]);
       const byId = new Map(current.map((person) => [person.id, person]));
       const eventById = new Map(currentEvents.map((event) => [event.id, event]));
       const originalById = new Map(current.map((person) => [person.id, person]));
+      const pendingPeople = new Map<string, PersonRecord>();
+      const pendingRelations = new Map<string, RelationRecord>();
+      const pendingEvidence: EvidenceRecord[] = [];
+      const pendingEvents = new Map<string, LifeEventRecord>();
+      const pendingReminders: ReminderRecord[] = [];
       const exactNameBuckets = new Map<string, PersonRecord[]>();
       current.forEach((person) => {
         const key = person.name.trim();
         exactNameBuckets.set(key, [...(exactNameBuckets.get(key) ?? []), person]);
       });
+      const draftNameBuckets = new Map<string, DraftPerson[]>();
+      for (const person of commitDraft.people ?? []) {
+        const key = person.name.trim();
+        if (key) draftNameBuckets.set(key, [...(draftNameBuckets.get(key) ?? []), person]);
+      }
+      const draftIds = new Set((commitDraft.people ?? []).map((person) => person._draftId));
+      const ambiguousReference = (name: string, draftId?: string) => {
+        const key = name.trim();
+        if (!key || key === "我" || key.toLowerCase() === "me") return false;
+        if (draftId && draftIds.has(draftId)) return false;
+        const draftMatches = draftNameBuckets.get(key) ?? [];
+        if (draftMatches.length) return draftMatches.length !== 1;
+        return (exactNameBuckets.get(key) ?? []).length !== 1;
+      };
+      const ambiguous = [
+        ...(commitDraft.facts ?? []).flatMap((fact) =>
+          ambiguousReference(fact.person, fact.personDraftId) ? [`事实：${fact.person}`] : [],
+        ),
+        ...(commitDraft.relations ?? []).flatMap((relation) => [
+          ...(ambiguousReference(relation.from, relation.fromDraftId)
+            ? [`关系起点：${relation.from}`]
+            : []),
+          ...(ambiguousReference(relation.to, relation.toDraftId)
+            ? [`关系终点：${relation.to}`]
+            : []),
+        ]),
+        ...(commitDraft.events ?? []).flatMap((event) =>
+          (event.people ?? [])
+            .filter((name, index) => ambiguousReference(name, event.peopleDraftIds?.[index]))
+            .map((name) => `事件：${name}`),
+        ),
+        ...(commitDraft.reminders ?? []).flatMap((reminder) =>
+          (reminder.people ?? [])
+            .filter((name, index) => ambiguousReference(name, reminder.peopleDraftIds?.[index]))
+            .map((name) => `提醒：${name}`),
+        ),
+      ];
+      if (ambiguous.length) {
+        throw new Error(
+          `人物引用无法唯一确定，请在草稿中选择具体档案：${[...new Set(ambiguous)].join("、")}`,
+        );
+      }
       const resolvedDraftNames = new Map<string, PersonRecord | null>();
+      const resolvedDraftIds = new Map<string, PersonRecord>();
       const rememberDraftName = (name: string, record: PersonRecord) => {
         const previous = resolvedDraftNames.get(name);
         resolvedDraftNames.set(name, previous && previous.id !== record.id ? null : record);
       };
       const resolvePersonName = (name: string) => {
         const key = name.trim();
+        if (key === "我" || key.toLowerCase() === "me") return byId.get(SELF_PERSON_ID);
         if (resolvedDraftNames.has(key)) return resolvedDraftNames.get(key) ?? undefined;
         const matches = exactNameBuckets.get(key) ?? [];
         return matches.length === 1 ? matches[0] : undefined;
       };
+      const resolvePersonRef = (name: string, draftId?: string) =>
+        (draftId ? resolvedDraftIds.get(draftId) : undefined) ?? resolvePersonName(name);
       let created = 0;
       let updated = 0;
+
+      const referencesSelf = [
+        ...(commitDraft.people ?? []).map((item) => item.name),
+        ...(commitDraft.facts ?? []).map((item) => item.person),
+        ...(commitDraft.relations ?? []).flatMap((item) => [item.from, item.to]),
+        ...(commitDraft.events ?? []).flatMap((item) => item.people ?? []),
+        ...(commitDraft.reminders ?? []).flatMap((item) => item.people ?? []),
+      ].some((name) => name.trim() === "我" || name.trim().toLowerCase() === "me");
+      if (referencesSelf && !byId.has(SELF_PERSON_ID)) {
+        const self: PersonRecord = {
+          id: SELF_PERSON_ID,
+          name: "我",
+          note: "本人的本地关系锚点",
+          descriptors: [],
+          thumb: "",
+          createdAt: Date.now(),
+          source: makeSource("manual", "系统创建的本人关系锚点"),
+        };
+        pendingPeople.set(self.id, self);
+        batch.createdPersonIds.push(self.id);
+        byId.set(self.id, self);
+        exactNameBuckets.set(self.name, [self]);
+        created += 1;
+      }
 
       for (const item of commitDraft.people ?? []) {
         const name = (item.name ?? "").trim();
@@ -1228,6 +1512,23 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           Object.entries(profileValues).filter(([, value]) => value !== undefined),
         ) as NonNullable<PersonRecord["profile"]>;
 
+        if (name === "我" || name.toLowerCase() === "me") {
+          const self = byId.get(SELF_PERSON_ID);
+          if (!self) throw new Error("本人关系锚点创建失败");
+          const record: PersonRecord = {
+            ...self,
+            name: "我",
+            note: [self.note, item.note].filter(Boolean).join("；"),
+            profile: { ...self.profile, ...profile },
+            updatedAt: Date.now(),
+          };
+          pendingPeople.set(record.id, record);
+          byId.set(record.id, record);
+          rememberDraftName(name, record);
+          if (item._draftId) resolvedDraftIds.set(item._draftId, record);
+          continue;
+        }
+
         // 提交时重新运行匹配以应对草稿期间数据库发生变化；最终仍以用户在草稿中的选择为准。
         matchIdentity({ name, contact: item.contact, identities: item.identities }, current);
         if (item.targetPersonId !== CREATE_NEW_PERSON) {
@@ -1270,9 +1571,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             },
             updatedAt: Date.now(),
           };
-          await facesDb.putPerson(record);
+          pendingPeople.set(record.id, record);
           byId.set(record.id, record);
           rememberDraftName(name, record);
+          if (item._draftId) resolvedDraftIds.set(item._draftId, record);
           updated += 1;
           continue;
         }
@@ -1289,11 +1591,12 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             item._audit?.humanEdited ? t("草稿中人工编辑") : t("资料整理"),
           ),
         };
-        await facesDb.putPerson(record);
+        pendingPeople.set(record.id, record);
         batch.createdPersonIds.push(record.id);
         byId.set(record.id, record);
         exactNameBuckets.set(name, [...(exactNameBuckets.get(name) ?? []), record]);
         rememberDraftName(name, record);
+        if (item._draftId) resolvedDraftIds.set(item._draftId, record);
         created += 1;
       }
 
@@ -1301,7 +1604,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       for (const item of commitDraft.facts ?? []) {
         const key = item.key?.trim();
         const value = item.value?.trim();
-        const person = resolvePersonName(item.person ?? "");
+        const person = resolvePersonRef(item.person ?? "", item.personDraftId);
         if (!key || !value) continue;
         if (!person) throw new Error(`${t("事实关联人物无法唯一确定")}：${item.person}`);
         if (
@@ -1341,9 +1644,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           },
           updatedAt: Date.now(),
         };
-        await facesDb.putPerson(record);
+        pendingPeople.set(record.id, record);
         byId.set(record.id, record);
         rememberDraftName(item.person.trim(), record);
+        if (item.personDraftId) resolvedDraftIds.set(item.personDraftId, record);
         facts += 1;
       }
 
@@ -1357,7 +1661,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             ? item.kind
             : "note";
         const evidenceId = crypto.randomUUID();
-        await facesDb.putEvidence({
+        const evidenceRecord: EvidenceRecord = {
           id: evidenceId,
           kind,
           title: (item.title ?? "").trim() || t("未命名材料"),
@@ -1367,42 +1671,84 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               ? `${item.origin ? `${item.origin} · ` : ""}${t("仅保留前 800 字摘要")}`
               : item.origin,
           linkedPersonIds: (commitDraft.people ?? [])
-            .map((person) => resolvePersonName(person.name ?? "")?.id)
+            .map((person) => resolvePersonRef(person.name ?? "", person._draftId)?.id)
             .filter((id): id is string => Boolean(id)),
           createdAt: Date.now(),
           source: makeSource(
             item._audit?.humanEdited ? "manual" : "ai",
             item._audit?.humanEdited ? t("草稿中人工编辑") : t("资料整理"),
           ),
-        });
+        };
+        pendingEvidence.push(evidenceRecord);
         evidenceIds.push(evidenceId);
         batch.createdEvidenceIds.push(evidenceId);
         docs += 1;
       }
 
       let links = 0;
-      for (const item of commitDraft.relations ?? []) {
-        const a = resolvePersonName(item.from ?? "");
-        const b = resolvePersonName(item.to ?? "");
-        if (!a || !b || a.id === b.id) continue;
+      const committedRelations = [...currentRelations];
+      const relationDrafts = [...(commitDraft.relations ?? [])].sort(
+        (left, right) =>
+          Number(isInferredRelationBasis(left.basis)) -
+          Number(isInferredRelationBasis(right.basis)),
+      );
+      for (const item of relationDrafts) {
+        const a = resolvePersonRef(item.from ?? "", item.fromDraftId);
+        const b = resolvePersonRef(item.to ?? "", item.toDraftId);
+        if (!a || !b) throw new Error(`关系端点无法确定：${item.from} → ${item.to}`);
+        if (a.id === b.id) throw new Error(`关系不能连接同一人物：${item.from}`);
         const now = Date.now();
-        const relationId = crypto.randomUUID();
-        await facesDb.putRelation({
+        const label = (item.label ?? "").trim() || t("认识");
+        const mutual = inferMutual(label);
+        const semanticKind = normalizeRelationSemanticKind(label);
+        const semanticKey = relationSemanticKey({
+          fromId: a.id,
+          toId: b.id,
+          label,
+          mutual,
+          semanticKind,
+        });
+        const target = item.targetRelationId
+          ? committedRelations.find((relation) => relation.id === item.targetRelationId)
+          : committedRelations.find((relation) => relationSemanticKey(relation) === semanticKey);
+        if (item.targetRelationId && !target) {
+          throw new Error(`${t("要更新的关系已不存在")}：${item.from} → ${item.to}`);
+        }
+        if (
+          target &&
+          !batch.createdRelationIds.includes(target.id) &&
+          !batch.previousRelations?.some((relation) => relation.id === target.id)
+        ) {
+          batch.previousRelations?.push(structuredClone(target));
+        }
+        const relationId = target?.id ?? crypto.randomUUID();
+        const inferred = isInferredRelationBasis(item.basis);
+        const dependencies = inferred
+          ? findRelationDependencies(
+              a.id,
+              b.id,
+              committedRelations.filter((r) => r.id !== relationId),
+            )
+          : [];
+        const record: RelationRecord = {
+          ...target,
           id: relationId,
           fromId: a.id,
           toId: b.id,
-          label: (item.label ?? "").trim() || t("认识"),
-          mutual: inferMutual((item.label ?? "").trim()),
+          label,
+          mutual,
           note: item.note,
           basis: item.basis?.trim() || undefined,
-          sourceId: evidenceIds[0],
-          createdAt: now,
+          sourceId: evidenceIds[0] ?? target?.sourceId,
+          createdAt: target?.createdAt ?? now,
           updatedAt: now,
           confirmationStatus: "confirmed",
-          evidenceMode: isInferredRelationBasis(item.basis) ? "inferred" : "explicit",
+          evidenceMode: inferred ? "inferred" : "explicit",
           confidence: item._audit?.confidence,
-          visibility: "auto",
-          recommendationPolicy: "allow",
+          visibility: target?.visibility ?? "auto",
+          recommendationPolicy: target?.recommendationPolicy ?? "allow",
+          semanticKind,
+          derivedFromRelationIds: dependencies.length ? dependencies : undefined,
           source: makeSource(
             item._audit?.humanEdited ? "manual" : "ai",
             item._audit?.humanEdited
@@ -1415,8 +1761,14 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                 ? t("AI 推断，经人工确认")
                 : t("资料整理"),
           ),
-        });
-        batch.createdRelationIds.push(relationId);
+        };
+        pendingRelations.set(record.id, record);
+        const previousIndex = committedRelations.findIndex(
+          (relation) => relation.id === relationId,
+        );
+        if (previousIndex >= 0) committedRelations[previousIndex] = record;
+        else committedRelations.push(record);
+        if (!target) batch.createdRelationIds.push(relationId);
         links += 1;
       }
 
@@ -1442,7 +1794,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         if (previous && !batch.previousEvents?.some((event) => event.id === previous.id)) {
           batch.previousEvents?.push(structuredClone(previous));
         }
-        await facesDb.putLifeEvent({
+        const eventRecord: LifeEventRecord = {
           id: eventId,
           title,
           date,
@@ -1453,7 +1805,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           personIds:
             item.people !== undefined
               ? item.people
-                  .map((name) => resolvePersonName(name)?.id)
+                  .map((name, index) => resolvePersonRef(name, item.peopleDraftIds?.[index])?.id)
                   .filter((id): id is string => Boolean(id))
               : previous?.personIds,
           kind: item.kind !== undefined ? item.kind || undefined : previous?.kind,
@@ -1463,7 +1815,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             item._audit?.humanEdited ? "manual" : "ai",
             item._audit?.humanEdited ? t("草稿中人工编辑") : t("资料整理"),
           ),
-        });
+        };
+        pendingEvents.set(eventRecord.id, eventRecord);
         if (previous) {
           eventUpdates += 1;
         } else {
@@ -1482,13 +1835,13 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           ? item.kind
           : "custom";
         const reminderId = crypto.randomUUID();
-        await facesDb.putReminder({
+        const reminderRecord: ReminderRecord = {
           id: reminderId,
           title,
           detail: item.detail || undefined,
           due: item.due || undefined,
           personIds: (item.people ?? [])
-            .map((name) => resolvePersonName(name)?.id)
+            .map((name, index) => resolvePersonRef(name, item.peopleDraftIds?.[index])?.id)
             .filter((id): id is string => Boolean(id)),
           kind,
           done: false,
@@ -1497,10 +1850,19 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             item._audit?.humanEdited ? "manual" : "ai",
             item._audit?.humanEdited ? t("草稿中人工编辑") : t("资料整理"),
           ),
-        });
+        };
+        pendingReminders.push(reminderRecord);
         batch.createdReminderIds.push(reminderId);
         reminders += 1;
       }
+
+      await facesDb.putBatch({
+        persons: [...pendingPeople.values()],
+        relations: [...pendingRelations.values()],
+        evidence: pendingEvidence,
+        lifeEvents: [...pendingEvents.values()],
+        reminders: pendingReminders,
+      });
 
       setDraft(null);
       setRaw("");
@@ -1513,9 +1875,13 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         /* ignore */
       }
       const nextPeople = [...byId.values()];
-      const nextEvents = await facesDb.listLifeEvents();
+      const [nextEvents, nextRelations] = await Promise.all([
+        facesDb.listLifeEvents(),
+        facesDb.listRelations(),
+      ]);
       setExistingPeople(nextPeople);
       setExistingEvents(nextEvents);
+      setExistingRelations(nextRelations);
       setKnown(nextPeople.map((person) => person.name));
       if (batchHasChanges()) {
         batch.committedAt = Date.now();
@@ -1527,10 +1893,15 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       );
     } catch (error) {
       if (batchHasChanges()) {
-        batch.committedAt = Date.now();
-        rememberIntakeBatch(batch);
-        setLatestBatch(batch);
-        toast.error(`${(error as Error).message} · ${t("已写入的部分可用下方按钮撤销")}`);
+        try {
+          await rollbackIntakeBatch(batch);
+          toast.error(`${(error as Error).message} · ${t("本批次已自动回滚，未留下部分数据")}`);
+        } catch {
+          batch.committedAt = Date.now();
+          rememberIntakeBatch(batch);
+          setLatestBatch(batch);
+          toast.error(`${(error as Error).message} · ${t("自动回滚失败，可用下方按钮撤销")}`);
+        }
       } else {
         toast.error((error as Error).message);
       }
@@ -2283,9 +2654,13 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                   onReject={() => removeFact(index)}
                 />
                 <div className="grid gap-2 sm:grid-cols-[1fr_1fr_2fr_auto]">
-                  <Input
-                    value={item.person ?? ""}
-                    onChange={(event) => patchFact(index, { person: event.target.value })}
+                  <DraftPersonReferenceInput
+                    name={item.person ?? ""}
+                    draftId={item.personDraftId}
+                    people={draft.people ?? []}
+                    onChange={(person, personDraftId) =>
+                      patchFact(index, { person, personDraftId })
+                    }
                     className="h-8 text-xs"
                     placeholder={t("人物")}
                   />
@@ -2387,9 +2762,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                       onReject={() => removeRelation(index)}
                     />
                   </div>
-                  <Input
-                    value={relation.from ?? ""}
-                    onChange={(event) => patchRelation(index, { from: event.target.value })}
+                  <DraftPersonReferenceInput
+                    name={relation.from ?? ""}
+                    draftId={relation.fromDraftId}
+                    people={draft.people ?? []}
+                    onChange={(from, fromDraftId) => patchRelation(index, { from, fromDraftId })}
                     className="h-8 w-28 text-xs"
                     placeholder={t("谁")}
                   />
@@ -2401,9 +2778,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     placeholder={t("关系")}
                   />
                   <ArrowRight className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-                  <Input
-                    value={relation.to ?? ""}
-                    onChange={(event) => patchRelation(index, { to: event.target.value })}
+                  <DraftPersonReferenceInput
+                    name={relation.to ?? ""}
+                    draftId={relation.toDraftId}
+                    people={draft.people ?? []}
+                    onChange={(to, toDraftId) => patchRelation(index, { to, toDraftId })}
                     className="h-8 w-28 text-xs"
                     placeholder={t("对谁")}
                   />
@@ -2582,19 +2961,28 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     className="h-8 text-xs"
                     placeholder={t("地点")}
                   />
-                  <Input
-                    value={(item.people ?? []).join("、")}
-                    onChange={(event) =>
-                      patchEvent(index, {
-                        people: event.target.value
-                          .split(/[、,，\s]+/)
-                          .map((name) => name.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                    className="h-8 text-xs"
-                    placeholder={t("相关人物（顿号分隔）")}
-                  />
+                  <div>
+                    <Input
+                      value={(item.people ?? []).join("、")}
+                      onChange={(event) =>
+                        patchEvent(index, {
+                          people: event.target.value
+                            .split(/[、,，\s]+/)
+                            .map((name) => name.trim())
+                            .filter(Boolean),
+                          peopleDraftIds: undefined,
+                        })
+                      }
+                      className="h-8 text-xs"
+                      placeholder={t("相关人物（顿号分隔）")}
+                    />
+                    <DraftAmbiguousPeopleRefs
+                      names={item.people ?? []}
+                      draftIds={item.peopleDraftIds}
+                      people={draft.people ?? []}
+                      onChange={(peopleDraftIds) => patchEvent(index, { peopleDraftIds })}
+                    />
+                  </div>
                   <Input
                     value={item.kind ?? ""}
                     onChange={(event) => patchEvent(index, { kind: event.target.value })}
@@ -2685,19 +3073,28 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     <option value="festival">{t("节日")}</option>
                     <option value="gift">{t("送礼")}</option>
                   </select>
-                  <Input
-                    value={(item.people ?? []).join("、")}
-                    onChange={(event) =>
-                      patchReminder(index, {
-                        people: event.target.value
-                          .split(/[、,，\s]+/)
-                          .map((name) => name.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                    className="h-8 text-xs sm:col-span-2"
-                    placeholder={t("相关人物（顿号分隔）")}
-                  />
+                  <div className="sm:col-span-2">
+                    <Input
+                      value={(item.people ?? []).join("、")}
+                      onChange={(event) =>
+                        patchReminder(index, {
+                          people: event.target.value
+                            .split(/[、,，\s]+/)
+                            .map((name) => name.trim())
+                            .filter(Boolean),
+                          peopleDraftIds: undefined,
+                        })
+                      }
+                      className="h-8 text-xs"
+                      placeholder={t("相关人物（顿号分隔）")}
+                    />
+                    <DraftAmbiguousPeopleRefs
+                      names={item.people ?? []}
+                      draftIds={item.peopleDraftIds}
+                      people={draft.people ?? []}
+                      onChange={(peopleDraftIds) => patchReminder(index, { peopleDraftIds })}
+                    />
+                  </div>
                 </div>
                 <Textarea
                   value={item.detail ?? ""}

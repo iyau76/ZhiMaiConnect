@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { getRuntimeBindings, type DistributedRateLimiter } from "./runtime-bindings.server";
+
 const KIB = 1024;
 const MIB = 1024 * KIB;
 
@@ -220,6 +222,8 @@ const audioSchema = z.string().superRefine((value, context) => {
   const bytes = decodedBase64Bytes(value);
   if (bytes === null) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "音频 base64 无效" });
+  } else if (bytes < 256) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "音频内容过短" });
   } else if (bytes > API_LIMITS.audioBytes) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "音频超过大小限制" });
   }
@@ -428,19 +432,31 @@ type RateLimitEntry = { windowStartedAt: number; count: number };
 const rateLimitBuckets = new Map<string, RateLimitEntry>();
 const MAX_RATE_LIMIT_BUCKETS = 5_000;
 
-export function enforceRateLimit(
+function distributedLimiterFor(routeName: string): DistributedRateLimiter | undefined {
+  const bindings = getRuntimeBindings();
+  if (routeName === "transcribe") return bindings.ZHIMAI_TRANSCRIBE_LIMITER;
+  if (routeName === "vision") return bindings.ZHIMAI_VISION_LIMITER;
+  if (routeName === "web-tools") return bindings.ZHIMAI_WEB_TOOLS_LIMITER;
+  return undefined;
+}
+
+function rateLimitActor(request: Request): string {
+  const session = request.headers.get("x-zhimai-session")?.trim();
+  if (session && /^[0-9a-f-]{36}$/i.test(session)) return `session:${session}`;
+  // Cloudflare overwrites this header at the trusted edge. Never trust client-set
+  // X-Forwarded-For/X-Real-IP fallbacks: rotating them would bypass the bucket.
+  const connectingIp = request.headers.get("cf-connecting-ip")?.trim() || "unverified-client";
+  return `edge:${connectingIp.slice(0, 100)}`;
+}
+
+function enforceMemoryRateLimit(
   request: Request,
   routeName: string,
   limit: number,
   windowMs = 60_000,
 ): void {
   const now = Date.now();
-  const connectingIp =
-    request.headers.get("cf-connecting-ip") ??
-    request.headers.get("x-real-ip") ??
-    request.headers.get("x-forwarded-for")?.split(",", 1)[0].trim() ??
-    "unknown";
-  const key = `${routeName}:${connectingIp.slice(0, 100)}`;
+  const key = `${routeName}:${rateLimitActor(request)}`;
   const current = rateLimitBuckets.get(key);
   if (!current || now - current.windowStartedAt >= windowMs) {
     if (!current && rateLimitBuckets.size >= MAX_RATE_LIMIT_BUCKETS) {
@@ -464,6 +480,37 @@ export function enforceRateLimit(
     );
     throw new SafeApiError(429, "RATE_LIMITED", "请求过于频繁，请稍后再试", retryAfterSeconds);
   }
+}
+
+export async function enforceRateLimit(
+  request: Request,
+  routeName: string,
+  limit: number,
+  windowMs = 60_000,
+): Promise<void> {
+  const distributed = distributedLimiterFor(routeName);
+  if (distributed) {
+    try {
+      const { success } = await distributed.limit({
+        key: `${routeName}:${rateLimitActor(request)}`,
+      });
+      if (!success) {
+        throw new SafeApiError(
+          429,
+          "RATE_LIMITED",
+          "请求过于频繁，请稍后再试",
+          Math.max(1, Math.ceil(windowMs / 1_000)),
+        );
+      }
+      return;
+    } catch (error) {
+      if (error instanceof SafeApiError) throw error;
+      // A binding outage must not turn every AI endpoint into a 500. The local
+      // bounded limiter remains a conservative fallback for non-Workers runtimes.
+      console.error("Cloudflare rate limiter unavailable; using local fallback", error);
+    }
+  }
+  enforceMemoryRateLimit(request, routeName, limit, windowMs);
 }
 
 const API_SESSION_COOKIE = "zhimai_ai_session";

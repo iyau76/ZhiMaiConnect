@@ -407,6 +407,21 @@ test("关系网单击只淡化无关节点，双击开人物卡，并可在图�
   await expect(relationDetail).toContainText("赵宇 → 陈安");
   await expect(relationDetail).toContainText("合成演示：校友活动记录");
   await expect(relationDetail).toContainText("共同负责签到");
+  await relationDetail.getByLabel("关系图展示").selectOption("hidden");
+  await relationDetail.getByLabel("引荐推荐策略").selectOption("block");
+  await expect
+    .poll(async () =>
+      (
+        await readIndexedDbStore<{
+          id: string;
+          visibility?: string;
+          recommendationPolicy?: string;
+        }>(page, "relations")
+      ).find((relation) => relation.id === "relation-ab"),
+    )
+    .toMatchObject({ visibility: "hidden", recommendationPolicy: "block" });
+  await page.getByLabel("关系网视图").selectOption("all");
+  await expect(graph.getByRole("button", { name: /查看关系详情：陈安 ⇄ 赵宇/ })).toBeVisible();
 
   await personA.dblclick();
   const dialog = page.getByRole("dialog");
@@ -483,6 +498,77 @@ test("本地候选排序后才请求 AI，并产出可编辑求助话术", async
   expect(mockNetwork.visionRequests).toHaveLength(1);
 });
 
+test("目标人物引荐只返回真实可达路径，断开的高亲密度同学不会入选", async ({ page }) => {
+  await openApp(page);
+  await seedIndexedDb(page, {
+    persons: [
+      {
+        id: "jia-lian",
+        name: "贾琏",
+        note: "可直接联系",
+        profile: { closeness: 5, contact: "synthetic-jialian@example.invalid" },
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW,
+      },
+      {
+        id: "jia-mu",
+        name: "贾母",
+        note: "目标人物",
+        profile: {},
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW - 1,
+      },
+      {
+        id: "classmate-a",
+        name: "同学甲",
+        note: "与目标无关系记录",
+        profile: { closeness: 5, contact: "synthetic-a@example.invalid" },
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW - 2,
+      },
+      {
+        id: "classmate-b",
+        name: "同学乙",
+        note: "与目标无关系记录",
+        profile: { closeness: 5, contact: "synthetic-b@example.invalid" },
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW - 3,
+      },
+    ],
+    relations: [
+      {
+        id: "jia-family-path",
+        fromId: "jia-lian",
+        toId: "jia-mu",
+        label: "晚辈与长辈",
+        basis: "原文：贾琏可以联系贾母",
+        evidenceMode: "explicit",
+        confidence: 0.95,
+        confirmationStatus: "confirmed",
+        recommendationPolicy: "allow",
+        visibility: "auto",
+        createdAt: NOW,
+      },
+    ],
+  });
+
+  await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
+  const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+  await recommendation.getByRole("textbox").fill("我想找贾母办事，应该通过谁联系？");
+  await recommendation.getByRole("button", { name: "本地筛选候选" }).click();
+
+  await expect(recommendation.getByText(/目标模式：只显示/)).toBeVisible();
+  await expect(recommendation.locator("ol li")).toHaveCount(1);
+  await expect(recommendation.locator("ol li").first()).toContainText("贾琏");
+  await expect(recommendation.locator("ol li").first()).toContainText("我 → 贾琏 → 贾母");
+  await expect(recommendation.locator("ol")).not.toContainText("同学甲");
+  await expect(recommendation.locator("ol")).not.toContainText("同学乙");
+});
+
 test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过程", async ({ page, mockNetwork }) => {
   await openApp(page);
   await seedIndexedDb(page, {
@@ -533,7 +619,7 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
   await expect(trace).toContainText("分析完成");
   await expect(trace).toContainText(/\d+ 步/);
   await expect(recommendation.locator("ol li").first()).toContainText("陈安");
-  await expect(recommendation.locator("ol li").first()).toContainText("92 AI建议分");
+  await expect(recommendation.locator("ol li").first()).toContainText("88 本地锁定分");
   await expect(
     recommendation.getByRole("textbox", { name: "可编辑的候选比较与求助话术" }),
   ).toContainText("为什么不是赵宇");
@@ -594,6 +680,43 @@ test("AI 助理修改人物时必须先批准，批准前人物库保持不变",
   expect(people[0].profile?.title).toBe("品牌总监");
 });
 
+test("AI 助理修改人物关系时同样必须先批准", async ({ page }) => {
+  await openApp(page);
+  await seedIndexedDb(page, {
+    persons: [
+      { id: "relation-person-a", name: "甲", note: "", descriptors: [], thumb: "", createdAt: NOW },
+      { id: "relation-person-b", name: "乙", note: "", descriptors: [], thumb: "", createdAt: NOW },
+    ],
+    relations: [
+      {
+        id: "relation-update-agent",
+        fromId: "relation-person-a",
+        toId: "relation-person-b",
+        label: "同事",
+        basis: "原文：甲和乙是同事",
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ],
+  });
+  await openApp(page);
+  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  const questionCard = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await questionCard.getByRole("textbox").fill("把甲和乙的关系改成前同事");
+  await questionCard.getByRole("button", { name: "发送问题" }).click();
+
+  const approval = questionCard.getByRole("region", { name: "待批准的关系修改" });
+  await expect(approval).toContainText("同事");
+  await expect(approval).toContainText("前同事");
+  let relations = await readIndexedDbStore<{ label: string }>(page, "relations");
+  expect(relations[0].label).toBe("同事");
+
+  await approval.getByRole("button", { name: "批准并执行" }).click();
+  await expect(approval).toHaveCount(0);
+  relations = await readIndexedDbStore<{ label: string }>(page, "relations");
+  expect(relations[0].label).toBe("前同事");
+});
+
 test("AI 录入可检索并更新已有事件，确认前不覆盖原记录", async ({ page, mockNetwork }) => {
   await openApp(page);
   await seedIndexedDb(page, {
@@ -633,7 +756,7 @@ test("AI 录入可检索并更新已有事件，确认前不覆盖原记录", as
 
 test("日历中的既有事件可以原位编辑而不是重复新建", async ({ page }) => {
   await openApp(page);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
   await seedIndexedDb(page, {
     lifeEvents: [
       {

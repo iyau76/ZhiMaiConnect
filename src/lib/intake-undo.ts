@@ -1,4 +1,4 @@
-import { facesDb, type LifeEventRecord, type PersonRecord } from "./face-db";
+import { facesDb, type LifeEventRecord, type PersonRecord, type RelationRecord } from "./face-db";
 
 export interface IntakeUndoBatch {
   id: string;
@@ -12,6 +12,8 @@ export interface IntakeUndoBatch {
   previousPeople: PersonRecord[];
   /** Events overwritten by an approved update, kept for one-step rollback. */
   previousEvents?: LifeEventRecord[];
+  /** Relations overwritten by an approved update or semantic deduplication. */
+  previousRelations?: RelationRecord[];
 }
 
 let latestBatch: IntakeUndoBatch | null = null;
@@ -33,10 +35,8 @@ export function clearLatestIntakeBatch() {
   latestBatch = null;
 }
 
-export async function undoLatestIntakeBatch(): Promise<IntakeUndoBatch | null> {
-  const batch = latestBatch;
-  if (!batch) return null;
-
+/** Roll back a concrete batch, including a batch that failed before it was checkpointed. */
+export async function rollbackIntakeBatch(batch: IntakeUndoBatch): Promise<void> {
   // Remove dependent records before people. deletePerson also prunes relations,
   // but the explicit order keeps rollback deterministic when a batch updates an
   // existing person instead of only creating new people.
@@ -47,7 +47,15 @@ export async function undoLatestIntakeBatch(): Promise<IntakeUndoBatch | null> {
   await Promise.all(batch.createdPersonIds.map((id) => facesDb.deletePerson(id)));
   await Promise.all(batch.previousPeople.map((person) => facesDb.putPerson(person)));
   await Promise.all((batch.previousEvents ?? []).map((event) => facesDb.putLifeEvent(event)));
+  await Promise.all(
+    (batch.previousRelations ?? []).map((relation) => facesDb.putRelation(relation)),
+  );
+}
 
+export async function undoLatestIntakeBatch(): Promise<IntakeUndoBatch | null> {
+  const batch = latestBatch;
+  if (!batch) return null;
+  await rollbackIntakeBatch(batch);
   latestBatch = null;
   return structuredClone(batch);
 }

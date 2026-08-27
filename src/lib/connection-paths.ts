@@ -61,7 +61,7 @@ function escapeRegExp(value: string) {
 function aliases(person: PersonRecord) {
   return [person.name, ...(person.profile?.identities ?? []).map((identity) => identity.alias)]
     .map((item) => item.trim())
-    .filter((item) => item.length >= 2);
+    .filter(Boolean);
 }
 
 /** 只把档案中真实出现的人名当目标；多人同时命中时交给用户选择。 */
@@ -90,8 +90,16 @@ export function detectTargetIntent(task: string, persons: PersonRecord[]): Targe
 
 function eventAt(event?: LifeEventRecord) {
   if (!event?.date) return 0;
-  const at = new Date(`${event.date.slice(0, 10)}T00:00:00`).getTime();
-  return Number.isFinite(at) ? at : 0;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(event.date.slice(0, 10));
+  if (!match) return 0;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1900) return 0;
+  const probe = new Date(year, month - 1, day);
+  return probe.getFullYear() === year && probe.getMonth() === month - 1 && probe.getDate() === day
+    ? probe.getTime()
+    : 0;
 }
 
 function recencyFactor(at: number, now: Date) {
@@ -106,7 +114,10 @@ function accessEdge(person: PersonRecord, events: LifeEventRecord[], now: Date):
     .filter((event) => event.personIds?.includes(person.id))
     .sort((a, b) => eventAt(b) - eventAt(a));
   const hasContact = Boolean(person.profile?.contact?.trim());
-  const closeness = person.profile?.closeness;
+  const rawCloseness = person.profile?.closeness;
+  const closeness = Number.isFinite(rawCloseness)
+    ? Math.max(1, Math.min(5, rawCloseness as number))
+    : undefined;
   if (!hasContact && closeness === undefined && !interactions.length) return null;
 
   const contact = hasContact ? 0.32 : 0;
@@ -215,6 +226,10 @@ export function rankConnectionPaths(options: ConnectionPathOptions): CandidateRe
     .map((person) => accessEdge(person, options.events, now))
     .filter((item): item is AccessEdge => Boolean(item));
   const found: FoundPath[] = [];
+  // Dense graphs grow exponentially under simple-path enumeration. Keep one global,
+  // deterministic expansion budget so an adversarial archive cannot freeze the UI.
+  const maxExpansions = 50_000;
+  let expansions = 0;
 
   const walk = (
     accessStart: AccessEdge,
@@ -236,8 +251,13 @@ export function rankConnectionPaths(options: ConnectionPathOptions): CandidateRe
     }
     // 加上虚拟“我”到首位联系人的边，总跳数不能超过 maxHops。
     if (edges.length + 1 >= maxHops) return;
-    for (const edge of graph.get(currentId) ?? []) {
+    const nextEdges = [...(graph.get(currentId) ?? [])].sort(
+      (a, b) => Number(b.toId === options.targetId) - Number(a.toId === options.targetId),
+    );
+    for (const edge of nextEdges) {
+      if (expansions >= maxExpansions) return;
       if (visited.has(edge.toId)) continue;
+      expansions += 1;
       visited.add(edge.toId);
       walk(
         accessStart,
@@ -252,6 +272,7 @@ export function rankConnectionPaths(options: ConnectionPathOptions): CandidateRe
   };
 
   for (const start of access) {
+    if (expansions >= maxExpansions) break;
     walk(start, start.person.id, [start.person.id], [], new Set([start.person.id]), start.cost);
   }
 

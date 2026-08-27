@@ -91,6 +91,9 @@ describe("parseFuzzyLocal", () => {
     ["上个月", { date: "2026-07-01", precision: "month" }],
     ["十个月前", { date: "2025-10-01", precision: "month" }],
     ["十一个月前", { date: "2025-09-01", precision: "month" }],
+    ["明年三月", { date: "2027-03-01", precision: "month" }],
+    ["明年春节", { date: "2027-02-06", precision: "day" }],
+    ["明年除夕", { date: "2027-02-05", precision: "day" }],
   ])("parses %s", (input, expected) => {
     expect(parseFuzzyLocal(input, now)).toEqual(expected);
   });

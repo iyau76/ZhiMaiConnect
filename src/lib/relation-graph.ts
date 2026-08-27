@@ -230,6 +230,7 @@ export function selectVisibleRelations(
   );
   const bestParallel = new Map<string, string>();
   for (const relation of options.relations) {
+    if (relation.visibility === "hidden" || relation.confirmationStatus === "rejected") continue;
     const key = pairKey(relation.fromId, relation.toId);
     const previousId = bestParallel.get(key);
     if (!previousId || importance.get(relation.id)!.score > importance.get(previousId)!.score)

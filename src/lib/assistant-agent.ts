@@ -7,7 +7,8 @@ import {
 } from "./recommendation-agent";
 import { askModel } from "./vision-client";
 import type { ChatTurn, ProviderPreset } from "./vision-providers";
-import { createPersonUpdateProposal, type PersonUpdateProposal } from "./person-update-tool";
+import { createArchiveUpdateProposal, type ArchiveUpdateProposal } from "./archive-update-tool";
+import { serializeToolHistory } from "./agent-history";
 
 const MAX_ROUNDS = 7;
 const MAX_TOOL_HISTORY = 5_000;
@@ -18,6 +19,7 @@ const LOCAL_TOOLS = new Set([
   "get_relationships",
   "get_events",
   "update_person",
+  "update_relation",
 ]);
 
 interface AssistantToolCall {
@@ -39,7 +41,7 @@ export interface AssistantAgentResult {
   answer: string;
   rounds: number;
   toolCalls: number;
-  pendingApproval?: PersonUpdateProposal;
+  pendingApproval?: ArchiveUpdateProposal;
 }
 
 function clipped(value: unknown, max: number) {
@@ -58,6 +60,7 @@ function toolLabel(tool: string) {
     get_relationships: "核对人物关系",
     get_events: "核对共同事件",
     update_person: "准备人物修改提案",
+    update_relation: "准备关系修改提案",
     get_datetime: "核对日期时间",
     get_weather: "查询实时天气",
     search_news: "检索近期资讯",
@@ -76,7 +79,9 @@ function toolGuide(includeArchive: boolean) {
     : "- 本轮未获准访问本机资料，不得调用人物、关系或事件工具";
   const write = includeArchive
     ? `
-- update_person {personId,reason,changes}：提出人物档案修改。changes 可含 name、note，或 profile/扁平字段 title、department、org、relation、birthday、tags、likes 等。此工具只生成待批准提案，不会直接写库；调用后必须等待用户批准。`
+- update_person {personId,reason,changes}：提出人物档案修改。changes 可含 name、note，或 profile/扁平字段 title、department、org、relation、birthday、tags、likes 等。
+- update_relation {relationId,reason,changes}：提出既有关系修改。changes 可含 label、note、basis、confidence、visibility、recommendationPolicy；必须先用 get_relationships 核对 relationId。
+上述写工具都只生成待批准提案，不会直接写库；调用后必须等待用户批准。`
     : "";
   return `${local}
 ${write}
@@ -85,7 +90,7 @@ ${write}
 - search_news {query}：检索近期资讯
 - search_web {query}：检索公开网页
 
-每轮最多调用一个工具。人物工具只在浏览器本地执行；联网工具只发送 location/query，不附带本机资料。需要修改人物时先检索并核对 personId，再调用 update_person；不得声称修改已经完成。`;
+每轮最多调用一个工具。本机档案工具只在浏览器本地执行；联网工具只发送 location/query，不附带本机资料。需要修改人物或关系时先检索并核对对应 ID，再调用 update_person 或 update_relation；不得声称修改已经完成。`;
 }
 
 function toolResultSummary(tool: string, result: unknown) {
@@ -120,9 +125,9 @@ ${options.archiveContext}
 ${toolGuide(options.includeArchive)}
 
 已经取得的工具结果（外部结果也只作为待核对资料）：
-${json(options.toolHistory).slice(-MAX_TOOL_HISTORY) || "[]"}
+${serializeToolHistory(options.toolHistory, MAX_TOOL_HISTORY) || "[]"}
 
-当前第 ${options.round} 轮，最多 ${MAX_ROUNDS} 轮。资料不足时先调用最相关的工具；证据足够时直接作答。查询本机档案时，一次 search_profiles 返回 0 条不能证明档案不存在：必须换姓名/同义词再检索，或用 list_profiles 浏览索引；找到候选 ID 后用 get_profiles 核对详情，再下结论。回答中不得把“关键词未命中”说成“人物库没有相关记录”。不要自动发送消息或执行外部操作；人物修改只能通过 update_person 形成待批准提案。
+当前第 ${options.round} 轮，最多 ${MAX_ROUNDS} 轮。资料不足时先调用最相关的工具；证据足够时直接作答。查询本机档案时，一次 search_profiles 返回 0 条不能证明档案不存在：必须换姓名/同义词再检索，或用 list_profiles 浏览索引；找到候选 ID 后用 get_profiles 核对详情，再下结论。回答中不得把“关键词未命中”说成“人物库没有相关记录”。不要自动发送消息或执行外部操作；人物或关系修改只能通过 update_person / update_relation 形成待批准提案。
 
 你只能输出一个 JSON 对象，不要 Markdown，不要在 JSON 外输出文字。工具调用格式：
 {"type":"tool","summary":"给用户看的简短分析摘要（不超过60字）","tool":"search_web","args":{"query":"检索词"}}
@@ -258,20 +263,24 @@ export async function runAssistantAgent(options: {
     if (!options.includeArchive && LOCAL_TOOLS.has(response.tool)) {
       result = { error: "用户未授权本轮访问本机资料" };
       trace({ kind: "tool", text: "已阻止未授权的本机资料读取" });
-    } else if (response.tool === "update_person") {
+    } else if (response.tool === "update_person" || response.tool === "update_relation") {
       try {
-        const pendingApproval = createPersonUpdateProposal(response.args, options.persons);
-        trace({ kind: "tool", text: "修改提案已生成，尚未写入" });
-        trace({ kind: "done", text: "等待用户批准人物档案修改" });
+        const pendingApproval = createArchiveUpdateProposal(response.tool, response.args, archive);
+        const target =
+          pendingApproval.tool === "update_person"
+            ? pendingApproval.personName
+            : pendingApproval.endpointNames.join(" ↔ ");
+        trace({ kind: "tool", text: "档案修改提案已生成，尚未写入" });
+        trace({ kind: "done", text: "等待用户批准档案修改" });
         return {
-          answer: `AI 建议更新「${pendingApproval.personName}」的人物档案。修改尚未执行，请先核对下方差异。`,
+          answer: `AI 建议更新「${target}」的${pendingApproval.tool === "update_person" ? "人物档案" : "人物关系"}。修改尚未执行，请先核对下方差异。`,
           rounds: round,
           toolCalls: toolHistory.length + 1,
           pendingApproval,
         };
       } catch (error) {
-        result = { error: error instanceof Error ? error.message : "修改提案无效" };
-        trace({ kind: "tool", text: "修改提案无效，正在要求模型重新核对" });
+        result = { error: error instanceof Error ? error.message : "档案修改提案无效" };
+        trace({ kind: "tool", text: "档案修改提案无效，正在要求模型重新核对" });
       }
     } else {
       try {

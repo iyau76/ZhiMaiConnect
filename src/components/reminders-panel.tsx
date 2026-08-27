@@ -32,7 +32,7 @@ import {
   type RelationRecord,
   type ReminderRecord,
 } from "@/lib/face-db";
-import { t } from "@/lib/i18n";
+import { getLang, t } from "@/lib/i18n";
 import { blessingPrompt, upcoming, todayStr, type UpcomingItem } from "@/lib/personal";
 import {
   rankCandidates,
@@ -94,7 +94,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       const text = await askText(preset, blessingPrompt(item));
       setAnswer({ key: item.key, text });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "AI 请求失败");
+      toast.error(error instanceof Error ? error.message : t("AI 请求失败"));
     } finally {
       setBusyKey(null);
     }
@@ -105,7 +105,14 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     const occurrence = new Date(today.getFullYear(), today.getMonth(), today.getDate() + item.days);
     const record: ReminderRecord = {
       id: crypto.randomUUID(),
-      title: item.kind === "birthday" ? `给 ${item.person?.name} 送生日祝福` : `${item.title}问候`,
+      title:
+        getLang() === "en"
+          ? item.kind === "birthday"
+            ? `Send birthday wishes to ${item.person?.name}`
+            : `Send greetings for ${item.title}`
+          : item.kind === "birthday"
+            ? `给 ${item.person?.name} 送生日祝福`
+            : `${item.title}问候`,
       due: todayStr(occurrence),
       personIds: item.person ? [item.person.id] : [],
       kind: item.kind,
@@ -114,7 +121,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     };
     await facesDb.putReminder(record);
     await load();
-    toast.success("已加入待办，并同步显示在日历");
+    toast.success(t("已加入待办，并同步显示在日历"));
   };
 
   const addManual = async () => {
@@ -145,15 +152,15 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   const addContactReminder = async (person: PersonRecord) => {
     await facesDb.putReminder({
       id: crypto.randomUUID(),
-      title: `联系 ${person.name}`,
-      detail: "长期未联系提醒，请先确认对方近况再发送消息。",
+      title: getLang() === "en" ? `Contact ${person.name}` : `联系 ${person.name}`,
+      detail: t("长期未联系提醒，请先确认对方近况再发送消息。"),
       personIds: [person.id],
       kind: "custom",
       done: false,
       createdAt: Date.now(),
     });
     await load();
-    toast.success("已加入待办");
+    toast.success(t("已加入待办"));
   };
 
   const runTargetRecommendation = (targetId: string, includeInferred = includeInferredPaths) => {
@@ -175,9 +182,13 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     setAskAnswer("");
     setSelectedTargetId(targetId);
     setRecommendationNotice(
-      ranked.length
-        ? `目标模式：只显示“我 → 中间人 → ${target.name}”的真实可达路径。`
-        : `没有找到通往 ${target.name} 的合格路径。请补充联系方式/互动记录，或确认必要的推导关系。`,
+      getLang() === "en"
+        ? ranked.length
+          ? `Target mode: only genuine reachable paths from Me through an intermediary to ${target.name} are shown.`
+          : `No eligible path to ${target.name}. Add contact or interaction records, or verify required inferred relations.`
+        : ranked.length
+          ? `目标模式：只显示“我 → 中间人 → ${target.name}”的真实可达路径。`
+          : `没有找到通往 ${target.name} 的合格路径。请补充联系方式/互动记录，或确认必要的推导关系。`,
     );
   };
 
@@ -189,7 +200,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       setTargetChoices(intent.matches);
       setSelectedTargetId("");
       setCandidateMode("local");
-      setRecommendationNotice("问题中出现了多个可能的目标人物，请先选择要联系的对象。");
+      setRecommendationNotice(t("问题中出现了多个可能的目标人物，请先选择要联系的对象。"));
       return;
     }
     setTargetChoices([]);
@@ -200,11 +211,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     const ranked = rankCandidates(ask.trim(), persons, events).slice(0, 3);
     setCandidates(ranked.map((candidate) => ({ ...candidate, mode: "open" as const })));
     setSelectedTargetId("");
-    setRecommendationNotice("开放求助模式：按任务匹配、可联系程度和近期互动筛选候选。");
+    setRecommendationNotice(t("开放求助模式：按任务匹配、可联系程度和近期互动筛选候选。"));
     setCandidateMode("local");
     setAgentTrace([]);
     setAskAnswer("");
-    if (!ranked.length) toast.error("人物库还是空的，请先录入人物资料");
+    if (!ranked.length) toast.error(t("人物库还是空的，请先录入人物资料"));
   };
 
   const loadOfflineRecommendationDemo = () => {
@@ -215,13 +226,13 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     setCandidateMode("local");
     setTargetChoices([]);
     setSelectedTargetId("");
-    setRecommendationNotice("开放求助模式：使用合成演示数据进行本地确定性筛选。");
+    setRecommendationNotice(t("开放求助模式：使用合成演示数据进行本地确定性筛选。"));
     setAgentTrace([]);
     setAskAnswer("");
     if (ranked.length) {
-      toast.success("已用本地规则生成演示候选；人物与结果均须使用合成演示数据");
+      toast.success(t("已用本地规则生成演示候选；人物与结果均须使用合成演示数据"));
     } else {
-      toast.error("请先在设置中载入合成演示数据");
+      toast.error(t("请先在设置中载入合成演示数据"));
     }
   };
 
@@ -233,7 +244,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       const text = await askText(preset, recommendationPrompt(ask.trim(), candidates));
       setAskAnswer(text);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "AI 请求失败");
+      toast.error(error instanceof Error ? error.message : t("AI 请求失败"));
     } finally {
       setAskBusy(false);
     }
@@ -244,7 +255,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     const intent = detectTargetIntent(ask.trim(), persons);
     if (intent.mode === "ambiguous" && !selectedTargetId) {
       setTargetChoices(intent.matches);
-      setRecommendationNotice("问题中出现了多个可能的目标人物，请先选择要联系的对象。");
+      setRecommendationNotice(t("问题中出现了多个可能的目标人物，请先选择要联系的对象。"));
       return;
     }
     const targetPersonId = selectedTargetId || intent.target?.id;
@@ -272,8 +283,8 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       setAskAnswer(result.answer);
       setRecommendationNotice(
         result.candidates.some((candidate) => candidate.path)
-          ? "目标模式：候选、分数和路径由本地确定性工具锁定，AI 只负责解释与措辞。"
-          : "开放求助模式：AI 已按需读取档案，候选仍需人工复核。",
+          ? t("目标模式：候选、分数和路径由本地确定性工具锁定，AI 只负责解释与措辞。")
+          : t("开放求助模式：AI 已按需读取档案，候选仍需人工复核。"),
       );
       toast.success(
         result.disclosureMode === "full"
@@ -282,7 +293,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       );
     } catch (error) {
       if (!controller.signal.aborted) {
-        toast.error(error instanceof Error ? error.message : "AI 全库分析失败");
+        toast.error(error instanceof Error ? error.message : t("AI 全库分析失败"));
       }
     } finally {
       if (agentAbortRef.current === controller) agentAbortRef.current = null;
@@ -299,11 +310,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Cake className="size-4 text-primary" aria-hidden="true" />
-          最近 60 天
+          {t("最近 60 天")}
         </h2>
         {items.length === 0 ? (
           <p className="mt-3 text-xs text-muted-foreground">
-            还没有生日信息。到「人物关系」给人物填上生日，这里就会自动提醒。
+            {t("还没有生日信息。到「人物关系」给人物填上生日，这里就会自动提醒。")}
           </p>
         ) : (
           <ul className="mt-3 space-y-2">
@@ -318,7 +329,8 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                     )}
                     {item.title}
                     <span className="text-[11px] text-muted-foreground">
-                      {item.md} · {item.days === 0 ? "就是今天" : `还有 ${item.days} 天`}
+                      {item.md} ·{" "}
+                      {item.days === 0 ? t("就是今天") : `${t("还有")} ${item.days} ${t("天")}`}
                     </span>
                   </span>
                   <span className="flex gap-1.5">
@@ -333,11 +345,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                       ) : (
                         <Sparkles className="size-3.5" aria-hidden="true" />
                       )}
-                      祝福 / 礼物
+                      {t("祝福 / 礼物")}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => void addFrom(item)}>
                       <Plus className="size-3.5" aria-hidden="true" />
-                      待办
+                      {t("待办")}
                     </Button>
                   </span>
                 </div>
@@ -346,8 +358,8 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-[10px] text-muted-foreground">
                         {item.person
-                          ? "依据人物卡中的关系、喜好、忌口与送礼记录；缺失信息须由模型明确说明"
-                          : "依据本地节日表生成；发送前请自行确认语气与对象"}
+                          ? t("依据人物卡中的关系、喜好、忌口与送礼记录；缺失信息须由模型明确说明")
+                          : t("依据本地节日表生成；发送前请自行确认语气与对象")}
                       </span>
                       <span className="flex items-center gap-1.5">
                         {item.person && <SourceBadge source={item.person.source} detailed />}
@@ -356,11 +368,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                           variant="ghost"
                           onClick={() => {
                             void navigator.clipboard.writeText(answer.text);
-                            toast.success("已复制；系统不会自动发送");
+                            toast.success(t("已复制；系统不会自动发送"));
                           }}
                         >
                           <Clipboard className="size-3.5" aria-hidden="true" />
-                          复制
+                          {t("复制")}
                         </Button>
                       </span>
                     </div>
@@ -382,11 +394,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Clock3 className="size-4 text-primary" aria-hidden="true" />
-          长期未联系
+          {t("长期未联系")}
         </h2>
         {stale.length === 0 ? (
           <p className="mt-3 text-xs text-muted-foreground">
-            暂无超过 90 天未互动的人物；这里只依据本地共同事件记录计算。
+            {t("暂无超过 90 天未互动的人物；这里只依据本地共同事件记录计算。")}
           </p>
         ) : (
           <ul className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -398,8 +410,8 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                 <span className="min-w-0 text-sm">
                   <span className="block truncate font-medium">{item.person.name}</span>
                   <span className="text-[11px] text-muted-foreground">
-                    {item.lastDate ? `上次记录 ${item.lastDate}` : "尚无共同事件"} · 约 {item.days}{" "}
-                    天
+                    {item.lastDate ? `${t("上次记录")} ${item.lastDate}` : t("尚无共同事件")} ·{" "}
+                    {t("约")} {item.days} {t("天")}
                   </span>
                 </span>
                 <Button
@@ -408,7 +420,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                   onClick={() => void addContactReminder(item.person)}
                 >
                   <Plus className="size-3.5" aria-hidden="true" />
-                  待办
+                  {t("待办")}
                 </Button>
               </li>
             ))}
@@ -420,13 +432,13 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Gift className="size-4 text-primary" aria-hidden="true" />
-          我的待办
+          {t("我的待办")}
         </h2>
         <div className="mt-3 flex flex-wrap gap-2">
           <Input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            placeholder="例如：周末给外婆打个电话"
+            placeholder={t("例如：周末给外婆打个电话")}
             className="min-w-0 flex-1"
           />
           <Input
@@ -438,11 +450,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
           />
           <Button onClick={() => void addManual()} disabled={!title.trim()}>
             <Plus className="size-4" aria-hidden="true" />
-            添加
+            {t("添加")}
           </Button>
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
-          填写日期的待办会同步显示在日历；不填日期时只保留在本页。
+          {t("填写日期的待办会同步显示在日历；不填日期时只保留在本页。")}
         </p>
 
         <ul className="mt-4 space-y-1.5">
@@ -482,7 +494,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
           ))}
           {reminders.length === 0 && (
             <li className="text-xs text-muted-foreground">
-              还没有待办，可以从上面的生日 / 节日一键加入。
+              {t("还没有待办，可以从上面的生日 / 节日一键加入。")}
             </li>
           )}
         </ul>
@@ -492,7 +504,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Users className="size-4 text-primary" aria-hidden="true" />
-          这事该拜托谁
+          {t("这事该拜托谁")}
         </h2>
         <Textarea
           value={ask}
@@ -507,7 +519,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
             setAgentTrace([]);
           }}
           rows={3}
-          placeholder="例如：我想找人帮忙看一下租房合同，谁比较合适？"
+          placeholder={t("例如：我想找人帮忙看一下租房合同，谁比较合适？")}
           className="mt-3"
         />
         {targetChoices.length > 1 && (
@@ -521,9 +533,9 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                 if (id) runTargetRecommendation(id);
               }}
               className="h-9 min-w-40 rounded-md border border-border bg-background px-2"
-              aria-label="选择目标人物"
+              aria-label={t("选择目标人物")}
             >
-              <option value="">请选择目标人物</option>
+              <option value="">{t("请选择目标人物")}</option>
               {targetChoices.map((person) => (
                 <option key={person.id} value={person.id}>
                   {person.name}
@@ -544,14 +556,14 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
               disabled={agentBusy}
             />
             <span className="min-w-0">
-              <span className="block text-xs font-medium">AI 全库分析</span>
+              <span className="block text-xs font-medium">{t("AI 全库分析")}</span>
               <span className="block text-[11px] leading-relaxed text-muted-foreground">
-                小档案一次提交；档案较多时由 AI 多轮按需读取人物、关系与事件
+                {t("小档案一次提交；档案较多时由 AI 多轮按需读取人物、关系与事件")}
               </span>
             </span>
           </label>
           <span className="text-[10px] text-muted-foreground">
-            不提交照片、人脸特征、联系方式原文；天气与资讯查询不携带人物档案
+            {t("不提交照片、人脸特征、联系方式原文；天气与资讯查询不携带人物档案")}
           </span>
         </div>
         <div className="mt-2 flex flex-wrap justify-end gap-2">
@@ -564,17 +576,17 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                   window.setTimeout(() => runTargetRecommendation(selectedTargetId, checked), 0);
                 }
               }}
-              aria-label="允许已确认的推导关系参与引荐"
+              aria-label={t("允许已确认的推导关系参与引荐")}
             />
-            允许已确认的推导关系参与引荐
+            {t("允许已确认的推导关系参与引荐")}
           </label>
           <Button variant="ghost" onClick={loadOfflineRecommendationDemo}>
             <Sparkles className="size-4" aria-hidden="true" />
-            离线演示问题（合成数据）
+            {t("离线演示问题（合成数据）")}
           </Button>
           <Button variant="outline" onClick={findWho} disabled={!ask.trim() || agentBusy}>
             <Users className="size-4" aria-hidden="true" />
-            本地判断模式与候选
+            {t("本地筛选候选")}
           </Button>
           {aiArchiveMode && (
             <Button onClick={() => void analyzeFullArchive()} disabled={!ask.trim() || agentBusy}>
@@ -583,7 +595,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
               ) : (
                 <BrainCircuit className="size-4" aria-hidden="true" />
               )}
-              AI 全库分析
+              {t("AI 全库分析")}
             </Button>
           )}
           {candidateMode === "local" && candidates.length > 0 && (
@@ -593,7 +605,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
               ) : (
                 <Sparkles className="size-4" aria-hidden="true" />
               )}
-              生成比较与话术
+              {t("生成比较与话术")}
             </Button>
           )}
         </div>
@@ -627,33 +639,44 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                   </span>
                   <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
                     {candidate.score}{" "}
-                    {candidate.path ? "路径分" : candidateMode === "agent" ? "AI建议分" : "本地分"}{" "}
-                    · {candidate.confidence}置信度
+                    {t(
+                      candidate.path
+                        ? "路径分"
+                        : candidateMode === "agent"
+                          ? "本地锁定分"
+                          : "本地分",
+                    )}{" "}
+                    · {t(candidate.confidence)} {t("置信度")}
                   </span>
                 </div>
                 {candidate.path && (
                   <p className="mt-2 rounded-md bg-primary/5 px-2 py-1.5 font-medium text-primary">
                     {candidate.path.direct
-                      ? `可直接联系 ${persons.find((person) => person.id === candidate.path?.targetId)?.name ?? "目标人物"}`
+                      ? `${t("可直接联系")} ${persons.find((person) => person.id === candidate.path?.targetId)?.name ?? t("目标人物")}`
                       : [
-                          "我",
+                          t("我"),
                           ...candidate.path.personIds.map(
-                            (id) => persons.find((person) => person.id === id)?.name ?? "未知人物",
+                            (id) =>
+                              persons.find((person) => person.id === id)?.name ?? t("未知人物"),
                           ),
                         ].join(" → ")}
                   </p>
                 )}
                 <p className="mt-2 leading-relaxed">
-                  {candidate.reasons.join("；") || "暂无直接匹配理由"}
+                  {candidate.reasons.join("；") || t("暂无直接匹配理由")}
                 </p>
                 <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
                   {candidate.evidence.map((item) => (
-                    <p key={item}>依据：{item}</p>
+                    <p key={item}>
+                      {t("依据")}：{item}
+                    </p>
                   ))}
-                  <p>信息更新：{new Date(candidate.updatedAt).toLocaleDateString()}</p>
+                  <p>
+                    {t("信息更新")}：{new Date(candidate.updatedAt).toLocaleDateString()}
+                  </p>
                   {candidate.risks.map((risk) => (
                     <p key={risk} className="text-amber-700 dark:text-amber-300">
-                      风险：{risk}
+                      {t("风险")}：{risk}
                     </p>
                   ))}
                 </div>
@@ -670,11 +693,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                 variant="ghost"
                 onClick={() => {
                   void navigator.clipboard.writeText(askAnswer);
-                  toast.success("已复制，可继续编辑后自行发送");
+                  toast.success(t("已复制，可继续编辑后自行发送"));
                 }}
               >
                 <Clipboard className="size-3.5" aria-hidden="true" />
-                复制
+                {t("复制")}
               </Button>
             </div>
             <Textarea

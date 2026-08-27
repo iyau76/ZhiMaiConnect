@@ -338,8 +338,8 @@ async function webSearch(query: string, request: Request) {
 
 export async function handleWebToolsPost(request: Request): Promise<Response> {
   try {
-    enforceRateLimit(request, "web-tools", 24);
     requireApiSession(request);
+    await enforceRateLimit(request, "web-tools", 24);
     const body = await parseJsonRequest(request, webToolBodySchema, API_LIMITS.webToolRequestBytes);
     const result =
       body.tool === "weather"

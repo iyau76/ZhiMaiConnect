@@ -167,11 +167,14 @@ export function daysUntilMd(md: string, from = new Date()) {
     return null;
   }
   const base = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-  let next = new Date(from.getFullYear(), mm - 1, dd);
-  if (next.getMonth() !== mm - 1 || next.getDate() !== dd) {
-    next = new Date(from.getFullYear() + 1, mm - 1, dd);
+  let next: Date | null = null;
+  for (let year = from.getFullYear(); year <= from.getFullYear() + 8; year += 1) {
+    const candidate = new Date(year, mm - 1, dd);
+    if (candidate.getMonth() !== mm - 1 || candidate.getDate() !== dd || candidate < base) continue;
+    next = candidate;
+    break;
   }
-  if (next < base) next = new Date(from.getFullYear() + 1, mm - 1, dd);
+  if (!next) return null;
   return Math.round((next.getTime() - base.getTime()) / 86400000);
 }
 

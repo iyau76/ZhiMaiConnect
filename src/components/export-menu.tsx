@@ -1,6 +1,6 @@
 /** 通用导出按钮：Markdown / Word / PDF */
 
-import { Download, FileText, FileType, Printer } from "lucide-react";
+import { Download, FileJson, FileText, FileType, Printer } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -16,6 +16,7 @@ import { exportData, type ExportFormat, type ExportScope } from "@/lib/export-da
 import { t } from "@/lib/i18n";
 
 const OPTIONS: Array<{ id: ExportFormat; label: string; icon: typeof FileText }> = [
+  { id: "json", label: "完整备份 (.json)", icon: FileJson },
   { id: "md", label: "Markdown (.md)", icon: FileText },
   { id: "docx", label: "Word (.docx)", icon: FileType },
   { id: "pdf", label: "PDF（打印另存）", icon: Printer },

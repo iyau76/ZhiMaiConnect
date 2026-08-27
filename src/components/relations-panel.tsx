@@ -41,6 +41,7 @@ import {
   type RelationCategory,
 } from "@/lib/relation-graph";
 import {
+  assertValidPersonName,
   facesDb,
   type EvidenceRecord,
   type LifeEventRecord,
@@ -181,8 +182,10 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
   const createPerson = async () => {
     const name = newName.trim();
-    if (!name) {
-      toast.error(t("请输入名字"));
+    try {
+      assertValidPersonName(name);
+    } catch (error) {
+      toast.error(t((error as Error).message));
       return;
     }
     if (people.some((person) => person.name === name)) {
@@ -518,6 +521,36 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     const ringFor = (count: number) =>
       count <= 1 ? 0 : Math.max(90, MIN_EDGE / (2 * Math.sin(Math.PI / count)));
 
+    /** Large sets use concentric rings instead of one ever-growing circumference. */
+    const layeredRing = (count: number) => {
+      if (count <= 24) {
+        const radius = ringFor(count);
+        return {
+          radius,
+          points: Array.from({ length: count }, (_, index) => {
+            const angle = (index / Math.max(count, 1)) * Math.PI * 2 - Math.PI / 2;
+            return count === 1
+              ? { x: 0, y: 0 }
+              : { x: radius * Math.cos(angle), y: radius * Math.sin(angle) };
+          }),
+        };
+      }
+      const points: Array<{ x: number; y: number }> = [];
+      let ring = 1;
+      while (points.length < count) {
+        const radius = ring * 170;
+        const capacity = Math.max(8, Math.floor((Math.PI * 2 * radius) / MIN_EDGE));
+        const take = Math.min(capacity, count - points.length);
+        for (let index = 0; index < take; index += 1) {
+          const angle =
+            (index / take) * Math.PI * 2 - Math.PI / 2 + (ring % 2 ? 0 : Math.PI / take);
+          points.push({ x: radius * Math.cos(angle), y: radius * Math.sin(angle) });
+        }
+        ring += 1;
+      }
+      return { radius: (ring - 1) * 170, points };
+    };
+
     let size = 640;
 
     if (groupBy !== "none") {
@@ -528,11 +561,10 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
         if (list) list.push(person);
         else buckets.set(key, [person]);
       }
-      const groups = [...buckets.entries()].map(([name, members]) => ({
-        name,
-        members,
-        inner: ringFor(members.length),
-      }));
+      const groups = [...buckets.entries()].map(([name, members]) => {
+        const layout = layeredRing(members.length);
+        return { name, members, inner: layout.radius, points: layout.points };
+      });
       const maxR = Math.max(...groups.map((group) => group.inner + 52), 120);
       // 多个圈层时，各簇均匀分布在一个更大的环上，彼此不重叠
       const ringRadius =
@@ -548,31 +580,32 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
         const cy = center + ringRadius * Math.sin(angle);
         clusters.push({ name: group.name, x: cx, y: cy, r: group.inner + 52 });
         group.members.forEach((person, index) => {
-          const a = (index / Math.max(group.members.length, 1)) * Math.PI * 2 - Math.PI / 2;
+          const point = group.points[index] ?? { x: 0, y: 0 };
           nodes.push({
             id: person.id,
             name: person.name,
             group: group.name,
             color: graphColor(group.name),
-            x: group.members.length === 1 ? cx : cx + group.inner * Math.cos(a),
-            y: group.members.length === 1 ? cy : cy + group.inner * Math.sin(a),
+            x: cx + point.x,
+            y: cy + point.y,
           });
         });
       });
     } else {
-      const radius = ringFor(people.length);
+      const layout = layeredRing(people.length);
+      const radius = layout.radius;
       size = 2 * (radius + 74);
       const center = size / 2;
       people.forEach((person, index) => {
-        const angle = (index / Math.max(people.length, 1)) * Math.PI * 2 - Math.PI / 2;
+        const point = layout.points[index] ?? { x: 0, y: 0 };
         const group = groupOf(person);
         nodes.push({
           id: person.id,
           name: person.name,
           group,
           color: graphColor(group),
-          x: center + radius * Math.cos(angle),
-          y: center + radius * Math.sin(angle),
+          x: center + point.x,
+          y: center + point.y,
         });
       });
     }
@@ -1077,6 +1110,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 value={newName}
+                maxLength={80}
                 onChange={(event) => setNewName(event.target.value)}
                 placeholder={t("名字")}
                 className="sm:max-w-[12rem]"

@@ -110,6 +110,18 @@ function visionReply(body: Record<string, unknown>) {
     });
   }
   if (prompt.includes("通用问答智能体")) {
+    if (prompt.includes("把甲和乙的关系改成前同事")) {
+      return JSON.stringify({
+        type: "tool",
+        summary: "准备关系修改提案",
+        tool: "update_relation",
+        args: {
+          relationId: "relation-update-agent",
+          reason: "用户明确纠正人物关系",
+          changes: { label: "前同事", basis: "原文：甲和乙现在是前同事" },
+        },
+      });
+    }
     if (prompt.includes("把合成测试人物的职位改成品牌总监")) {
       return JSON.stringify({
         type: "tool",
@@ -371,7 +383,7 @@ export interface IndexedDbSeed {
 export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {
   await page.evaluate(async (records) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openglass-faces", 8);
+      const request = indexedDB.open("openglass-faces", 9);
       request.onupgradeneeded = () => {
         const target = request.result;
         const stores = [
@@ -417,7 +429,7 @@ export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {
 export async function readIndexedDbStore<T = SeedRecord>(page: Page, store: string) {
   return page.evaluate(async (storeName) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openglass-faces", 8);
+      const request = indexedDB.open("openglass-faces", 9);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });

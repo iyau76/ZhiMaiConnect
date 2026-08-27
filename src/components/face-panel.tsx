@@ -34,7 +34,7 @@ import { detectFaces, findMatch, loadFaceEngine, type DetectedFace } from "@/lib
 import { askModel, captureFrame } from "@/lib/vision-client";
 import type { ProviderPreset } from "@/lib/vision-providers";
 import { cn } from "@/lib/utils";
-import { t } from "@/lib/i18n";
+import { getLang, t } from "@/lib/i18n";
 
 interface FacePanelProps {
   host: string;
@@ -153,6 +153,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
   const scan = useCallback(async () => {
     if (busyRef.current) return;
     if (!host) {
+      setAuto(false);
       toast.error(t("请先在上面填写摄像头地址"));
       return;
     }
@@ -163,7 +164,8 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
       const frame = await captureFrame(normalizeHost(host));
       await analyzeFrame(frame, "camera");
     } catch (error) {
-      toast.error(`识别失败：${(error as Error).message}`);
+      setAuto(false);
+      toast.error(`${t("识别失败")}：${(error as Error).message}`);
     } finally {
       busyRef.current = false;
       setScanning(false);
@@ -187,7 +189,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
         });
         await analyzeFrame(frame, "photo");
       } catch (error) {
-        toast.error(`识别失败：${(error as Error).message}`);
+        toast.error(`${t("识别失败")}：${(error as Error).message}`);
       } finally {
         busyRef.current = false;
         setScanning(false);
@@ -232,7 +234,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
           descriptors: [face.descriptor],
           thumb: face.thumb,
           createdAt: Date.now(),
-          source: makeSource("camera", "人脸录入"),
+          source: makeSource("camera", t("人脸录入")),
         };
     await facesDb.putPerson(record);
     await refresh();
@@ -241,7 +243,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
         i === index ? { ...item, personId: record.id, name: record.name, distance: 0 } : item,
       ),
     );
-    toast.success(existing ? `已给「${name}」补充一张样本` : `已录入「${name}」`);
+    toast.success(existing ? `${t("已补充人脸样本")}：${name}` : `${t("已录入")}：${name}`);
   };
 
   /** 合照场景：把所有填了名字的人脸一次性入库 */
@@ -282,7 +284,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
   const removePerson = async (person: PersonRecord) => {
     await facesDb.deletePerson(person.id);
     await refresh();
-    toast.success(`已删除「${person.name}」`);
+    toast.success(`${t("已删除")}：${person.name}`);
   };
 
   const summarize = async () => {
@@ -296,7 +298,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
       .slice(0, 60)
       .map(
         (item) =>
-          `${new Date(item.at).toLocaleString("zh-CN")} · ${item.name} · 距离${item.distance}`,
+          `${new Date(item.at).toLocaleString(getLang() === "en" ? "en-US" : "zh-CN")} · ${item.name} · ${t("距离")}${item.distance}`,
       )
       .join("\n");
     const prompt = `下面是摄像头的人脸识别记录（越靠前越新），人员库里已登记 ${people.length} 人：${people.map((p) => p.name).join("、") || t("无")}。请用中文简要整理：谁来过、各出现几次、时间段分布、有没有反复出现的未知人员需要留意。\n\n${lines}`;
@@ -341,7 +343,11 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
           name: existingByName.name,
           distance: 0,
         });
-        toast.success(`已并入已有人员「${existingByName.name}」`);
+        toast.success(
+          getLang() === "en"
+            ? `Merged into existing person “${existingByName.name}”`
+            : `已并入已有人员「${existingByName.name}」`,
+        );
       } else {
         const newPerson: PersonRecord = {
           id: crypto.randomUUID(),
@@ -350,7 +356,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
           descriptors: item.descriptor ? [item.descriptor] : [],
           thumb: item.thumb,
           createdAt: Date.now(),
-          source: makeSource("manual", "到访记录补标"),
+          source: makeSource("manual", t("到访记录补标")),
         };
         await facesDb.putPerson(newPerson);
         await facesDb.putSighting({
@@ -359,7 +365,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
           name: newPerson.name,
           distance: 0,
         });
-        toast.success(`已录入新人「${name}」`);
+        toast.success(getLang() === "en" ? `New person “${name}” saved` : `已录入新人「${name}」`);
       }
     } else {
       const selectedPerson = people.find((person) => person.id === editPersonId);
@@ -377,15 +383,16 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
         name: selectedPerson.name,
         distance: 0,
       });
-      toast.success(`已标注为「${selectedPerson.name}」`);
+      toast.success(
+        getLang() === "en"
+          ? `Labelled as “${selectedPerson.name}”`
+          : `已标注为「${selectedPerson.name}」`,
+      );
     }
     await refresh();
     setEditingId(null);
   };
 
-  {
-    t("/** 按当前人员库，把还没标注（未知）的到访记录自动对应上人名 */");
-  }
   const rematch = async () => {
     if (!people.length) {
       toast.error(t("人员库还是空的，先录入至少一个人"));
@@ -414,7 +421,9 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
       await refresh();
       toast.success(
         matched
-          ? `已自动对应 ${matched} 条记录（阈值 ${threshold.toFixed(2)}）`
+          ? getLang() === "en"
+            ? `Matched ${matched} records automatically (threshold ${threshold.toFixed(2)})`
+            : `已自动对应 ${matched} 条记录（阈值 ${threshold.toFixed(2)}）`
           : t("没有记录能在当前阈值下匹配上，可把严格度调大一些再试"),
       );
     } finally {
@@ -482,7 +491,18 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
             </div>
 
             <div className="flex items-center gap-2">
-              <Switch id="auto-scan" checked={auto} onCheckedChange={setAuto} />
+              <Switch
+                id="auto-scan"
+                checked={auto}
+                onCheckedChange={(checked) => {
+                  if (checked && !host.trim()) {
+                    toast.error(t("请先在上面填写摄像头地址"));
+                    setAuto(false);
+                    return;
+                  }
+                  setAuto(checked);
+                }}
+              />
               <Label htmlFor="auto-scan" className="text-xs text-muted-foreground">
                 {t("每 1.5 秒自动识别")}
               </Label>
@@ -595,7 +615,9 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                       className="size-14 rounded object-cover"
                     />
                     <div className="min-w-0 flex-1 space-y-1.5">
-                      <p className="text-[10px] text-muted-foreground">第 {index + 1} 张人脸</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {t("第")} {index + 1} {t("张人脸")}
+                      </p>
                       {face.personId ? (
                         <>
                           <p className="truncate text-sm font-medium">{face.name}</p>
@@ -647,7 +669,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{person.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {person.descriptors.length} 张样本 ·{" "}
+                      {person.descriptors.length} {t("张样本")} ·{" "}
                       {new Date(person.createdAt).toLocaleDateString("zh-CN")}
                     </p>
                     {(() => {
@@ -656,8 +678,8 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                         p?.title,
                         p?.department,
                         p?.org,
-                        p?.projects?.length ? `负责：${p.projects.join("、")}` : "",
-                        p?.reportsTo ? `汇报：${p.reportsTo}` : "",
+                        p?.projects?.length ? `${t("负责")}：${p.projects.join("、")}` : "",
+                        p?.reportsTo ? `${t("汇报")}：${p.reportsTo}` : "",
                         p?.employeeId,
                         p?.tags?.length ? p.tags.join("/") : "",
                         p?.contact,

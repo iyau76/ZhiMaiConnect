@@ -84,13 +84,21 @@ function relevantFacts(task: string, person: PersonRecord) {
 }
 
 function dateAt(date: string) {
-  const value = new Date(`${date.slice(0, 10)}T00:00:00`).getTime();
-  return Number.isFinite(value) ? value : 0;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.slice(0, 10));
+  if (!match) return 0;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1900 || year > 9999) return 0;
+  const probe = new Date(year, month - 1, day);
+  return probe.getFullYear() === year && probe.getMonth() === month - 1 && probe.getDate() === day
+    ? probe.getTime()
+    : 0;
 }
 
 function recentEvents(personId: string, events: LifeEventRecord[]) {
   return events
-    .filter((event) => event.personIds?.includes(personId))
+    .filter((event) => event.personIds?.includes(personId) && dateAt(event.date) > 0)
     .sort((a, b) => b.date.localeCompare(a.date));
 }
 
@@ -112,7 +120,10 @@ export function rankCandidates(
       const latest = interactions[0];
       const latestAt = latest ? dateAt(latest.date) : 0;
       const ageDays = latestAt ? Math.max(0, Math.floor((nowAt - latestAt) / DAY)) : null;
-      const closeness = Math.max(1, Math.min(5, person.profile?.closeness ?? 1));
+      const rawCloseness = person.profile?.closeness;
+      const closeness = Number.isFinite(rawCloseness)
+        ? Math.max(1, Math.min(5, rawCloseness as number))
+        : 1;
       const hasContact = Boolean(person.profile?.contact?.trim());
       const cooperation = interactions.find(
         (event) => event.kind === "帮忙" || (event.personIds?.length ?? 0) > 1,

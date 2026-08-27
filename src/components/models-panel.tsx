@@ -30,10 +30,10 @@ import { runAssistantAgent, type AssistantAgentResult } from "@/lib/assistant-ag
 import { facesDb } from "@/lib/face-db";
 import { t } from "@/lib/i18n";
 import {
-  applyPersonUpdateProposal,
-  personUpdateDiff,
-  type PersonUpdateProposal,
-} from "@/lib/person-update-tool";
+  applyArchiveUpdateProposal,
+  archiveUpdateDiff,
+  type ArchiveUpdateProposal,
+} from "@/lib/archive-update-tool";
 import type { AgentTraceEvent } from "@/lib/recommendation-agent";
 
 import { cn } from "@/lib/utils";
@@ -74,7 +74,7 @@ export function ModelsPanel({
 
   const [busy, setBusy] = useState(false);
   const [assistantTrace, setAssistantTrace] = useState<AgentTraceEvent[]>([]);
-  const [pendingApproval, setPendingApproval] = useState<PersonUpdateProposal | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<ArchiveUpdateProposal | null>(null);
   const [approvalRows, setApprovalRows] = useState<
     Array<{ field: string; before: string; after: string }>
   >([]);
@@ -188,9 +188,9 @@ export function ModelsPanel({
         return next;
       });
       if (result.pendingApproval) {
-        const person = archive.persons.find((item) => item.id === result.pendingApproval?.personId);
-        setPendingApproval(result.pendingApproval);
-        setApprovalRows(person ? personUpdateDiff(result.pendingApproval, person) : []);
+        const approval = result.pendingApproval;
+        setPendingApproval(approval);
+        setApprovalRows(archiveUpdateDiff(approval, archive));
       }
     } catch (error) {
       toast.error((error as Error).message);
@@ -209,15 +209,21 @@ export function ModelsPanel({
     }
   };
 
-  const approvePersonUpdate = async () => {
+  const approveUpdate = async () => {
     if (!pendingApproval || approving) return;
     setApproving(true);
     try {
-      const updated = await applyPersonUpdateProposal(pendingApproval);
-      toast.success(t("人物档案修改已执行"));
+      const isPerson = pendingApproval.tool === "update_person";
+      const updated = await applyArchiveUpdateProposal(pendingApproval);
+      toast.success(t(isPerson ? "人物档案修改已执行" : "人物关系修改已执行"));
       setTurns((prev) => [
         ...prev,
-        { role: "assistant", text: `已按你的批准更新「${updated.name}」的人物档案。` },
+        {
+          role: "assistant",
+          text: isPerson
+            ? `已按你的批准更新「${"name" in updated ? updated.name : ""}」的人物档案。`
+            : `已按你的批准更新关系「${"label" in updated ? updated.label : ""}」。`,
+        },
       ]);
       setPendingApproval(null);
       setApprovalRows([]);
@@ -228,14 +234,17 @@ export function ModelsPanel({
     }
   };
 
-  const rejectPersonUpdate = () => {
+  const rejectUpdate = () => {
     if (!pendingApproval) return;
-    const name = pendingApproval.personName;
+    const name =
+      pendingApproval.tool === "update_person"
+        ? pendingApproval.personName
+        : pendingApproval.endpointNames.join(" ↔ ");
     setPendingApproval(null);
     setApprovalRows([]);
     setTurns((prev) => [
       ...prev,
-      { role: "assistant", text: `已取消对「${name}」的修改，人物库没有发生变化。` },
+      { role: "assistant", text: `已取消对「${name}」的修改，本机档案没有发生变化。` },
     ]);
   };
 
@@ -493,12 +502,22 @@ export function ModelsPanel({
           <div
             className="mt-3 rounded-xl border border-amber-500/60 bg-amber-500/10 p-3"
             role="region"
-            aria-label={t("待批准的人物修改")}
+            aria-label={t(
+              pendingApproval.tool === "update_person" ? "待批准的人物修改" : "待批准的关系修改",
+            )}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-medium">
-                  {t("AI 请求修改人物档案")}：{pendingApproval.personName}
+                  {t(
+                    pendingApproval.tool === "update_person"
+                      ? "AI 请求修改人物档案"
+                      : "AI 请求修改人物关系",
+                  )}
+                  ：
+                  {pendingApproval.tool === "update_person"
+                    ? pendingApproval.personName
+                    : pendingApproval.endpointNames.join(" ↔ ")}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">{pendingApproval.reason}</p>
               </div>
@@ -519,14 +538,14 @@ export function ModelsPanel({
               ))}
             </dl>
             <p className="mt-2 text-[11px] text-muted-foreground">
-              {t("批准前不会写入本机人物库；档案若已被其他操作修改，本提案会自动失效。")}
+              {t("批准前不会写入本机档案；数据若已被其他操作修改，本提案会自动失效。")}
             </p>
             <div className="mt-3 flex justify-end gap-2">
-              <Button size="sm" variant="outline" onClick={rejectPersonUpdate} disabled={approving}>
+              <Button size="sm" variant="outline" onClick={rejectUpdate} disabled={approving}>
                 <X className="size-3.5" aria-hidden="true" />
                 {t("拒绝")}
               </Button>
-              <Button size="sm" onClick={() => void approvePersonUpdate()} disabled={approving}>
+              <Button size="sm" onClick={() => void approveUpdate()} disabled={approving}>
                 {approving ? (
                   <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
                 ) : (

@@ -139,6 +139,41 @@ describe("assistant agent", () => {
     expect(person.profile.title).toBe("品牌经理");
   });
 
+  it("returns a relation update proposal that still requires user approval", async () => {
+    askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[4] as (chunk: string) => void)(
+        JSON.stringify({
+          type: "tool",
+          tool: "update_relation",
+          args: {
+            relationId: "r1",
+            reason: "用户纠正关系",
+            changes: { label: "前同事", basis: "原文：两人已经离职" },
+          },
+        }),
+      );
+    });
+    const persons = [
+      { id: "p1", name: "甲", note: "", descriptors: [], thumb: "", createdAt: 1 },
+      { id: "p2", name: "乙", note: "", descriptors: [], thumb: "", createdAt: 1 },
+    ];
+    const relations = [{ id: "r1", fromId: "p1", toId: "p2", label: "同事", createdAt: 1 }];
+    const result = await runAssistantAgent({
+      preset,
+      question: "把甲乙的关系改成前同事",
+      persons,
+      relations,
+      events: [],
+      includeArchive: true,
+    });
+    expect(result.pendingApproval).toMatchObject({
+      tool: "update_relation",
+      relationId: "r1",
+      changes: { label: "前同事" },
+    });
+    expect(relations[0].label).toBe("同事");
+  });
+
   it("does not treat one empty keyword search as proof that the archive has no record", async () => {
     askModelMock
       .mockImplementationOnce(async (...args: unknown[]) => {

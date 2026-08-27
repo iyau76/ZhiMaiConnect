@@ -31,10 +31,12 @@ export const KINSHIP_RULES_ZH = `
 - “X 的爸爸/妈妈/儿子/女儿/哥哥/姐姐/弟弟/妹妹”等是关系短语。创建被提到的人；未具名时使用不会混淆的上下文称谓，如“爸爸”“爷爷”“大姑的儿子”，并建立短语中明说的父子、母子或兄弟姐妹关系。缺少必要中间人时补建该称谓人物，不要丢掉关系。
 - 连续父母/子女两跳可推一个隔代关系：爸爸的爸爸→祖孙，妈妈的妈妈→外祖孙，儿子的女儿→祖孙。祖辈放 from，孙辈放 to；不得造“孙祖”标签。
 - 共同父母、同一父亲或同一母亲名下的多个子女，两两建立兄弟/兄妹/姐弟/姐妹。不同母亲注明“同父异母”，不同父亲注明“同母异父”；不能把半血缘写成同母所生。
-- 配偶及配偶一侧亲属属于姻亲，可用翁媳、婆媳、岳婿、叔嫂等准确标签，不得写成亲兄弟、亲姐妹等血亲。
+- 父母的兄弟姐妹与其子女可一步推出叔伯侄、姑侄、舅甥、姨甥：父亲的兄弟/姐妹分别是叔伯/姑，母亲的兄弟/姐妹分别是舅/姨。兄弟姐妹的子女使用同一规则的反向称谓。未写长幼时只用“叔伯侄”“兄弟姐妹”等中性标签，不猜哥哥/弟弟、姐姐/妹妹。
+- 配偶及配偶一侧亲属属于姻亲：配偶的父母可一步推出翁媳、婆媳或岳婿；配偶的兄弟姐妹可推出叔嫂、姑嫂等姻亲。依据必须同时列出配偶边和亲属边，不得写成亲兄弟、亲姐妹等血亲。
+- 连续三条明确的父母子女边可推曾祖孙，confidence 不高于 0.7；超过三条的长链不自动闭包。继父/继母的子女只能标“继兄弟姐妹（无血缘）”；材料明说同宗时可标“族亲/族兄弟”，不得提升为亲兄弟。
 - 父亲的兄弟之子女是堂亲；父亲的姐妹之子女是姑表；母亲的兄弟之子女是舅表；母亲的姐妹之子女是姨表。关系链不足时只保留已明确的边，不猜堂/表。
 - 规范 label 优先使用：父子、母子、父女、母女、兄弟、兄妹、姐弟、姐妹、夫妻、祖孙、外祖孙、叔侄、姑侄、舅甥、姨甥、堂兄弟、堂兄妹、姑表兄妹、舅表姐弟、姨表姐弟、翁媳、婆媳、岳婿、继姐妹。父母/祖辈放 from，子女/孙辈放 to；夫妻和同辈关系可双向。
-- 每条输出关系只允许一个可复核的推导结论。遇到“舅姥爷的表侄”等连续多跳或亲疏不明的链条，不继续推导，留给用户补充。
+- 每条输出关系只允许一个可复核的推导结论。普通社会关系（同事、同学、合作）只能按原文明说输出，不得由“共事”继续猜朋友或合作伙伴。遇到“舅姥爷的表侄”等亲疏不明链条，不继续推导，留给用户补充。
 
 示例一：材料“贾母有两个儿子贾赦和贾政。贾政的小儿子是贾宝玉。”应包含：
 {"from":"贾母","to":"贾赦","label":"母子","basis":"原文：贾母有两个儿子贾赦和贾政","confidence":0.96}
@@ -50,6 +52,10 @@ export const KINSHIP_RULES_EN = `
 - For an explicit relation, basis starts with “Original:”, confidence is 0.9–1. For a derived relation, every intermediate edge must be explicit, basis starts with “Inference basis:”, note says it needs review, and confidence is 0.5–0.75.
 - Create people named by relational phrases such as “X's father/mother/son/daughter/sibling”; use an unambiguous contextual placeholder when no name is given.
 - Two explicit parent/child edges may yield one grandparent relation. Children sharing a parent may yield sibling relations; distinguish half-siblings. In-laws must never be labelled as blood relatives.
+- A parent's explicit sibling may yield one uncle/aunt-to-nibling relation. Do not guess older/younger sibling order when the source does not state it.
+- A spouse plus the spouse's explicit parent or sibling may yield one in-law relation (parent-in-law, sibling-in-law). The basis must name both supporting edges and the result must never be labelled as blood kin.
+- Three consecutive explicit parent/child edges may yield a great-grandparent relation at confidence no higher than 0.7. Do not close longer chains. A step-parent's child is a step-sibling without blood relation; an explicitly stated same-clan tie may be normalised to clan kin but never to a sibling.
 - Distinguish paternal cousins, paternal-aunt cousins, maternal-uncle cousins and maternal-aunt cousins only when the full supporting chain is explicit. Do not continue through long or ambiguous chains.
-- Prefer canonical labels and put the parent/grandparent in from and the child/grandchild in to. Every inferred relation requires a short basis and confidence no higher than 0.75.
+- Ordinary social ties (work, school, collaboration) may only be output when explicit; never infer friendship or partnership from co-presence. Prefer canonical labels and put the parent/grandparent in from and the child/grandchild in to. Every inferred relation requires a short basis and confidence no higher than 0.75.
+- Canonical labels include parent-child, sibling (without guessing seniority), spouse, grandparent, great-grandparent, uncle/aunt-nibling, the four cousin branches, parent/sibling-in-law, step-sibling and clan kin. Use “Original:” for explicit edges and “Inference basis:” for derived edges exactly as in the Chinese contract.
 `;

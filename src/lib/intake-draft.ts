@@ -123,6 +123,13 @@ export interface IngestRelation extends IngestAuditFields {
   note?: string;
   /** “原文：…”或“推断依据：…”，用于区分事实关系与待核验推导。 */
   basis?: string;
+  /** Client-side update decision; never accepted directly from the model schema. */
+  targetRelationId?: string;
+  _relationChecked?: boolean;
+  _relationReason?: string;
+  /** Stable client-side endpoint references used when multiple people share a name. */
+  fromDraftId?: string;
+  toDraftId?: string;
 }
 
 export interface IngestFact extends IngestAuditFields {
@@ -131,6 +138,8 @@ export interface IngestFact extends IngestAuditFields {
   value: string;
   validFrom?: string;
   validTo?: string;
+  /** Stable client-side person reference; never accepted from the model. */
+  personDraftId?: string;
 }
 
 export interface IngestEvidence extends IngestAuditFields {
@@ -148,6 +157,7 @@ export interface IngestEvent extends IngestAuditFields {
   precision?: "day" | "month" | "year" | "range";
   place?: string;
   people?: string[];
+  peopleDraftIds?: Array<string | undefined>;
   kind?: string;
   /** Client-side update decision; never accepted directly from the model schema. */
   targetEventId?: string;
@@ -164,6 +174,7 @@ export interface IngestReminder extends IngestAuditFields {
   detail?: string;
   due?: string;
   people?: string[];
+  peopleDraftIds?: Array<string | undefined>;
   kind?: "birthday" | "festival" | "gift" | "custom";
 }
 
@@ -407,7 +418,9 @@ export function fitPromptMaterial(
   maxPromptCharacters: number,
   maxMaterialCharacters = IMPORT_LIMITS.maxExtractedCharacters,
 ) {
-  const safePrefix = prefix.slice(0, maxPromptCharacters);
+  const minimumMaterialCharacters = Math.min(3_000, maxMaterialCharacters, material.length);
+  const prefixBudget = Math.max(0, maxPromptCharacters - minimumMaterialCharacters);
+  const safePrefix = prefix.slice(0, prefixBudget);
   const materialCharacters = Math.min(
     material.length,
     maxMaterialCharacters,
@@ -494,6 +507,7 @@ export function makeOfflineDemoCandidate(extractedAt = Date.now()): IngestCandid
         to: "周宁",
         label: "校庆展合作伙伴",
         note: "去年共同参与校庆展",
+        basis: "原文：唐悦和周宁在去年的校庆展合作过",
         confidence: 0.86,
         _audit: audit(0.86),
       },

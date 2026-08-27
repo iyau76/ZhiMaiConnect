@@ -55,8 +55,8 @@ function resolveTarget(body: TranscribeBody) {
 export async function handleTranscribePost(request: Request): Promise<Response> {
   let upstreamRequest: UpstreamRequest | undefined;
   try {
-    enforceRateLimit(request, "transcribe", 10);
     requireApiSession(request);
+    await enforceRateLimit(request, "transcribe", 10);
     const body = await parseJsonRequest(
       request,
       transcribeBodySchema,

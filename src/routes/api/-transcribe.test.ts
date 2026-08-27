@@ -12,7 +12,7 @@ const validBody = {
   baseUrl: "https://api.openai.com/v1",
   apiKey: "test-only-key",
   model: "whisper-1",
-  audio: "TQ==",
+  audio: Buffer.alloc(512, 1).toString("base64"),
   mime: "audio/webm",
   filename: "voice.webm",
   hint: "人名和项目名",
@@ -54,6 +54,14 @@ describe("POST /api/transcribe", () => {
     assert.equal(oversized.status, 413);
     assert.equal((await responseBody(oversized)).code, "PAYLOAD_TOO_LARGE");
     assertSafeResponse(oversized);
+
+    const tooShort = await handleTranscribePost(
+      await routeRequest("transcribe", JSON.stringify({ ...validBody, audio: "TQ==" }), {
+        authenticated: true,
+      }),
+    );
+    assert.equal(tooShort.status, 400);
+    assert.equal((await responseBody(tooShort)).code, "INVALID_REQUEST");
   });
 
   test("proxies authenticated audio as multipart form data", async () => {
@@ -83,7 +91,7 @@ describe("POST /api/transcribe", () => {
     const file = init.body.get("file");
     assert.ok(file instanceof Blob);
     assert.equal(file.type, "audio/webm");
-    assert.equal(file.size, 1);
+    assert.equal(file.size, 512);
   });
 
   test("maps a rejected upstream fetch to a safe unavailable response", async () => {

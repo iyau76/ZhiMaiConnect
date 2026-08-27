@@ -122,6 +122,17 @@ describe("rankCandidates", () => {
 });
 
 describe("staleContacts", () => {
+  it("ignores impossible dates instead of treating them as 1970", () => {
+    const subject = person("invalid-date", { createdAt: new Date(2026, 7, 1).getTime() });
+    const rows = staleContacts(
+      [subject],
+      [event("invalid", subject.id, { date: "0000-00-00" })],
+      90,
+      NOW,
+    );
+    expect(rows).toEqual([]);
+  });
+
   it("uses the latest interaction, applies the inclusive threshold, and sorts stalest first", () => {
     const persons = [person("very-stale"), person("at-threshold"), person("recent")];
     const events = [

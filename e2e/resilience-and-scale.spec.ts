@@ -72,7 +72,7 @@ test("文件解析失败不会覆盖已经在编辑的草稿", async ({ page }) 
     buffer: Buffer.from("not-a-valid-docx"),
   });
 
-  await expect(page.getByText(/broken\.docx：\[读取失败：/)).toBeVisible();
+  await expect(page.getByText(/broken\.docx：/)).toBeVisible();
   await expect(page.getByRole("button", { name: "导入图片 / PDF / Word / 文本" })).toBeEnabled();
   await expect(intake.getByRole("textbox")).toHaveValue(before);
   await expect.poll(() => snapshotDraftCards(page)).toEqual(beforeDraft);
@@ -280,6 +280,11 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
   await page.getByRole("tab", { name: "关系网" }).click();
   const graph = page.locator("svg").filter({ has: page.locator("#relation-arrow") });
   await expect(graph.getByRole("button", { name: /单击聚焦/ })).toHaveCount(50);
+  const overviewEdges = graph.getByRole("button", { name: /查看关系详情/ });
+  await expect(overviewEdges).not.toHaveCount(80);
+  await expect(page.getByText(/当前视图显示 \d+ 条关系，隐藏 \d+ 条/)).toBeVisible();
+
+  await page.getByLabel("关系网视图").selectOption("all");
   await expect(graph.getByRole("button", { name: /查看关系详情/ })).toHaveCount(80);
 
   await graph.scrollIntoViewIfNeeded();

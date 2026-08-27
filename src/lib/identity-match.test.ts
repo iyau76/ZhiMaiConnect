@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PersonRecord } from "./face-db";
-import { matchIdentity } from "./identity-match";
+import { matchIdentity, normalizeContact } from "./identity-match";
 
 function person(id: string, name: string, contact?: string): PersonRecord {
   return {
@@ -55,5 +55,15 @@ describe("matchIdentity", () => {
         [target],
       ),
     ).toMatchObject({ decision: "update", matches: [target] });
+  });
+
+  it("normalizes Chinese phone prefixes, separators and full-width digits", () => {
+    expect(normalizeContact("+86 138-0000-0000")).toBe("13800000000");
+    expect(normalizeContact("（１３８）００００－００００")).toBe("13800000000");
+    expect(
+      matchIdentity({ name: "唐悦", contact: "+86 138-0000-0000" }, [
+        person("phone", "糖糖", "13800000000"),
+      ]),
+    ).toMatchObject({ decision: "update", matches: [expect.objectContaining({ id: "phone" })] });
   });
 });

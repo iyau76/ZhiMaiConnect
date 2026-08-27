@@ -17,9 +17,19 @@ export function carryManualState(
 ): IngestCandidate {
   const usedPeople = new Set<number>();
   const people = (result.people ?? []).map((person) => {
+    const resultNameCount = (result.people ?? []).filter(
+      (candidate) => candidate.name.trim() === person.name.trim(),
+    ).length;
+    const previousNameCount = (previous.people ?? []).filter(
+      (candidate) => candidate.name.trim() === person.name.trim(),
+    ).length;
     const previousIndex = (previous.people ?? []).findIndex(
       (candidate, candidateIndex) =>
-        !usedPeople.has(candidateIndex) && candidate.name.trim() === person.name.trim(),
+        !usedPeople.has(candidateIndex) &&
+        ((person._draftId && candidate._draftId === person._draftId) ||
+          (resultNameCount === 1 &&
+            previousNameCount === 1 &&
+            candidate.name.trim() === person.name.trim())),
     );
     const old = previous.people?.[previousIndex];
     if (!old) return person;
@@ -91,11 +101,11 @@ export function carryManualState(
     people,
     facts: carryEditedItems(result.facts, previous.facts, (item) => {
       const fact = item as IngestFact;
-      return `${fact.person.trim()}\u0000${fact.key.trim()}`;
+      return `${fact.personDraftId ?? fact.person.trim()}\u0000${fact.key.trim()}`;
     }) as IngestFact[],
     relations: carryEditedItems(result.relations, previous.relations, (item) => {
       const relation = item as IngestRelation;
-      return `${relation.from.trim()}\u0000${relation.to.trim()}\u0000${relation.label.trim()}`;
+      return `${relation.fromDraftId ?? relation.from.trim()}\u0000${relation.toDraftId ?? relation.to.trim()}\u0000${relation.label.trim()}`;
     }) as IngestRelation[],
     events: carryEditedItems(result.events, previous.events, (item) =>
       (item as IngestEvent).title.trim(),

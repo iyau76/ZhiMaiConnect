@@ -8,9 +8,10 @@
 
 - 自然语言、TXT、PDF、DOCX 和图片材料录入
 - 多轮录入智能体可检索已有档案并把人物/事件更新放入待确认草稿
-- 人物档案、关系记录和二维关系图
+- 人物档案、关系记录和二维关系图；支持概览/一跳/两跳/全部视图、关系证据筛选和单边常显/自动/常隐
 - 生日、节日、自定义提醒，以及公历/农历同格显示、可原位编辑的模糊日期日历
 - “问一问”可调用本机档案与联网工具；人物修改必须先展示差异并由用户批准
+- “这事该拜托谁”区分开放求助与目标人物引荐；目标模式只返回本地确定性算法找到的真实路径
 - 本地 IndexedDB 数据存储
 - Lovable AI、自定义 OpenAI 兼容接口与本地 Ollama 三种模型接入方式
 - Markdown、DOCX 等数据导出能力
@@ -95,6 +96,9 @@ npm run test:run
 
 # 提交前完整检查：类型、Lint、格式、单元测试
 npm run check
+
+# Playwright 端到端测试
+npm run e2e
 ```
 
 ## 生产构建与本地预览
@@ -117,13 +121,14 @@ npm run build
 npx wrangler deploy --config .output/server/wrangler.json
 ```
 
-`LOVABLE_API_KEY` 等生产密钥应通过 Cloudflare Secret 管理，不要写入仓库或 `wrangler.json`。公开部署前还需要完成 API 鉴权、限流、请求大小限制、SSRF 防护和隐私告知。
+`LOVABLE_API_KEY` 等生产密钥应通过 Cloudflare Secret 管理，不要写入仓库或 `wrangler.json`。`npm run build` 会在生成的 Worker 配置中注入三组 Cloudflare Rate Limiting bindings；请始终部署这份构建产物，不要绕过构建脚本直接发布旧 `.output`。
 
 ## 数据与隐私边界
 
 - 人物、关系、提醒等结构化数据默认保存在当前浏览器的 IndexedDB 中；清理站点数据可能导致资料丢失。
+- 关系的“常隐”只控制画面；是否允许用于引荐由独立策略控制。目标引荐路径在浏览器本地计算，AI 只能解释锁定后的候选、顺序和路径。
 - 选择云端模型时，用户提交的文字、图片或音频会按功能需要发送给相应模型服务商，不等于“所有数据始终只在本机”。
-- 页面在调用 AI 路由前会建立短期、仅内存保存的同源会话令牌；服务端同时校验 SameSite HttpOnly cookie，并按 IP 限流。
+- 页面在调用 AI 路由前会建立短期同源会话令牌；服务端同时校验 SameSite HttpOnly cookie。Cloudflare 生产环境按已校验会话执行边缘共享限流，非 Workers/绑定临时不可用时使用有界内存限流回退；不会信任客户端伪造的 `X-Forwarded-For` 或 `X-Real-IP`。
 - 选择本地 Ollama 时，模型请求通常留在用户配置的本地服务，但仍需由用户确认该地址与运行环境可信。
 - 不应在演示、日志、截图或提交记录中放入真实联系人隐私、API Key 或原始敏感材料。
 - 本项目不接入、抓取或宣称可以读取个人微信、QQ、小红书账号数据，也不会自动对外发送消息。
