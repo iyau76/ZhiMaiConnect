@@ -621,6 +621,10 @@ test("日历中的既有事件可以原位编辑而不是重复新建", async ({
   });
   await openApp(page);
   await clickVisible(page, page.getByRole("button", { name: /^日历/ }));
+  const monthCalendar = page.getByText("公历 · 农历").locator("..").locator("..").locator("..");
+  await expect(monthCalendar.getByRole("button", { name: /农历/ }).first()).toBeVisible();
+  const calendarBox = await monthCalendar.boundingBox();
+  expect(calendarBox?.height).toBeLessThan(620);
   await page.getByRole("button", { name: "编辑事件" }).click();
   const editor = page.getByRole("heading", { name: "编辑这件事" }).locator("..").locator("..");
   await editor.getByRole("textbox").last().fill("新事件标题\n新细节");

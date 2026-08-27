@@ -36,7 +36,7 @@ import {
   type FuzzyParse,
 } from "@/lib/fuzzy-date";
 import { t } from "@/lib/i18n";
-import { birthdayMd, festivalsForYear, pad, todayStr } from "@/lib/personal";
+import { birthdayMd, festivalsForYear, lunarDateLabel, pad, todayStr } from "@/lib/personal";
 import { cn } from "@/lib/utils";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
@@ -87,6 +87,16 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
     for (let d = 1; d <= days; d += 1) list.push(`${year}-${pad(month + 1)}-${pad(d)}`);
     return list;
   }, [year, month]);
+
+  const lunarByDate = useMemo(
+    () =>
+      new Map(
+        cells
+          .filter((date): date is string => Boolean(date))
+          .map((date) => [date, lunarDateLabel(date)] as const),
+      ),
+    [cells],
+  );
 
   /** 精确到天的事件，落到具体格子 */
   const byDate = useMemo(() => {
@@ -328,11 +338,16 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
       </div>
 
       {view === "month" ? (
-        <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
+        <section className="rounded-2xl border border-border bg-card/40 p-3 md:p-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-display text-lg tracking-tight">
-              {year} 年 {month + 1} 月
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="font-display text-base tracking-tight md:text-lg">
+                {year} 年 {month + 1} 月
+              </h2>
+              <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
+                公历 · 农历
+              </span>
+            </div>
             <div className="flex gap-1.5">
               <Button
                 size="icon"
@@ -365,7 +380,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-7 gap-1 text-center text-[11px] text-muted-foreground">
+          <div className="mt-3 grid grid-cols-7 gap-1 text-center text-[10px] text-muted-foreground">
             {WEEK.map((day) => (
               <span key={day}>{day}</span>
             ))}
@@ -377,14 +392,16 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
               const has = (byDate.get(date)?.length ?? 0) > 0;
               const inSpan = spanDays.has(date);
               const isToday = date === todayStr();
+              const lunar = lunarByDate.get(date);
               return (
                 <button
                   key={date}
                   type="button"
                   onClick={() => setSelected(date)}
-
+                  title={[date, lunar?.full, festival?.name].filter(Boolean).join(" · ")}
+                  aria-label={[date, lunar?.full, festival?.name].filter(Boolean).join("，")}
                   className={cn(
-                    "flex aspect-square flex-col items-center justify-center rounded-lg border text-xs transition-colors",
+                    "relative flex h-14 flex-col items-start justify-start rounded-md border p-1.5 text-xs transition-colors sm:h-16 md:h-[4.5rem] md:rounded-lg md:p-2",
                     selected === date
                       ? "border-primary bg-primary/10 text-foreground"
                       : "border-border/60 hover:bg-accent/50",
@@ -393,8 +410,11 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
                     has && selected !== date && "font-semibold",
                   )}
                 >
-                  <span>{Number(date.slice(8))}</span>
-                  <span className="mt-0.5 flex gap-0.5">
+                  <span className="font-medium leading-none">{Number(date.slice(8))}</span>
+                  <span className="mt-1 max-w-full truncate text-[9px] leading-none text-muted-foreground md:text-[10px]">
+                    {lunar?.short ?? ""}
+                  </span>
+                  <span className="absolute bottom-1.5 left-1.5 flex gap-0.5 md:bottom-2 md:left-2">
                     {birthdays.length > 0 && <i className="size-1.5 rounded-full bg-primary" />}
                     {festival && <i className="size-1.5 rounded-full bg-amber-400" />}
                     {has && <i className="size-1.5 rounded-full bg-foreground" />}

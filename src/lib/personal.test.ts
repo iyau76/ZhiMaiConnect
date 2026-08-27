@@ -7,6 +7,7 @@ import {
   blessingPrompt,
   daysUntilMd,
   festivalsForYear,
+  lunarDateLabel,
   pad,
   todayStr,
   upcoming,
@@ -154,6 +155,19 @@ describe("upcoming reminders", () => {
   it("omits dates outside the verified lunar calendar range instead of guessing", () => {
     const names = new Set(["春节", "端午节", "中秋节"]);
     expect(festivalsForYear(2101).filter((festival) => names.has(festival.name))).toEqual([]);
+  });
+
+  it.each([
+    ["2026-02-17", { lunarMonth: 1, lunarDay: 1, short: "正月", full: "农历二零二六年正月初一" }],
+    ["2026-08-27", { lunarMonth: 7, lunarDay: 15, short: "十五" }],
+    ["2025-07-25", { lunarMonth: 6, lunarDay: 1, isLeap: true, short: "闰六月" }],
+  ])("converts solar day %s into an exact lunar label", (date, expected) => {
+    expect(lunarDateLabel(date)).toMatchObject(expected);
+  });
+
+  it("does not label invalid or unsupported calendar days", () => {
+    expect(lunarDateLabel("2026-02-30")).toBeNull();
+    expect(lunarDateLabel("2101-01-01")).toBeNull();
   });
 
   it("includes exactly converted lunar festivals in upcoming reminders", () => {

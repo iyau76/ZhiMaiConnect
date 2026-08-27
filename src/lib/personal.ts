@@ -34,6 +34,46 @@ const FESTIVAL_CACHE = new Map<number, Festival[]>();
 const MIN_LUNAR_YEAR = 1900;
 const MAX_LUNAR_YEAR = 2100;
 
+export interface LunarDateLabel {
+  lunarYear: number;
+  lunarMonth: number;
+  lunarDay: number;
+  isLeap: boolean;
+  /** 月初显示月份，其余显示农历日，适合月历小格。 */
+  short: string;
+  /** 适合 title / 辅助说明的完整农历日期。 */
+  full: string;
+}
+
+/** 将 YYYY-MM-DD 公历日期精确换算为农历；超出 1900—2100 或日期无效时不猜测。 */
+export function lunarDateLabel(date: string): LunarDateLabel | null {
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const probe = new Date(year, month - 1, day);
+  if (
+    year < MIN_LUNAR_YEAR ||
+    year > MAX_LUNAR_YEAR ||
+    probe.getFullYear() !== year ||
+    probe.getMonth() !== month - 1 ||
+    probe.getDate() !== day
+  ) {
+    return null;
+  }
+  const lunar = solarLunar.solar2lunar(year, month, day);
+  if (lunar === -1) return null;
+  return {
+    lunarYear: lunar.lYear,
+    lunarMonth: lunar.lMonth,
+    lunarDay: lunar.lDay,
+    isLeap: lunar.isLeap,
+    short: lunar.lDay === 1 ? lunar.monthCn : lunar.dayCn,
+    full: `农历${lunar.yearCn}${lunar.monthCn}${lunar.dayCn}`,
+  };
+}
+
 /**
  * 使用本地历法数据将农历节日换算为公历日期，不依赖设备时区或网络。
  * 当前历法数据覆盖 1900—2100 年；超出范围时不猜测日期。
