@@ -62,6 +62,15 @@ async function buildPeople(): Promise<ExportPayload> {
     relation.mutual ? "↔ 双向" : "→ 单向",
     nameOf(relation.toId),
     relation.label,
+    relation.evidenceMode === "inferred"
+      ? "推导"
+      : relation.evidenceMode === "explicit"
+        ? "明确"
+        : "未知",
+    relation.confidence === undefined ? "" : String(relation.confidence),
+    relation.confirmationStatus ?? "confirmed",
+    relation.visibility ?? "auto",
+    relation.recommendationPolicy ?? "allow",
     (relation.basis ?? "").replace(/\s+/g, " "),
     (relation.note ?? "").replace(/\s+/g, " "),
   ]);
@@ -96,7 +105,19 @@ async function buildPeople(): Promise<ExportPayload> {
       },
       {
         name: "人物关系",
-        head: ["来源", "方向", "对象", "关系", "依据", "备注"],
+        head: [
+          "来源",
+          "方向",
+          "对象",
+          "关系",
+          "证据模式",
+          "置信度",
+          "确认状态",
+          "展示策略",
+          "推荐策略",
+          "依据",
+          "备注",
+        ],
         rows: relationRows,
       },
       {

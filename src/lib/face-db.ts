@@ -110,6 +110,18 @@ export interface RelationRecord {
   updatedAt?: number;
   /** AI 抽取先进入待确认；人工创建或在草稿页确认后为 confirmed。 */
   confirmationStatus?: "pending" | "confirmed" | "rejected";
+  /** 关系是材料明说、规则/AI 推导，还是旧数据中暂时无法判断。 */
+  evidenceMode?: "explicit" | "inferred" | "unknown";
+  /** 关系事实本身的置信度；未知时留空，不能默认为 0。 */
+  confidence?: number;
+  /** 仅控制关系图展示，不代表删除关系，也不决定推荐资格。 */
+  visibility?: "always" | "auto" | "hidden";
+  /** 单独控制该关系能否用于引荐路径。 */
+  recommendationPolicy?: "allow" | "avoid" | "block";
+  /** 规范化语义类型；label 始终保留用户原文。 */
+  semanticKind?: string;
+  /** 推导关系所依赖的基础关系，便于基础事实变化后重新核验。 */
+  derivedFromRelationIds?: string[];
   source?: Provenance;
 }
 
@@ -258,7 +270,7 @@ export interface ReminderRecord {
 }
 
 const DB_NAME = "openglass-faces";
-const DB_VERSION = 8;
+const DB_VERSION = 9;
 const PERSONS = "persons";
 const SIGHTINGS = "sightings";
 const RELATIONS = "relations";
@@ -276,7 +288,7 @@ function openDb() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
       if (!db.objectStoreNames.contains(PERSONS)) db.createObjectStore(PERSONS, { keyPath: "id" });
       if (!db.objectStoreNames.contains(SIGHTINGS)) {
@@ -313,6 +325,30 @@ function openDb() {
         const store = db.createObjectStore(REMINDERS, { keyPath: "id" });
         store.createIndex("createdAt", "createdAt");
       }
+
+      // v9 只增加可选关系策略字段。用游标保守回填旧关系：不猜置信度，
+      // 只从明确的 basis 前缀判断“原文/推断”，其它标为 unknown。
+      if ((event as IDBVersionChangeEvent).oldVersion > 0) {
+        const relationStore = request.transaction?.objectStore(RELATIONS);
+        relationStore?.openCursor().addEventListener("success", (cursorEvent) => {
+          const cursor = (cursorEvent.target as IDBRequest<IDBCursorWithValue | null>).result;
+          if (!cursor) return;
+          const relation = cursor.value as RelationRecord;
+          const basis = relation.basis?.trim() ?? "";
+          const evidenceMode = /^推断依据\s*[:：]|^inference\s+basis\s*[:：]/i.test(basis)
+            ? "inferred"
+            : /^原文\s*[:：]|^original\s*[:：]/i.test(basis)
+              ? "explicit"
+              : "unknown";
+          cursor.update({
+            ...relation,
+            evidenceMode: relation.evidenceMode ?? evidenceMode,
+            visibility: relation.visibility ?? "auto",
+            recommendationPolicy: relation.recommendationPolicy ?? "allow",
+          });
+          cursor.continue();
+        });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -335,6 +371,39 @@ async function run<T>(
   });
 }
 
+function relationMeaningChanged(previous: RelationRecord, next: RelationRecord) {
+  return (
+    previous.fromId !== next.fromId ||
+    previous.toId !== next.toId ||
+    previous.label !== next.label ||
+    previous.mutual !== next.mutual ||
+    previous.basis !== next.basis ||
+    previous.confirmationStatus !== next.confirmationStatus ||
+    previous.recommendationPolicy !== next.recommendationPolicy
+  );
+}
+
+async function invalidateDerivedRelations(baseRelationId: string) {
+  const relations = await run<RelationRecord[]>(RELATIONS, "readonly", (s) => s.getAll());
+  const dependents = relations.filter((relation) =>
+    relation.derivedFromRelationIds?.includes(baseRelationId),
+  );
+  for (const relation of dependents) {
+    const notice = "基础关系已变更，需重新核验";
+    await run<void>(RELATIONS, "readwrite", (s) =>
+      s.put({
+        ...relation,
+        confirmationStatus: "pending",
+        recommendationPolicy: "avoid",
+        updatedAt: Date.now(),
+        note: relation.note?.includes(notice)
+          ? relation.note
+          : [relation.note?.trim(), notice].filter(Boolean).join("；"),
+      }),
+    );
+  }
+}
+
 export const facesDb = {
   listPersons: () =>
     run<PersonRecord[]>(PERSONS, "readonly", (s) => s.getAll()).then((rows) =>
@@ -345,10 +414,14 @@ export const facesDb = {
   deletePerson: async (id: string) => {
     await run<void>(PERSONS, "readwrite", (s) => s.delete(id));
     const relations = await run<RelationRecord[]>(RELATIONS, "readonly", (s) => s.getAll());
+    const removedRelationIds: string[] = [];
     for (const relation of relations) {
-      if (relation.fromId === id || relation.toId === id)
+      if (relation.fromId === id || relation.toId === id) {
         await run<void>(RELATIONS, "readwrite", (s) => s.delete(relation.id));
+        removedRelationIds.push(relation.id);
+      }
     }
+    for (const relationId of removedRelationIds) await invalidateDerivedRelations(relationId);
   },
   /** 清掉指向已不存在人物的孤儿关系 */
   pruneOrphanRelations: async () => {
@@ -378,9 +451,18 @@ export const facesDb = {
     run<RelationRecord[]>(RELATIONS, "readonly", (s) => s.getAll()).then((rows) =>
       rows.sort((a, b) => b.createdAt - a.createdAt),
     ),
-  putRelation: (relation: RelationRecord) =>
-    run<void>(RELATIONS, "readwrite", (s) => s.put(relation)),
-  deleteRelation: (id: string) => run<void>(RELATIONS, "readwrite", (s) => s.delete(id)),
+  putRelation: async (relation: RelationRecord) => {
+    const previous = await run<RelationRecord | undefined>(RELATIONS, "readonly", (s) =>
+      s.get(relation.id),
+    );
+    await run<void>(RELATIONS, "readwrite", (s) => s.put(relation));
+    if (previous && relationMeaningChanged(previous, relation))
+      await invalidateDerivedRelations(relation.id);
+  },
+  deleteRelation: async (id: string) => {
+    await run<void>(RELATIONS, "readwrite", (s) => s.delete(id));
+    await invalidateDerivedRelations(id);
+  },
   listEvidence: () =>
     run<EvidenceRecord[]>(EVIDENCE, "readonly", (s) => s.getAll()).then((rows) =>
       rows.sort((a, b) => b.createdAt - a.createdAt),

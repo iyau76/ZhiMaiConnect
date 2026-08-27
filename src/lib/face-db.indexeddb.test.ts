@@ -67,13 +67,13 @@ beforeEach(() => {
 });
 
 describe("facesDb schema", () => {
-  it("creates a fresh version 8 database with every object store", async () => {
+  it("creates a fresh version 9 database with every object store", async () => {
     const { facesDb } = await import("./face-db");
 
     await expect(facesDb.listPersons()).resolves.toEqual([]);
 
     const database = await openRawDatabase();
-    expect(database.version).toBe(8);
+    expect(database.version).toBe(9);
     expect(Array.from(database.objectStoreNames)).toEqual(EXPECTED_STORES);
     database.close();
   });
@@ -90,9 +90,49 @@ describe("facesDb schema", () => {
     await expect(facesDb.listPersons()).resolves.toEqual([legacyPerson]);
 
     const upgradedDatabase = await openRawDatabase();
-    expect(upgradedDatabase.version).toBe(8);
+    expect(upgradedDatabase.version).toBe(9);
     expect(Array.from(upgradedDatabase.objectStoreNames)).toEqual(EXPECTED_STORES);
     upgradedDatabase.close();
+  });
+
+  it("backfills conservative relationship policies while upgrading from version 8", async () => {
+    const legacyDatabase = await openRawDatabase(8, (database, transaction) => {
+      const store = database.createObjectStore("relations", { keyPath: "id" });
+      store.put({
+        id: "derived",
+        fromId: "a",
+        toId: "b",
+        label: "兄弟",
+        basis: "推断依据：同为甲之子",
+        createdAt: 1,
+      });
+      store.put({
+        id: "explicit",
+        fromId: "a",
+        toId: "c",
+        label: "母子",
+        basis: "原文：甲的儿子是丙",
+        createdAt: 2,
+      });
+      transaction.objectStore("relations");
+    });
+    legacyDatabase.close();
+
+    const { facesDb } = await import("./face-db");
+    await expect(facesDb.listRelations()).resolves.toEqual([
+      expect.objectContaining({
+        id: "explicit",
+        evidenceMode: "explicit",
+        visibility: "auto",
+        recommendationPolicy: "allow",
+      }),
+      expect.objectContaining({
+        id: "derived",
+        evidenceMode: "inferred",
+        visibility: "auto",
+        recommendationPolicy: "allow",
+      }),
+    ]);
   });
 });
 
@@ -125,6 +165,33 @@ describe("facesDb people and relations", () => {
 
     await facesDb.deleteRelation(original.id);
     await expect(facesDb.listRelations()).resolves.toEqual([]);
+  });
+
+  it("marks derived relations for review when their supporting relation changes", async () => {
+    const { facesDb } = await import("./face-db");
+    const base = relation("base", "person-1", "person-2");
+    const derived: RelationRecord = {
+      ...relation("derived", "person-1", "person-3"),
+      evidenceMode: "inferred",
+      confirmationStatus: "confirmed",
+      recommendationPolicy: "allow",
+      derivedFromRelationIds: [base.id],
+    };
+    await facesDb.putRelation(base);
+    await facesDb.putRelation(derived);
+
+    await facesDb.putRelation({ ...base, label: "updated relationship" });
+
+    await expect(facesDb.listRelations()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: derived.id,
+          confirmationStatus: "pending",
+          recommendationPolicy: "avoid",
+          note: expect.stringContaining("基础关系已变更"),
+        }),
+      ]),
+    );
   });
 
   it("deleting a person cascades only relations connected to that person", async () => {

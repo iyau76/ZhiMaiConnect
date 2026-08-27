@@ -95,4 +95,29 @@ describe("local recommendation tools", () => {
     expect(relationResult.rows).toHaveLength(1);
     expect(eventResult.rows).toHaveLength(1);
   });
+
+  it("returns a locked deterministic referral path instead of asking the model to invent one", async () => {
+    persons[0].profile = { ...persons[0].profile, closeness: 5 };
+    relations[0] = {
+      ...relations[0],
+      confirmationStatus: "confirmed",
+      evidenceMode: "explicit",
+      confidence: 0.95,
+      basis: "原文：两人是同事",
+    };
+    const result = (await executeRecommendationTool(
+      "find_connection_paths",
+      { targetPersonId: "photo", maxHops: 3 },
+      { persons, relations, events },
+    )) as {
+      rankingLocked: boolean;
+      rows: Array<{ personId: string; path: { personIds: string[] } }>;
+    };
+
+    expect(result.rankingLocked).toBe(true);
+    expect(result.rows[0]).toMatchObject({
+      personId: "legal",
+      path: { personIds: ["legal", "photo"] },
+    });
+  });
 });

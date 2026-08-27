@@ -12,6 +12,17 @@ export interface CandidateRecommendation {
   updatedAt: number;
   confidence: RecommendationConfidence;
   source?: Provenance;
+  mode?: "open" | "connection";
+  /** 目标引荐模式下由本地算法给出的真实路径；AI 只能解释，不能改写。 */
+  path?: {
+    targetId: string;
+    personIds: string[];
+    personNames: string[];
+    relationIds: string[];
+    labels: string[];
+    cost: number;
+    direct: boolean;
+  };
 }
 
 const DAY = 86_400_000;
@@ -202,6 +213,7 @@ export function staleContacts(
 }
 
 export function recommendationPrompt(task: string, candidates: CandidateRecommendation[]) {
+  const connectionMode = candidates.some((candidate) => candidate.mode === "connection");
   const rows = candidates
     .slice(0, 3)
     .map((item, index) =>
@@ -210,12 +222,17 @@ export function recommendationPrompt(task: string, candidates: CandidateRecommen
         `理由：${item.reasons.join("；") || "暂无直接理由"}`,
         `证据：${item.evidence.join("；") || "暂无"}`,
         `风险：${item.risks.join("；") || "未发现明显风险"}`,
+        item.path ? `固定路径：我 → ${item.path.personNames.join(" → ")}` : "",
       ].join("\n"),
     );
   return [
     `任务：${task}`,
-    "以下候选及排序由本地确定性规则产生，不得添加名单外人物或改变排序：",
+    connectionMode
+      ? "以下候选、路径及排序由本地确定性路径工具产生。不得添加人物、改写路径、改变排序或声称不存在的关系："
+      : "以下候选及排序由本地确定性规则产生，不得添加名单外人物或改变排序：",
     rows.join("\n\n"),
-    "请比较前三名各自适合与不适合之处，回答“为什么不是另一个人”，再给第一名写一段可编辑的求助话术。不要声称自动发送。",
+    connectionMode
+      ? "请按固定路径比较可联系性、关系证据和风险，明确逐跳应如何开口，再给第一名写一段可编辑的引荐请求。不要省略不确定性，也不要声称自动发送。"
+      : "请比较前三名各自适合与不适合之处，回答“为什么不是另一个人”，再给第一名写一段可编辑的求助话术。不要声称自动发送。",
   ].join("\n\n");
 }

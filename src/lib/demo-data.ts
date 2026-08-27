@@ -140,6 +140,10 @@ function demoRelations(people: PersonRecord[]): RelationRecord[] {
       createdAt: at,
       updatedAt: at,
       confirmationStatus: index === 63 ? "pending" : "confirmed",
+      evidenceMode: index === 63 ? "inferred" : "explicit",
+      confidence: index === 63 ? 0.62 : 0.95,
+      visibility: "auto",
+      recommendationPolicy: "allow",
       source: index === 63 ? { kind: "ai", detail: "合成低置信度关系", at } : demoSource,
     });
   };

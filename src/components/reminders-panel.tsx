@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { askText } from "@/lib/ai-text";
+import { detectTargetIntent, rankConnectionPaths } from "@/lib/connection-paths";
 import {
   facesDb,
   type LifeEventRecord,
@@ -56,6 +57,10 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   const [askAnswer, setAskAnswer] = useState("");
   const [candidates, setCandidates] = useState<CandidateRecommendation[]>([]);
   const [candidateMode, setCandidateMode] = useState<"local" | "agent">("local");
+  const [targetChoices, setTargetChoices] = useState<PersonRecord[]>([]);
+  const [selectedTargetId, setSelectedTargetId] = useState("");
+  const [includeInferredPaths, setIncludeInferredPaths] = useState(false);
+  const [recommendationNotice, setRecommendationNotice] = useState("");
   const [aiArchiveMode, setAiArchiveMode] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentTrace, setAgentTrace] = useState<AgentTraceEvent[]>([]);
@@ -151,10 +156,51 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     toast.success("已加入待办");
   };
 
+  const runTargetRecommendation = (targetId: string, includeInferred = includeInferredPaths) => {
+    const target = persons.find((person) => person.id === targetId);
+    if (!target) return;
+    const ranked = rankConnectionPaths({
+      task: ask.trim(),
+      persons,
+      relations,
+      events,
+      targetId,
+      maxHops: 3,
+      limit: 3,
+      includeInferred,
+    });
+    setCandidates(ranked);
+    setCandidateMode("local");
+    setAgentTrace([]);
+    setAskAnswer("");
+    setSelectedTargetId(targetId);
+    setRecommendationNotice(
+      ranked.length
+        ? `目标模式：只显示“我 → 中间人 → ${target.name}”的真实可达路径。`
+        : `没有找到通往 ${target.name} 的合格路径。请补充联系方式/互动记录，或确认必要的推导关系。`,
+    );
+  };
+
   const findWho = () => {
     if (!ask.trim()) return;
+    const intent = detectTargetIntent(ask.trim(), persons);
+    if (intent.mode === "ambiguous") {
+      setCandidates([]);
+      setTargetChoices(intent.matches);
+      setSelectedTargetId("");
+      setCandidateMode("local");
+      setRecommendationNotice("问题中出现了多个可能的目标人物，请先选择要联系的对象。");
+      return;
+    }
+    setTargetChoices([]);
+    if (intent.mode === "target" && intent.target) {
+      runTargetRecommendation(intent.target.id);
+      return;
+    }
     const ranked = rankCandidates(ask.trim(), persons, events).slice(0, 3);
-    setCandidates(ranked);
+    setCandidates(ranked.map((candidate) => ({ ...candidate, mode: "open" as const })));
+    setSelectedTargetId("");
+    setRecommendationNotice("开放求助模式：按任务匹配、可联系程度和近期互动筛选候选。");
     setCandidateMode("local");
     setAgentTrace([]);
     setAskAnswer("");
@@ -167,6 +213,9 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
     setAsk(question);
     setCandidates(ranked);
     setCandidateMode("local");
+    setTargetChoices([]);
+    setSelectedTargetId("");
+    setRecommendationNotice("开放求助模式：使用合成演示数据进行本地确定性筛选。");
     setAgentTrace([]);
     setAskAnswer("");
     if (ranked.length) {
@@ -192,6 +241,13 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
 
   const analyzeFullArchive = async () => {
     if (!ask.trim() || agentBusy) return;
+    const intent = detectTargetIntent(ask.trim(), persons);
+    if (intent.mode === "ambiguous" && !selectedTargetId) {
+      setTargetChoices(intent.matches);
+      setRecommendationNotice("问题中出现了多个可能的目标人物，请先选择要联系的对象。");
+      return;
+    }
+    const targetPersonId = selectedTargetId || intent.target?.id;
     agentAbortRef.current?.abort();
     const controller = new AbortController();
     agentAbortRef.current = controller;
@@ -206,12 +262,19 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
         persons,
         relations,
         events,
+        targetPersonId,
+        includeInferredPaths,
         signal: controller.signal,
         onTrace: (event) => setAgentTrace((current) => [...current.slice(-19), event]),
       });
       setCandidates(result.candidates);
       setCandidateMode("agent");
       setAskAnswer(result.answer);
+      setRecommendationNotice(
+        result.candidates.some((candidate) => candidate.path)
+          ? "目标模式：候选、分数和路径由本地确定性工具锁定，AI 只负责解释与措辞。"
+          : "开放求助模式：AI 已按需读取档案，候选仍需人工复核。",
+      );
       toast.success(
         result.disclosureMode === "full"
           ? `AI 已完成全档案分析（${result.rounds} 轮）`
@@ -437,6 +500,9 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
             agentAbortRef.current?.abort();
             setAsk(event.target.value);
             setCandidates([]);
+            setTargetChoices([]);
+            setSelectedTargetId("");
+            setRecommendationNotice("");
             setAskAnswer("");
             setAgentTrace([]);
           }}
@@ -444,6 +510,28 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
           placeholder="例如：我想找人帮忙看一下租房合同，谁比较合适？"
           className="mt-3"
         />
+        {targetChoices.length > 1 && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/35 bg-amber-500/5 p-3 text-xs">
+            <span>{recommendationNotice}</span>
+            <select
+              value={selectedTargetId}
+              onChange={(event) => {
+                const id = event.target.value;
+                setSelectedTargetId(id);
+                if (id) runTargetRecommendation(id);
+              }}
+              className="h-9 min-w-40 rounded-md border border-border bg-background px-2"
+              aria-label="选择目标人物"
+            >
+              <option value="">请选择目标人物</option>
+              {targetChoices.map((person) => (
+                <option key={person.id} value={person.id}>
+                  {person.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/45 px-3 py-2.5">
           <label
             htmlFor="ai-archive-mode"
@@ -467,13 +555,26 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
           </span>
         </div>
         <div className="mt-2 flex flex-wrap justify-end gap-2">
+          <label className="mr-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+            <Switch
+              checked={includeInferredPaths}
+              onCheckedChange={(checked) => {
+                setIncludeInferredPaths(checked);
+                if (selectedTargetId) {
+                  window.setTimeout(() => runTargetRecommendation(selectedTargetId, checked), 0);
+                }
+              }}
+              aria-label="允许已确认的推导关系参与引荐"
+            />
+            允许已确认的推导关系参与引荐
+          </label>
           <Button variant="ghost" onClick={loadOfflineRecommendationDemo}>
             <Sparkles className="size-4" aria-hidden="true" />
             离线演示问题（合成数据）
           </Button>
           <Button variant="outline" onClick={findWho} disabled={!ask.trim() || agentBusy}>
             <Users className="size-4" aria-hidden="true" />
-            本地筛选候选
+            本地判断模式与候选
           </Button>
           {aiArchiveMode && (
             <Button onClick={() => void analyzeFullArchive()} disabled={!ask.trim() || agentBusy}>
@@ -496,6 +597,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
             </Button>
           )}
         </div>
+        {recommendationNotice && targetChoices.length <= 1 && (
+          <p className="mt-3 rounded-lg border border-border bg-muted/25 px-3 py-2 text-[11px] text-muted-foreground">
+            {recommendationNotice}
+          </p>
+        )}
         {agentTrace.length > 0 && (
           <div className="mt-3">
             <ReasoningDisclosure
@@ -520,10 +626,23 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                     {index + 1}. {candidate.person.name}
                   </span>
                   <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
-                    {candidate.score} {candidateMode === "agent" ? "AI建议分" : "本地分"} ·{" "}
-                    {candidate.confidence}置信度
+                    {candidate.score}{" "}
+                    {candidate.path ? "路径分" : candidateMode === "agent" ? "AI建议分" : "本地分"}{" "}
+                    · {candidate.confidence}置信度
                   </span>
                 </div>
+                {candidate.path && (
+                  <p className="mt-2 rounded-md bg-primary/5 px-2 py-1.5 font-medium text-primary">
+                    {candidate.path.direct
+                      ? `可直接联系 ${persons.find((person) => person.id === candidate.path?.targetId)?.name ?? "目标人物"}`
+                      : [
+                          "我",
+                          ...candidate.path.personIds.map(
+                            (id) => persons.find((person) => person.id === id)?.name ?? "未知人物",
+                          ),
+                        ].join(" → ")}
+                  </p>
+                )}
                 <p className="mt-2 leading-relaxed">
                   {candidate.reasons.join("；") || "暂无直接匹配理由"}
                 </p>

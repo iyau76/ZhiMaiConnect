@@ -34,6 +34,13 @@ import { makeSource } from "@/lib/provenance";
 import { PRESET_TAGS, presetTagLabels, primaryTagOf, tagsOf } from "@/lib/circle-tags";
 import { inferMutual, isMutualRelation } from "@/lib/relation-kind";
 import {
+  relationCategory,
+  relationEvidenceMode,
+  selectVisibleRelations,
+  type GraphViewMode,
+  type RelationCategory,
+} from "@/lib/relation-graph";
+import {
   facesDb,
   type EvidenceRecord,
   type LifeEventRecord,
@@ -95,6 +102,16 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   /** 关系网布局：按标签分圈 / 不分组 */
   const [groupBy, setGroupBy] = useState<"none" | "tag">("tag");
   const [relationFilter, setRelationFilter] = useState("all");
+  const [relationCategoryFilter, setRelationCategoryFilter] = useState<RelationCategory | "all">(
+    "all",
+  );
+  const [relationEvidenceFilter, setRelationEvidenceFilter] = useState<
+    "all" | "explicit" | "inferred" | "unknown"
+  >("all");
+  const [relationConfirmationFilter, setRelationConfirmationFilter] = useState<
+    "all" | "confirmed" | "pending"
+  >("all");
+  const [graphViewMode, setGraphViewMode] = useState<GraphViewMode>("overview");
   const [showEdgeLabels, setShowEdgeLabels] = useState(true);
   /** 档案页：搜索词、标签筛选、批量选中 */
   const [query, setQuery] = useState("");
@@ -214,6 +231,10 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       createdAt: now,
       updatedAt: now,
       confirmationStatus: "confirmed",
+      evidenceMode: "explicit",
+      confidence: 1,
+      visibility: "auto",
+      recommendationPolicy: "allow",
       source: makeSource("manual"),
     });
     const fromName = nameOf(fromId);
@@ -445,6 +466,38 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     return people;
   }, [people, groupBy, drill, groupOf]);
 
+  const policyFilteredRelations = useMemo(
+    () =>
+      relations.filter(
+        (relation) =>
+          (relationFilter === "all" || relation.label === relationFilter) &&
+          (relationCategoryFilter === "all" ||
+            relationCategory(relation) === relationCategoryFilter) &&
+          (relationEvidenceFilter === "all" ||
+            relationEvidenceMode(relation) === relationEvidenceFilter) &&
+          (relationConfirmationFilter === "all" ||
+            (relation.confirmationStatus ?? "confirmed") === relationConfirmationFilter),
+      ),
+    [
+      relations,
+      relationFilter,
+      relationCategoryFilter,
+      relationEvidenceFilter,
+      relationConfirmationFilter,
+    ],
+  );
+
+  const graphVisibility = useMemo(
+    () =>
+      selectVisibleRelations({
+        relations: policyFilteredRelations,
+        events: lifeEvents,
+        mode: graphViewMode,
+        selectedId,
+      }),
+    [policyFilteredRelations, lifeEvents, graphViewMode, selectedId],
+  );
+
   /** 关系网布局：默认一个大圆；按标签分组时每个圈层自成一簇。 */
   const graph = useMemo(() => {
     const people = visiblePeople;
@@ -547,8 +600,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
     // 只折叠完全相同方向、标签与方向性的重复记录；不同标签必须分别保留。
     const seen = new Set<string>();
-    const edges = relations
-      .filter((relation) => relationFilter === "all" || relation.label === relationFilter)
+    const edges = graphVisibility.visible
       .filter((relation) => {
         const key = `${relation.fromId}>${relation.toId}::${relation.label.trim()}::${
           isMutualRelation(relation) ? "mutual" : "directed"
@@ -564,6 +616,9 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
           id: relation.id,
           label: relation.label,
           mutual: isMutualRelation(relation),
+          evidenceMode: relationEvidenceMode(relation),
+          confirmationStatus: relation.confirmationStatus ?? "confirmed",
+          visibility: relation.visibility ?? "auto",
           /** 跨圈层的连线用虚线标出来 */
           cross: !!a && !!b && !!a.group && !!b.group && a.group !== b.group,
           pair: [relation.fromId, relation.toId].sort().join("|"),
@@ -696,7 +751,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     }));
 
     return { size, nodes, edges: labelled, clusters: shaped };
-  }, [visiblePeople, relations, relationFilter, groupBy, groupOf, positions]);
+  }, [visiblePeople, graphVisibility.visible, groupBy, groupOf, positions]);
 
   const relationLabels = useMemo(
     () => [...new Set(relations.map((relation) => relation.label).filter(Boolean))].sort(),
@@ -828,11 +883,13 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   const focusPerson = (id: string) => {
     setSelectedId(id);
     setSelectedRelationId(null);
+    setGraphViewMode("focus1");
   };
 
   /** 返回：从某个人退回全部圈子总览 */
   const goBack = useCallback(() => {
     setSelectedId(null);
+    setGraphViewMode("overview");
     resetView();
     setDrill({ mode: "blocks" });
   }, []);
@@ -845,6 +902,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
         closeRelationComposer();
       } else if (selectedId) {
         setSelectedId(null);
+        setGraphViewMode("overview");
       } else if (drill.mode !== "blocks") {
         goBack();
       }
@@ -910,6 +968,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     }
     setSelectedId(null);
     setSelectedRelationId(null);
+    setGraphViewMode("overview");
   };
 
   const onNodePointerDown = (
@@ -1272,6 +1331,22 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
               <option value="none">{t("不分组")}</option>
             </select>
             <select
+              value={graphViewMode}
+              onChange={(event) => setGraphViewMode(event.target.value as GraphViewMode)}
+              className="h-9 rounded-md border border-primary/35 bg-primary/5 px-2 text-sm"
+              aria-label={t("关系网视图")}
+              title={t("关系网视图")}
+            >
+              <option value="overview">{t("概览：结构骨架")}</option>
+              <option value="focus1" disabled={!selectedId}>
+                {t("聚焦：一跳关系")}
+              </option>
+              <option value="focus2" disabled={!selectedId}>
+                {t("聚焦：两跳关系")}
+              </option>
+              <option value="all">{t("全部：包含常隐")}</option>
+            </select>
+            <select
               value={relationFilter}
               onChange={(event) => setRelationFilter(event.target.value)}
               className="h-9 rounded-md border border-border bg-background px-2 text-sm"
@@ -1284,6 +1359,49 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                 </option>
               ))}
             </select>
+            <select
+              value={relationCategoryFilter}
+              onChange={(event) =>
+                setRelationCategoryFilter(event.target.value as RelationCategory | "all")
+              }
+              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              aria-label={t("关系类别筛选")}
+            >
+              <option value="all">{t("全部类别")}</option>
+              <option value="family">{t("血亲关系")}</option>
+              <option value="in_law">{t("姻亲关系")}</option>
+              <option value="work">{t("工作关系")}</option>
+              <option value="school">{t("同学关系")}</option>
+              <option value="friend">{t("朋友关系")}</option>
+              <option value="other">{t("其它关系")}</option>
+            </select>
+            <select
+              value={relationEvidenceFilter}
+              onChange={(event) =>
+                setRelationEvidenceFilter(event.target.value as typeof relationEvidenceFilter)
+              }
+              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              aria-label={t("关系证据筛选")}
+            >
+              <option value="all">{t("全部证据模式")}</option>
+              <option value="explicit">{t("材料明确")}</option>
+              <option value="inferred">{t("推导关系")}</option>
+              <option value="unknown">{t("旧数据待识别")}</option>
+            </select>
+            <select
+              value={relationConfirmationFilter}
+              onChange={(event) =>
+                setRelationConfirmationFilter(
+                  event.target.value as typeof relationConfirmationFilter,
+                )
+              }
+              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              aria-label={t("确认状态筛选")}
+            >
+              <option value="all">{t("全部确认状态")}</option>
+              <option value="confirmed">{t("已确认")}</option>
+              <option value="pending">{t("待确认")}</option>
+            </select>
             <label className="flex h-9 items-center gap-1.5 rounded-md border border-border px-2 text-xs">
               <Checkbox
                 checked={showEdgeLabels}
@@ -1292,6 +1410,23 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
               {t("显示边标签")}
             </label>
           </div>
+
+          {graphVisibility.hidden.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/25 px-3 py-2 text-[11px] text-muted-foreground">
+              <span>
+                {t("当前视图显示")} {graphVisibility.visible.length} {t("条关系，隐藏")}{" "}
+                {graphVisibility.hidden.length} {t("条")}
+              </span>
+              <button
+                type="button"
+                className="font-medium text-primary underline-offset-2 hover:underline"
+                onClick={() => setGraphViewMode("all")}
+              >
+                {t("临时查看全部")}
+              </button>
+              <span>{t("常隐只影响画面，不会删除关系。")}</span>
+            </div>
+          )}
 
           {relationComposerOpen && (
             <div
@@ -1469,6 +1604,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                     aria-label={`${t("只看圈层")}：${cluster.name}`}
                     onClick={() => {
                       setSelectedId(null);
+                      setGraphViewMode("overview");
                       setDrill({ mode: "group", key: cluster.name });
                     }}
                   >
@@ -1541,7 +1677,10 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
               <button
                 type="button"
                 className="text-primary underline-offset-2 hover:underline"
-                onClick={() => setSelectedId(null)}
+                onClick={() => {
+                  setSelectedId(null);
+                  setGraphViewMode("overview");
+                }}
               >
                 {t("取消选中")}
               </button>
@@ -1696,6 +1835,17 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                 <dd>
                   {selectedRelation.confirmationStatus === "pending" ? t("待确认") : t("已确认")}
                 </dd>
+                <dt className="text-muted-foreground">{t("证据模式")}</dt>
+                <dd>
+                  {relationEvidenceMode(selectedRelation) === "inferred"
+                    ? t("推导关系")
+                    : relationEvidenceMode(selectedRelation) === "explicit"
+                      ? t("材料明确")
+                      : t("旧数据待识别")}
+                  {selectedRelation.confidence === undefined
+                    ? ` · ${t("置信度未知")}`
+                    : ` · ${Math.round(selectedRelation.confidence * 100)}%`}
+                </dd>
                 <dt className="text-muted-foreground">{t("证据引用")}</dt>
                 <dd className="min-w-0">
                   {selectedEvidence ? (
@@ -1721,6 +1871,48 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   )}
                 </dd>
               </dl>
+              <div className="grid gap-2 border-t border-border pt-2 sm:grid-cols-2">
+                <label className="space-y-1 text-[11px]">
+                  <span className="text-muted-foreground">{t("关系图展示")}</span>
+                  <select
+                    value={selectedRelation.visibility ?? "auto"}
+                    onChange={async (event) => {
+                      await facesDb.putRelation({
+                        ...selectedRelation,
+                        visibility: event.target.value as NonNullable<RelationRecord["visibility"]>,
+                        updatedAt: Date.now(),
+                      });
+                      await refresh();
+                    }}
+                    className="h-8 w-full rounded-md border border-border bg-background px-2"
+                  >
+                    <option value="always">{t("常显")}</option>
+                    <option value="auto">{t("自动")}</option>
+                    <option value="hidden">{t("常隐")}</option>
+                  </select>
+                </label>
+                <label className="space-y-1 text-[11px]">
+                  <span className="text-muted-foreground">{t("引荐推荐策略")}</span>
+                  <select
+                    value={selectedRelation.recommendationPolicy ?? "allow"}
+                    onChange={async (event) => {
+                      await facesDb.putRelation({
+                        ...selectedRelation,
+                        recommendationPolicy: event.target.value as NonNullable<
+                          RelationRecord["recommendationPolicy"]
+                        >,
+                        updatedAt: Date.now(),
+                      });
+                      await refresh();
+                    }}
+                    className="h-8 w-full rounded-md border border-border bg-background px-2"
+                  >
+                    <option value="allow">{t("允许用于推荐")}</option>
+                    <option value="avoid">{t("尽量避免")}</option>
+                    <option value="block">{t("禁止用于推荐")}</option>
+                  </select>
+                </label>
+              </div>
               {selectedRelation.note && (
                 <p className="text-muted-foreground">{selectedRelation.note}</p>
               )}
@@ -1928,7 +2120,13 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                         strokeWidth={
                           selectedRelationId === edge.id ? 3 : selectedId && active ? 2 : 1.5
                         }
-                        strokeDasharray={edge.cross ? "5 4" : undefined}
+                        strokeDasharray={
+                          edge.evidenceMode === "inferred" || edge.confirmationStatus === "pending"
+                            ? "3 4"
+                            : edge.cross
+                              ? "5 4"
+                              : undefined
+                        }
                         markerEnd="url(#relation-arrow)"
                         markerStart={edge.mutual ? "url(#relation-arrow-start)" : undefined}
                       />
@@ -1960,12 +2158,9 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   const linked =
                     relationComposerOpen ||
                     !selectedId ||
-                    node.id === selectedId ||
-                    relations.some(
-                      (relation) =>
-                        (relation.fromId === selectedId && relation.toId === node.id) ||
-                        (relation.toId === selectedId && relation.fromId === node.id),
-                    );
+                    graphViewMode === "overview" ||
+                    graphViewMode === "all" ||
+                    graphVisibility.focusNodeIds.has(node.id);
                   const isRelationFrom = relationComposerOpen && node.id === fromId;
                   const isRelationTo = relationComposerOpen && node.id === toId;
                   const visuallySelected = node.id === selectedId || isRelationFrom || isRelationTo;

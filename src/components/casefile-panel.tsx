@@ -259,6 +259,10 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
           note: record.title,
           sourceId: record.id,
           createdAt: Date.now(),
+          confirmationStatus: "pending",
+          evidenceMode: "explicit",
+          visibility: "auto",
+          recommendationPolicy: "allow",
           source: makeSource("ai", record.title, record.id),
         });
         links += 1;

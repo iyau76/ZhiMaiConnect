@@ -1399,6 +1399,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           createdAt: now,
           updatedAt: now,
           confirmationStatus: "confirmed",
+          evidenceMode: isInferredRelationBasis(item.basis) ? "inferred" : "explicit",
+          confidence: item._audit?.confidence,
+          visibility: "auto",
+          recommendationPolicy: "allow",
           source: makeSource(
             item._audit?.humanEdited ? "manual" : "ai",
             item._audit?.humanEdited
