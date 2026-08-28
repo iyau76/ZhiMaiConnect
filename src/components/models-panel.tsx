@@ -381,7 +381,8 @@ export function ModelsPanel({
     }
   };
 
-  const citationKey = (citation: ArchiveCitation) => `${citation.sourceRef}:${citation.quote}`;
+  const citationKey = (citation: ArchiveCitation) =>
+    `${citation.kind}:${citation.sourceRef}:${citation.field ?? ""}:${citation.quote}`;
 
   const confirmCitation = (citation: ArchiveCitation) => {
     setCitationFeedback((current) => ({ ...current, [citationKey(citation)]: "correct" }));

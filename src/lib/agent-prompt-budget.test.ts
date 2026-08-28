@@ -82,6 +82,28 @@ describe("shared Agent prompt contract", () => {
     expect(JSON.stringify(projected).length).toBeLessThanOrEqual(1_200);
   });
 
+  it("projects every row fairly instead of preserving only an array prefix", () => {
+    const projected = projectToolResultForHistory(
+      {
+        rows: Array.from({ length: 8 }, (_, index) => ({
+          id: `person-${index}`,
+          name: `人物${index}`,
+          title: index % 2 ? "工程师" : "",
+          org: "知脉",
+          note: "详细资料".repeat(240),
+        })),
+      },
+      3_800,
+    ) as { rows: Array<{ id: string; name: string }> };
+
+    expect(projected.rows).toHaveLength(8);
+    expect(projected.rows.map((row) => row.id)).toEqual(
+      Array.from({ length: 8 }, (_, index) => `person-${index}`),
+    );
+    expect(projected.rows.every((row) => row.name)).toBe(true);
+    expect(JSON.stringify(projected).length).toBeLessThanOrEqual(3_800);
+  });
+
   it("normalizes complete chat turns before request accounting", () => {
     const history = Array.from({ length: 12 }, (_, index) => ({
       role: index % 2 ? ("assistant" as const) : ("user" as const),

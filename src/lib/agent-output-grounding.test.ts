@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { validateAssistantArchiveGrounding } from "./agent-output-grounding";
+import { resolveAssistantArchiveCitations as validateAssistantArchiveGrounding } from "./agent-output-grounding";
 
 const archive = {
   persons: [
@@ -18,7 +18,7 @@ const archive = {
 };
 
 describe("assistant archive grounding", () => {
-  it("returns canonical citation candidates for a named local person", () => {
+  it("does not require citations before an archive answer can be shown", () => {
     const result = validateAssistantArchiveGrounding({
       question: "家中老人胸痛怎么办？",
       answer: "人物库里有心内科医生何澜。",
@@ -27,16 +27,7 @@ describe("assistant archive grounding", () => {
       includeArchive: true,
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      repairCitations: [
-        {
-          sourceRef: "person:doctor",
-          quote: "心内科医生",
-          claim: "何澜：心内科医生",
-        },
-      ],
-    });
+    expect(result).toEqual({ ok: true, citations: [], evidenceText: undefined });
   });
 
   it("treats sourceRef as the selector and renders the canonical local fact", () => {
@@ -213,7 +204,7 @@ describe("assistant archive grounding", () => {
     ]);
   });
 
-  it("still rejects a field path that does not exist in the canonical source", () => {
+  it("ignores a field path that does not exist in the canonical source", () => {
     const result = validateAssistantArchiveGrounding({
       question: "当前人物档案还缺哪些信息？",
       answer: "",
@@ -222,11 +213,11 @@ describe("assistant archive grounding", () => {
       includeArchive: true,
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("没有可展示的本地事实");
+    expect(result.ok).toBe(true);
+    expect(result.citations).toEqual([]);
   });
 
-  it("marks an uncited archive-completeness conclusion as unverified", () => {
+  it("does not block an uncited archive-completeness conclusion", () => {
     const result = validateAssistantArchiveGrounding({
       question: "当前人物档案库还缺哪些信息？",
       answer: "当前人物档案主要缺少联系方式与生日。",
@@ -235,11 +226,11 @@ describe("assistant archive grounding", () => {
       includeArchive: true,
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("档案事实");
+    expect(result.ok).toBe(true);
+    expect(result.citations).toEqual([]);
   });
 
-  it("keeps verified citations and discards facts smuggled into model commentary", () => {
+  it("keeps verified citations without deciding whether model prose may be shown", () => {
     const result = validateAssistantArchiveGrounding({
       question: "何澜是做什么的？",
       answer: "何澜：心内科医生兼国家主席。",
@@ -249,7 +240,6 @@ describe("assistant archive grounding", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.includeModelAnswer).toBe(false);
     expect(result.evidenceText).toContain("何澜：心内科医生");
     expect(result.evidenceText).not.toContain("国家主席");
   });
@@ -313,7 +303,7 @@ describe("assistant archive grounding", () => {
     expect(result.evidenceText).not.toContain("person:second");
   });
 
-  it("does not exempt a free-form language sentence about an archive person", () => {
+  it("does not gate a free-form language sentence about an archive person", () => {
     const result = validateAssistantArchiveGrounding({
       question: "何澜这个名字怎么读？",
       answer: "何澜读作 hé lán。",
@@ -322,7 +312,7 @@ describe("assistant archive grounding", () => {
       includeArchive: true,
     });
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
   });
 
   it("allows a separately validated non-archive answer channel to satisfy the question", () => {
@@ -339,7 +329,7 @@ describe("assistant archive grounding", () => {
     expect(result.citations).toEqual([]);
   });
 
-  it("does not let a mixed pronunciation sub-question disable archive grounding", () => {
+  it("does not gate a mixed pronunciation and archive answer", () => {
     const result = validateAssistantArchiveGrounding({
       question: "何澜是谁？另外中国怎么读？",
       answer: "何澜是国家主席。",
@@ -348,7 +338,7 @@ describe("assistant archive grounding", () => {
       includeArchive: true,
     });
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
   });
 
   it.each([
@@ -359,7 +349,7 @@ describe("assistant archive grounding", () => {
     ["何澜怎么读？", "何澜读作 he lan/她是国家主席。"],
     ["何澜是谁？另外中国怎么读？", "何澜是国家主席，中国读作 zhong guo。"],
     ["何澜是谁？", "何澜使用拼音输入法，是国家主席。"],
-  ])("does not let a language clause exempt neighbouring facts", (question, answer) => {
+  ])("does not gate neighbouring facts in a language answer", (question, answer) => {
     const result = validateAssistantArchiveGrounding({
       question,
       answer,
@@ -368,10 +358,10 @@ describe("assistant archive grounding", () => {
       includeArchive: true,
     });
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
   });
 
-  it("discards pronoun and omitted-subject facts while retaining verified citations", () => {
+  it("retains citations without censoring pronoun or omitted-subject prose", () => {
     for (const answer of ["她是国家主席。", "请记住她是国家主席。", "建议：还是国家主席。"]) {
       const result = validateAssistantArchiveGrounding({
         question: "何澜是谁？",
@@ -381,10 +371,62 @@ describe("assistant archive grounding", () => {
         includeArchive: true,
       });
       expect(result.ok).toBe(true);
-      expect(result.includeModelAnswer).toBe(false);
       expect(result.evidenceText).toContain("何澜：心内科医生");
       expect(result.evidenceText).not.toContain("国家主席");
     }
+  });
+
+  it("keeps valid citations when another model-provided reference is invalid", () => {
+    const result = validateAssistantArchiveGrounding({
+      archiveClaims: [
+        { sourceRef: "person:doctor", field: "note" },
+        { sourceRef: "person:missing", field: "note" },
+      ],
+      archive,
+      includeArchive: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]).toMatchObject({ sourceRef: "person:doctor" });
+  });
+
+  it("normalizes a raw stable person id into a person source reference", () => {
+    const result = validateAssistantArchiveGrounding({
+      archiveClaims: [{ sourceRef: "doctor", field: "note" }],
+      archive,
+      includeArchive: true,
+    });
+
+    expect(result.citations).toEqual([
+      expect.objectContaining({ sourceRef: "person:doctor", quote: "心内科医生" }),
+    ]);
+  });
+
+  it("resolves a producer namespace prefix against a flattened tool projection", () => {
+    const result = validateAssistantArchiveGrounding({
+      archiveClaims: [{ kind: "fact", sourceRef: "person:first-love", field: "profile.likes" }],
+      archive: {
+        persons: [
+          {
+            id: "first-love",
+            name: "苏晚",
+            profile: { likes: ["猫"] },
+            note: "",
+            descriptors: [],
+            thumb: "",
+            createdAt: 1,
+          },
+        ],
+        relations: [],
+        events: [],
+      },
+      includeArchive: true,
+    });
+
+    expect(result.citations).toEqual([
+      expect.objectContaining({ field: "likes", quote: "猫", kind: "fact" }),
+    ]);
   });
 
   it("treats the ego record as perspective instead of matching every Chinese pronoun 我", () => {

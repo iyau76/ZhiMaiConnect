@@ -16,6 +16,7 @@ export interface RecommendationDecision {
 }
 
 export interface ArchiveCitation {
+  kind: "fact" | "gap";
   sourceRef: string;
   /** Stable field path selected by the model; the displayed value is still read locally. */
   field?: string;
@@ -25,8 +26,6 @@ export interface ArchiveCitation {
   /** Missingness is a locally resolved archive state, never a model-authored assertion. */
   state?: "present" | "missing";
 }
-
-export type ArchiveCitationCandidate = ArchiveCitation;
 
 interface ArchiveGroundingSource {
   ref: string;
@@ -40,20 +39,9 @@ interface ArchiveGroundingSource {
 }
 
 export interface AssistantGroundingResult {
-  ok: boolean;
-  error?: string;
+  ok: true;
   citations: ArchiveCitation[];
   evidenceText?: string;
-  /**
-   * Whether model-authored prose may be rendered after the canonical facts.
-   * A valid citation remains usable even when the prose mixes facts into the
-   * advice channel; callers discard that prose without asking the model to try
-   * the same answer again.
-   */
-  includeModelAnswer?: boolean;
-  discardedCommentaryReason?: string;
-  /** Canonical, safe snippets the model may copy when repairing a citation. */
-  repairCitations?: ArchiveCitationCandidate[];
 }
 
 function normalized(value: string) {
@@ -260,49 +248,6 @@ function isInstructionLikeQuote(quote: string) {
   );
 }
 
-function claimsArchiveEvidence(value: string) {
-  return /(?:根据|查阅|本机|当前|人物)?(?:档案|人物库|资料库|记录).{0,24}(?:显示|记载|写有|包含|存在|没有|未找到|不存在|缺少|缺失|空缺|未记录|相关|关联)/u.test(
-    value,
-  );
-}
-
-function answerUnits(value: string) {
-  return value
-    .split(/[。！？!?；;\n]+/u)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function mentionedPersonGroups(value: string, people: ArchiveAgentData["persons"]) {
-  const text = normalized(value);
-  const grouped = new Map<string, ArchiveAgentData["persons"]>();
-  for (const person of people) {
-    // The ego record is a point of view, not a proper-name mention. Treating
-    // the Chinese pronoun "我" as a person name makes ordinary phrases such as
-    // "请告诉我" look like unsupported archive claims.
-    if (person.entityRole === "ego") continue;
-    const name = normalized(person.name);
-    if (!name || !text.includes(name)) continue;
-    grouped.set(name, [...(grouped.get(name) ?? []), person]);
-  }
-  const occupied = Array.from({ length: text.length }, () => false);
-  const selected = new Set<string>();
-  for (const name of [...grouped.keys()].sort((left, right) => right.length - left.length)) {
-    let cursor = 0;
-    while (cursor <= text.length - name.length) {
-      const at = text.indexOf(name, cursor);
-      if (at < 0) break;
-      const end = at + name.length;
-      if (!occupied.slice(at, end).some(Boolean)) {
-        selected.add(name);
-        for (let index = at; index < end; index += 1) occupied[index] = true;
-      }
-      cursor = at + Math.max(1, name.length);
-    }
-  }
-  return [...selected].map((name) => grouped.get(name)!);
-}
-
 function scalarFragments(value: unknown, depth = 0): string[] {
   if (depth > 6 || value == null) return [];
   if (typeof value === "string") {
@@ -405,6 +350,17 @@ function readFieldPath(value: unknown, field: string) {
   return { exists: true, value: current };
 }
 
+function resolveProjectedFieldPath(value: unknown, requestedField?: string) {
+  if (!requestedField) return undefined;
+  if (readFieldPath(value, requestedField).exists) return requestedField;
+  const segments = requestedField.split(".");
+  for (let index = 1; index < segments.length; index += 1) {
+    const suffix = segments.slice(index).join(".");
+    if (readFieldPath(value, suffix).exists) return suffix;
+  }
+  return requestedField;
+}
+
 function isMissingArchiveValue(field: string, value: unknown) {
   if (value == null) return true;
   if (typeof value === "string") return value.trim() === "";
@@ -415,9 +371,16 @@ function isMissingArchiveValue(field: string, value: unknown) {
 }
 
 function renderEvidenceText(citations: ArchiveCitation[]) {
-  return citations.length
-    ? `档案依据（可回查）\n${citations.map((citation) => `- [${citation.sourceRef}] ${citation.claim}\n  原记录：“${citation.quote}”`).join("\n")}`
-    : undefined;
+  if (!citations.length) return undefined;
+  const renderGroup = (kind: ArchiveCitation["kind"], title: string) => {
+    const rows = citations.filter((citation) => citation.kind === kind);
+    return rows.length
+      ? `${title}\n${rows.map((citation) => `- [${citation.sourceRef}] ${citation.claim}\n  原记录：“${citation.quote}”`).join("\n")}`
+      : "";
+  };
+  return ["档案依据（可回查）", renderGroup("gap", "待补信息"), renderGroup("fact", "已有事实")]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function locallySelectedCitation(
@@ -460,54 +423,15 @@ function locallySelectedCitation(
   return quote ? { quote, state: "present" as const } : undefined;
 }
 
-function repairCitationCandidates(
-  sources: Map<string, ArchiveGroundingSource>,
-  mentionedGroups: ArchiveAgentData["persons"][],
-): ArchiveCitationCandidate[] {
-  const mentionedIds = new Set(
-    mentionedGroups.flatMap((group) => group.map((person) => person.id)),
-  );
-  const candidates: ArchiveCitationCandidate[] = [];
-  for (const source of sources.values()) {
-    if (
-      mentionedIds.size > 0 &&
-      ![...source.relatedPersonIds].some((personId) => mentionedIds.has(personId))
-    ) {
-      continue;
-    }
-    for (const fact of structuredFactFragments(source.structured).filter((item) =>
-      quoteIsSubstantive(item.value, source),
-    )) {
-      candidates.push({
-        sourceRef: source.ref,
-        field: fact.field,
-        quote: fact.value,
-        claim: canonicalClaim(source, fact.value),
-      });
-      if (candidates.length >= 8) return candidates;
-    }
-  }
-  return candidates;
-}
-
-function safeArchiveCommentary(value: string) {
-  if (!value.trim()) return true;
-  return answerUnits(value).every((unit) => {
-    const assertsPersonFact =
-      /(?:他|她|ta|其|该人物|此人|对方).{0,8}(?:还是|也是|就是|是|有|任职|担任|住在|毕业于|喜欢|擅长|认识|属于)|(?:^|[：:,，])(?:还是|也是|就是|是|有|任职|担任|住在|毕业于|喜欢|擅长|认识|属于)/iu.test(
-        unit,
-      );
-    return !assertsPersonFact;
-  });
-}
-
 /**
- * The model selects sourceRef + field (legacy quote is still accepted). Archive facts are rendered from
- * canonical local sources; free-form model prose is a separate advice channel.
+ * Resolve any usable model-provided source references into local citations.
+ * Citations are optional provenance, never permission to show the answer.
+ * Invalid references are simply omitted.
  */
-export function validateAssistantArchiveGrounding(options: {
-  question: string;
-  answer: string;
+export function resolveAssistantArchiveCitations(options: {
+  /** Accepted for callers that already have these values; neither gates citation resolution. */
+  question?: string;
+  answer?: string;
   archiveClaims: unknown;
   archive: ArchiveAgentData;
   includeArchive: boolean;
@@ -515,65 +439,33 @@ export function validateAssistantArchiveGrounding(options: {
 }): AssistantGroundingResult {
   if (!options.includeArchive) return { ok: true, citations: [] };
   const sources = archiveGroundingSources(options.archive);
-  const questionGroups = mentionedPersonGroups(options.question, options.archive.persons);
-  const answerGroups = mentionedPersonGroups(options.answer, options.archive.persons);
-  const archiveAnswerClaimsEvidence =
-    options.archive.persons.length > 0 && claimsArchiveEvidence(options.answer);
-  const repairCitations = repairCitationCandidates(sources, questionGroups);
-  const rawClaims = Array.isArray(options.archiveClaims) ? options.archiveClaims.slice(0, 12) : [];
-  const archiveSeparationRequired =
-    questionGroups.length > 0 ||
-    answerGroups.length > 0 ||
-    archiveAnswerClaimsEvidence ||
-    rawClaims.length > 0;
+  const rawClaims = Array.isArray(options.archiveClaims) ? options.archiveClaims.slice(0, 80) : [];
   const citations: ArchiveCitation[] = [];
   const citationKeys = new Set<string>();
   for (const raw of rawClaims) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      return { ok: false, error: "档案引用格式无效", citations: [], repairCitations };
-    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const value = raw as Record<string, unknown>;
-    const sourceRef = typeof value.sourceRef === "string" ? value.sourceRef.trim() : "";
-    const requestedField =
+    const requestedSourceRef = typeof value.sourceRef === "string" ? value.sourceRef.trim() : "";
+    const sourceRef = sources.has(requestedSourceRef)
+      ? requestedSourceRef
+      : sources.has(`person:${requestedSourceRef}`)
+        ? `person:${requestedSourceRef}`
+        : requestedSourceRef;
+    const rawRequestedField =
       typeof value.field === "string" && /^[A-Za-z][A-Za-z0-9_.]{0,100}$/.test(value.field.trim())
         ? value.field.trim()
         : undefined;
     const requestedQuote = cleanArchiveText(value.quote, 300);
     const source = sources.get(sourceRef);
-    if (!source) {
-      return {
-        ok: false,
-        error: `档案引用 ${sourceRef || "(空)"} 无法在本地原记录中核验`,
-        citations: [],
-        repairCitations,
-      };
-    }
+    if (!source) continue;
+    const requestedField = resolveProjectedFieldPath(source.structured, rawRequestedField);
     const selection = locallySelectedCitation(source, requestedQuote, requestedField);
-    if (!selection) {
-      return {
-        ok: false,
-        error: `档案引用 ${sourceRef} 没有可展示的本地事实`,
-        citations: [],
-        repairCitations,
-      };
-    }
-    if (
-      questionGroups.length > 0 &&
-      !questionGroups.some((group) =>
-        group.some((person) => source.relatedPersonIds.has(person.id)),
-      )
-    ) {
-      return {
-        ok: false,
-        error: `档案引用 ${sourceRef} 与问题中的目标人物不一致`,
-        citations: [],
-        repairCitations,
-      };
-    }
+    if (!selection) continue;
     const citationKey = `${sourceRef}\u0000${requestedField ?? ""}\u0000${selection.quote}`;
     if (!citationKeys.has(citationKey)) {
       citationKeys.add(citationKey);
       citations.push({
+        kind: selection.state === "missing" ? "gap" : "fact",
         sourceRef,
         ...(requestedField ? { field: requestedField } : {}),
         quote: selection.quote,
@@ -583,61 +475,9 @@ export function validateAssistantArchiveGrounding(options: {
     }
   }
 
-  // Facts come from locally resolved citations. Once at least one citation is
-  // valid, model prose is optional decoration: unsafe prose is discarded in
-  // this pass instead of wasting more model rounds trying to make it rephrase
-  // an answer the ledger can already render deterministically.
-  const answerText = normalized(options.answer);
-  const repeatsCanonicalFact = citations.some((citation) => {
-    const quote = normalized(citation.quote);
-    const claim = normalized(citation.claim);
-    return (
-      (quote.length >= 2 && answerText.includes(quote)) ||
-      (claim.length >= 2 && answerText.includes(claim))
-    );
-  });
-  const commentaryError =
-    answerGroups.length || archiveAnswerClaimsEvidence || repeatsCanonicalFact
-      ? "自由分析区混入了本机人物或档案事实"
-      : archiveSeparationRequired && !safeArchiveCommentary(options.answer)
-        ? "自由分析区混入了未由本地账本渲染的人物断言"
-        : undefined;
-  if (commentaryError) {
-    if (citations.length) {
-      return {
-        ok: true,
-        citations,
-        evidenceText: renderEvidenceText(citations),
-        includeModelAnswer: false,
-        discardedCommentaryReason: commentaryError,
-      };
-    }
-    return {
-      ok: false,
-      error: `${commentaryError}；请先提供可核验的 archiveClaims`,
-      citations: [],
-      repairCitations,
-    };
-  }
-
-  if (
-    questionGroups.length &&
-    !citations.length &&
-    !options.answer.trim() &&
-    !options.hasStructuredNonArchiveAnswer
-  ) {
-    return {
-      ok: false,
-      error: "档案人物问题既没有选择可核验的 archiveClaims，也没有给出下一步建议",
-      citations: [],
-      repairCitations,
-    };
-  }
-
   return {
     ok: true,
     citations,
     evidenceText: renderEvidenceText(citations),
-    includeModelAnswer: true,
   };
 }
