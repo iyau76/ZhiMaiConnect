@@ -3,6 +3,26 @@ import type { Provenance } from "./provenance";
 
 export type RecommendationConfidence = "高" | "中" | "低";
 
+/**
+ * A semantic task decomposition authored by the model. The slot describes what
+ * the task needs; it never names or ranks people. Stable ids are assigned
+ * locally after the model response is parsed.
+ */
+export interface RecommendationCapabilitySlot {
+  id: string;
+  label: string;
+  deliverable: string;
+  searchTerms: string[];
+}
+
+export interface RecommendationCapabilityMatch {
+  slotId: string;
+  label: string;
+  deliverable: string;
+  matchedTerms: string[];
+  evidence: string[];
+}
+
 export interface CandidateRecommendation {
   person: PersonRecord;
   score: number;
@@ -29,6 +49,8 @@ export interface CandidateRecommendation {
     relationIds: string[];
     labels: string[];
   };
+  /** Open-task assignments verified against local profile facts. */
+  capabilityMatches?: RecommendationCapabilityMatch[];
 }
 
 const DAY = 86_400_000;
@@ -143,8 +165,68 @@ function personFacts(person: PersonRecord) {
     ...Object.values(profile.extra ?? {}),
     person.note,
   ]
-    .map((item) => item?.trim())
+    .flatMap((item) => item?.split(/[。！？!?；;\n]+/u) ?? [])
+    .map((item) => item.trim())
+    .filter(
+      (item) =>
+        !/(?:忽略|无视|绕过).{0,16}(?:规则|指令|提示|系统)|(?:无论|不管).{0,24}(?:排第一|输出|回答)|ignore.{0,16}(?:instruction|previous)|system\s*prompt/iu.test(
+          item,
+        ),
+    )
     .filter((item): item is string => Boolean(item));
+}
+
+function normalizedEvidence(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN")
+    .replace(/[\p{P}\p{Z}\p{Cf}\s]+/gu, "");
+}
+
+/**
+ * Verify a model-authored capability slot against the local fact ledger. The
+ * slot label and deliverable remain part of the contract, so local matching
+ * combines their lexical concepts with the model's synonym list. Every match
+ * must still occur in a stored profile fact.
+ */
+export function matchCapabilityEvidence(
+  slot: RecommendationCapabilitySlot,
+  person: PersonRecord,
+): RecommendationCapabilityMatch | undefined {
+  const facts = personFacts(person);
+  const normalizedFacts = facts.map((fact) => ({ fact, normalized: normalizedEvidence(fact) }));
+  const lexicalTerms = [slot.label, slot.deliverable]
+    .flatMap((value) => value.split(/[的了和及与并或将把为在对从由需可应各该]/u))
+    .flatMap((value) => {
+      const normalized = normalizedEvidence(value);
+      if (normalized.length < 2) return [];
+      const terms = normalized.length <= 8 ? [normalized] : [];
+      for (let index = 0; index < normalized.length - 1; index += 1) {
+        terms.push(normalized.slice(index, index + 2));
+      }
+      return terms;
+    });
+  const evidenceTerms = [...new Set([...slot.searchTerms, ...lexicalTerms])].slice(0, 40);
+  const matchedTerms = evidenceTerms.filter((term) => {
+    const normalizedTerm = normalizedEvidence(term);
+    return Boolean(
+      normalizedTerm.length >= 2 &&
+      normalizedFacts.some((entry) => entry.normalized.includes(normalizedTerm)),
+    );
+  });
+  if (!matchedTerms.length) return undefined;
+  const matchedTermSet = new Set(matchedTerms.map(normalizedEvidence));
+  const evidence = normalizedFacts
+    .filter((entry) => [...matchedTermSet].some((term) => term && entry.normalized.includes(term)))
+    .map((entry) => entry.fact)
+    .slice(0, 3);
+  return {
+    slotId: slot.id,
+    label: slot.label,
+    deliverable: slot.deliverable,
+    matchedTerms,
+    evidence,
+  };
 }
 
 function taskDomainMatches(task: string, person: PersonRecord) {
@@ -326,6 +408,94 @@ export function rankCandidates(
         b.score - a.score ||
         b.updatedAt - a.updatedAt ||
         a.person.name.localeCompare(b.person.name, "zh-CN"),
+    );
+}
+
+/**
+ * Rank one model-authored capability slot over the complete archive. Semantic
+ * inclusion is decided only by exact local evidence matches; legacy task
+ * aliases and task-domain regexes never participate in this path.
+ */
+export function rankCapabilityCandidates(
+  slot: RecommendationCapabilitySlot,
+  persons: PersonRecord[],
+  events: LifeEventRecord[],
+  now = new Date(),
+): CandidateRecommendation[] {
+  const nowAt = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return persons
+    .flatMap((person) => {
+      const match = matchCapabilityEvidence(slot, person);
+      if (!match) return [];
+      const interactions = recentEvents(person.id, events);
+      const latest = interactions[0];
+      const latestAt = latest ? dateAt(latest.date) : 0;
+      const ageDays = latestAt ? Math.max(0, Math.floor((nowAt - latestAt) / DAY)) : null;
+      const cooperation = interactions.find(
+        (event) => event.kind === "帮忙" || (event.personIds?.length ?? 0) > 1,
+      );
+      const rawCloseness = person.profile?.closeness;
+      const closeness = Number.isFinite(rawCloseness)
+        ? Math.max(1, Math.min(5, rawCloseness as number))
+        : 1;
+      const hasContact = Boolean(person.profile?.contact?.trim());
+      let score = match.matchedTerms.length * 20 + match.evidence.length * 5;
+      score += hasContact ? 10 : 0;
+      score += (closeness - 1) * 2;
+      if (ageDays !== null) score += ageDays <= 30 ? 6 : ageDays <= 180 ? 4 : 2;
+      if (cooperation) score += 4;
+
+      const risks: string[] = [];
+      if (!hasContact) {
+        score -= 5;
+        risks.push("缺少可用联系方式");
+      }
+      if (!latest) risks.push("没有共同事件记录");
+      if (ageDays !== null && ageDays > 730) {
+        score -= 6;
+        risks.push(`最近互动已过去约 ${Math.floor(ageDays / 365)} 年，信息可能过期`);
+      }
+      if (person.source?.kind === "ai" || person.source?.kind === "web") {
+        score -= 3;
+        risks.push("档案含待人工复核的推断来源");
+      }
+
+      const updatedAt = Math.max(
+        person.updatedAt ?? person.createdAt,
+        person.source?.at ?? person.createdAt,
+        latestAt,
+      );
+      const confidence: RecommendationConfidence =
+        match.matchedTerms.length >= 2 && hasContact
+          ? "高"
+          : match.matchedTerms.length >= 2 || hasContact
+            ? "中"
+            : "低";
+      return [
+        {
+          person,
+          score: Math.max(0, Math.min(100, Math.round(score))),
+          confidence,
+          reasons: [
+            `能力槽“${slot.label}”：${slot.deliverable}`,
+            `本地档案逐字命中：${match.matchedTerms.join("、")}`,
+            ...(closeness > 1 ? [`亲密度 ${closeness}/5`] : []),
+            ...(latest ? [`最近互动：${latest.date} ${latest.title}`] : []),
+          ],
+          evidence: match.evidence.map((item) => `“${slot.label}”档案证据：${item}`),
+          risks,
+          updatedAt,
+          source: person.source,
+          mode: "open" as const,
+          capabilityMatches: [match],
+        },
+      ];
+    })
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        right.updatedAt - left.updatedAt ||
+        left.person.name.localeCompare(right.person.name, "zh-CN"),
     );
 }
 

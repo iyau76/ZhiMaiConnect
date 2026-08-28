@@ -88,11 +88,13 @@ describe("shared Agent prompt contract", () => {
       text: String(index).repeat(8_000),
     }));
     const fitted = fitVisionHistory(history);
-    expect(fitted).toHaveLength(VISION_TEXT_LIMITS.historyTurns / 2);
+    expect(fitted.turns).toHaveLength(VISION_TEXT_LIMITS.historyTurns / 2);
+    expect(fitted.omittedTurns).toBe(8);
+    expect(fitted.summary).toContain("较早 8 条对话已压缩");
     expect(
-      fitted.every((turn) => turn.text.length <= VISION_TEXT_LIMITS.historyTurnCharacters),
+      fitted.turns.every((turn) => turn.text.length <= VISION_TEXT_LIMITS.historyTurnCharacters),
     ).toBe(true);
-    expect(fitted.reduce((total, turn) => total + turn.text.length, 0)).toBeLessThanOrEqual(
+    expect(fitted.turns.reduce((total, turn) => total + turn.text.length, 0)).toBeLessThanOrEqual(
       VISION_TEXT_LIMITS.historyTotalCharacters,
     );
   });

@@ -293,6 +293,27 @@ export function inferRelationSemantics(label: string): InferredRelationSemantics
   return result("custom");
 }
 
+/**
+ * Resolve one durable semantic record at the compatibility/write boundary.
+ * Explicit predicate/qualifier fields remain authoritative, while role details
+ * omitted by older records are recovered from a matching display label once.
+ */
+export function resolveRelationSemantics(input: {
+  label: string;
+  predicate?: RelationPredicate;
+  qualifiers?: RelationQualifiers;
+}): InferredRelationSemantics {
+  const inferred = inferRelationSemantics(input.label);
+  const predicate = input.predicate ?? inferred.predicate;
+  return {
+    predicate,
+    qualifiers: {
+      ...(predicate === inferred.predicate ? inferred.qualifiers : {}),
+      ...input.qualifiers,
+    },
+  };
+}
+
 export function relationDefinition(predicate: RelationPredicate) {
   return DEFINITIONS[predicate];
 }

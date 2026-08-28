@@ -27,15 +27,23 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { runAssistantAgent, type AssistantAgentResult } from "@/lib/assistant-agent";
-import type { AgentRun } from "@/lib/agent-run-log";
 import {
-  applyArchiveMutationPlan,
-  type ArchiveMutationDiffRow,
-  type ArchiveMutationPlan,
-} from "@/lib/archive-mutation-plan";
+  runAssistantAgent,
+  type AssistantAgentCheckpoint,
+  type AssistantAgentResult,
+  type AssistantWorkingMemory,
+} from "@/lib/assistant-agent";
+import type { AgentRun } from "@/lib/agent-run-log";
+import type { ArchiveCitation } from "@/lib/agent-output-grounding";
+import type { ArchiveMutationDiffRow } from "@/lib/archive-mutation-plan";
+import { LocalAgentSettingsStore } from "@/lib/agent-settings";
 import { facesDb } from "@/lib/face-db";
 import { t } from "@/lib/i18n";
+import {
+  MutationCommitCoordinator,
+  type MutationCommitReceipt,
+  type MutationProposalEntry,
+} from "@/lib/mutation-commit-coordinator";
 import type { AgentTraceEvent } from "@/lib/recommendation-agent";
 
 import { cn } from "@/lib/utils";
@@ -60,6 +68,62 @@ interface Props {
   onFrameUsed: () => void;
 }
 
+type AssistantArchive = Pick<
+  Parameters<typeof runAssistantAgent>[0],
+  "persons" | "relations" | "events" | "collections" | "collectionMemberships"
+>;
+
+interface SuspendedAssistantRequest {
+  checkpoint: AssistantAgentCheckpoint;
+  preset: ProviderPreset;
+  history: ChatTurn[];
+  image: string | null;
+  includeArchive: boolean;
+}
+
+function assistantAdviceWithoutEvidence(answer: string, citations: ArchiveCitation[]) {
+  if (!citations.length) return answer;
+  const sections = answer.split("\n\n");
+  const withoutEvidence = sections
+    .filter((section) => !section.startsWith("档案依据（可回查）"))
+    .join("\n\n")
+    .trim();
+  return withoutEvidence || "已找到以下可核验档案依据。";
+}
+
+const MUTATION_FIELD_LABELS: Record<string, string> = {
+  name: "姓名",
+  note: "备注",
+  person: "人物档案",
+  "profile.tags": "人物标签",
+  "collection.name": "圈层名称",
+  "collection.kind": "圈层类型",
+  "collection.color": "圈层颜色",
+  "collection.membership": "圈层成员",
+  "relation.label": "关系名称",
+  "relation.predicate": "关系类型",
+  "relation.qualifiers": "关系限定",
+  "relation.direction": "关系方向",
+  "relation.note": "关系备注",
+  "relation.evidence": "关系依据",
+  "relation.validity": "关系有效期",
+  "relation.confidence": "关系置信度",
+  "relation.confirmationStatus": "关系确认状态",
+};
+
+function mutationFieldLabel(field: string) {
+  if (MUTATION_FIELD_LABELS[field]) return MUTATION_FIELD_LABELS[field];
+  if (field.startsWith("profile.")) return `人物资料 · ${field.slice("profile.".length)}`;
+  if (field.startsWith("event.")) return `事件 · ${field.slice("event.".length)}`;
+  if (field.startsWith("delete.")) return "删除或解除关联";
+  return field;
+}
+
+// The panel is conditionally mounted by the workspace navigation. Keep the
+// in-flight proposal queue and receipts at module scope so a page switch does
+// not silently discard a user's unsigned Agent work.
+const assistantMutationCoordinator = new MutationCommitCoordinator();
+
 export function ModelsPanel({
   presets,
   onPresetsChange,
@@ -76,13 +140,43 @@ export function ModelsPanel({
 
   const [busy, setBusy] = useState(false);
   const [assistantTrace, setAssistantTrace] = useState<AgentTraceEvent[]>([]);
-  const [pendingApproval, setPendingApproval] = useState<ArchiveMutationPlan | null>(null);
+  const coordinatorRef = useRef(assistantMutationCoordinator);
+  const [pendingProposals, setPendingProposals] = useState<MutationProposalEntry[]>(() =>
+    assistantMutationCoordinator.pending(),
+  );
   const [approvalRows, setApprovalRows] = useState<ArchiveMutationDiffRow[]>([]);
+  const [latestReceipt, setLatestReceipt] = useState<MutationCommitReceipt | null>(
+    () => assistantMutationCoordinator.committedReceipts().at(-1) ?? null,
+  );
   const [latestAgentRun, setLatestAgentRun] = useState<AgentRun | null>(null);
+  const [assistantMemory, setAssistantMemory] = useState<AssistantWorkingMemory | null>(null);
+  const [suspendedRequest, setSuspendedRequest] = useState<SuspendedAssistantRequest | null>(null);
+  const [assistantContextNotice, setAssistantContextNotice] = useState("");
+  const [assistantCitations, setAssistantCitations] = useState<ArchiveCitation[]>([]);
+  const [citationFeedback, setCitationFeedback] = useState<Record<string, "correct" | "incorrect">>(
+    {},
+  );
   const [approving, setApproving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [auditing, setAuditing] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const coordinator = coordinatorRef.current;
+    const queue = coordinator.pending();
+    if (!queue.length) return;
+    let cancelled = false;
+    const authorizationMode = new LocalAgentSettingsStore().load().authorizationMode;
+    const proposalIds =
+      authorizationMode === "cautious" ? [queue[0].id] : queue.map((entry) => entry.id);
+    void coordinator.prepare({ proposalIds }).then((prepared) => {
+      if (!cancelled) setApprovalRows(prepared.diff);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const editing = presets.find((preset) => preset.id === editId) ?? presets[0];
 
@@ -132,9 +226,117 @@ export function ModelsPanel({
     }
   };
 
+  const loadAssistantArchive = async (requested: boolean): Promise<AssistantArchive> => {
+    const empty: AssistantArchive = {
+      persons: [],
+      relations: [],
+      events: [],
+      collections: [],
+      collectionMemberships: [],
+    };
+    if (!requested) return empty;
+    try {
+      const [persons, relations, events, collections, collectionMemberships] = await Promise.all([
+        facesDb.listPersons(),
+        facesDb.listRelations(),
+        facesDb.listLifeEvents(),
+        facesDb.listCollections(),
+        facesDb.listCollectionMemberships(),
+      ]);
+      return { persons, relations, events, collections, collectionMemberships };
+    } catch {
+      toast.error(t("读不到本机资料，这次按普通提问发送"));
+      return empty;
+    }
+  };
+
+  const applyAssistantResult = async (result: AssistantAgentResult) => {
+    setLatestAgentRun(result.run);
+    setAssistantMemory(result.workingMemory);
+    setAssistantCitations(result.citations);
+    setCitationFeedback({});
+    const notices = [
+      result.reusedToolResults > 0 ? `已复用 ${result.reusedToolResults} 条上一轮工具结果。` : "",
+      result.historyCompression.omittedTurns > 0
+        ? `较早 ${result.historyCompression.omittedTurns} 条对话已压缩为可见摘要。`
+        : "",
+      result.workingMemory.entries.length > 0
+        ? `已保留 ${result.workingMemory.entries.length} 条工具记忆供下轮使用。`
+        : "",
+    ].filter(Boolean);
+    setAssistantContextNotice(notices.join(" "));
+    setTurns((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      next[next.length - 1] = {
+        ...last,
+        text: assistantAdviceWithoutEvidence(result.answer, result.citations),
+      };
+      return next;
+    });
+    if (result.pendingApproval) {
+      const coordinator = coordinatorRef.current;
+      const authorizationMode = new LocalAgentSettingsStore().load().authorizationMode;
+      const submitted = await coordinator.submitProposal(result.pendingApproval, {
+        authorizationMode,
+        sourceRunId: result.run.id,
+      });
+      if (submitted.status === "committed") {
+        setLatestReceipt(submitted.receipt);
+        setAssistantMemory(null);
+        setSuspendedRequest(null);
+        setAssistantContextNotice("档案已更新，上一版工具记忆已失效；下次会重新读取。");
+      }
+      const queue = coordinator.pending();
+      let nextRows: ArchiveMutationDiffRow[] = [];
+      if (queue.length) {
+        const selectedIds =
+          authorizationMode === "cautious" ? [queue[0].id] : queue.map((entry) => entry.id);
+        nextRows = (await coordinator.prepare({ proposalIds: selectedIds })).diff;
+      }
+      setApprovalRows(nextRows);
+      setPendingProposals(queue);
+    }
+  };
+
+  const runAssistantRequest = async (request: {
+    preset: ProviderPreset;
+    prompt: string;
+    history: ChatTurn[];
+    image: string | null;
+    includeArchive: boolean;
+    resumeFrom?: AssistantAgentCheckpoint;
+  }) => {
+    const archive = await loadAssistantArchive(request.includeArchive);
+    const includeArchive = request.includeArchive && archive.persons.length > 0;
+    const result = await runAssistantAgent({
+      preset: request.preset,
+      question: request.prompt,
+      ...archive,
+      includeArchive,
+      history: request.history,
+      image: request.image,
+      workingMemory: request.resumeFrom ? null : assistantMemory,
+      resumeFrom: request.resumeFrom,
+      onTrace: (event) => setAssistantTrace((prev) => [...prev.slice(-23), event]),
+    });
+    await applyAssistantResult(result);
+    setSuspendedRequest(
+      result.checkpoint
+        ? {
+            checkpoint: result.checkpoint,
+            preset: request.preset,
+            history: request.history,
+            image: request.image,
+            includeArchive,
+          }
+        : null,
+    );
+  };
+
   const handleSend = async () => {
     const prompt = input.trim();
-    if (!prompt || busy || pendingApproval) return;
+    if (!prompt || busy) return;
     const preset = editing;
     if (!preset.model.trim()) {
       toast.error(t("请先填写模型名称"));
@@ -147,57 +349,21 @@ export function ModelsPanel({
       { role: "user", text: prompt, image: sentFrame ?? undefined },
       { role: "assistant", text: "" },
     ]);
-
+    setSuspendedRequest(null);
+    setAssistantCitations([]);
+    setCitationFeedback({});
     setInput("");
     if (sentFrame) onFrameUsed();
     setBusy(true);
     setAssistantTrace([]);
     try {
-      let archive: Pick<
-        Parameters<typeof runAssistantAgent>[0],
-        "persons" | "relations" | "events" | "collections" | "collectionMemberships"
-      > = {
-        persons: [],
-        relations: [],
-        events: [],
-        collections: [],
-        collectionMemberships: [],
-      };
-      if (useData) {
-        try {
-          const [persons, relations, events, collections, collectionMemberships] =
-            await Promise.all([
-              facesDb.listPersons(),
-              facesDb.listRelations(),
-              facesDb.listLifeEvents(),
-              facesDb.listCollections(),
-              facesDb.listCollectionMemberships(),
-            ]);
-          archive = { persons, relations, events, collections, collectionMemberships };
-        } catch {
-          toast.error(t("读不到本机资料，这次按普通提问发送"));
-        }
-      }
-      const result: AssistantAgentResult = await runAssistantAgent({
+      await runAssistantRequest({
         preset,
-        question: prompt,
-        ...archive,
-        includeArchive: useData && archive.persons.length > 0,
+        prompt,
         history,
         image: sentFrame,
-        onTrace: (event) => setAssistantTrace((prev) => [...prev.slice(-23), event]),
+        includeArchive: useData,
       });
-      setLatestAgentRun(result.run);
-      setTurns((prev) => {
-        const next = [...prev];
-        const last = next[next.length - 1];
-        next[next.length - 1] = { ...last, text: result.answer };
-        return next;
-      });
-      if (result.pendingApproval) {
-        setPendingApproval(result.pendingApproval);
-        setApprovalRows(result.approvalRows ?? []);
-      }
     } catch (error) {
       toast.error((error as Error).message);
       setAssistantTrace((prev) => [
@@ -215,21 +381,91 @@ export function ModelsPanel({
     }
   };
 
+  const citationKey = (citation: ArchiveCitation) => `${citation.sourceRef}:${citation.quote}`;
+
+  const confirmCitation = (citation: ArchiveCitation) => {
+    setCitationFeedback((current) => ({ ...current, [citationKey(citation)]: "correct" }));
+    toast.success("已标记为核对无误");
+  };
+
+  const startCitationCorrection = (citation: ArchiveCitation) => {
+    setCitationFeedback((current) => ({ ...current, [citationKey(citation)]: "incorrect" }));
+    setInput(
+      `档案事实 ${citation.sourceRef}“${citation.quote}”不正确。请先读取该稳定 ID，并根据我补充的正确内容生成待批准修改提案。正确内容：`,
+    );
+    requestAnimationFrame(() => inputRef.current?.focus());
+    toast.info("已定位对应档案记录；补充正确内容后发送，即进入修改提案流程");
+  };
+
+  const resumeAssistant = async () => {
+    if (!suspendedRequest || busy) return;
+    setBusy(true);
+    setAssistantTrace([]);
+    setTurns((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      next[next.length - 1] = {
+        ...last,
+        text: `正在从第 ${suspendedRequest.checkpoint.nextRound} 轮继续…`,
+      };
+      return next;
+    });
+    try {
+      await runAssistantRequest({
+        preset: suspendedRequest.preset,
+        prompt: suspendedRequest.checkpoint.question,
+        history: suspendedRequest.history,
+        image: suspendedRequest.image,
+        includeArchive: suspendedRequest.includeArchive,
+        resumeFrom: suspendedRequest.checkpoint,
+      });
+    } catch (error) {
+      toast.error((error as Error).message);
+      setAssistantTrace((prev) => [
+        ...prev.slice(-23),
+        { kind: "done", text: (error as Error).message || t("请求失败") },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const approveUpdate = async () => {
-    if (!pendingApproval || approving) return;
+    if (!pendingProposals.length || !approvalRows.length || approving) return;
     setApproving(true);
     try {
-      const result = await applyArchiveMutationPlan(pendingApproval);
-      toast.success(t(`已原子执行 ${result.operationIds.length} 项档案变更`));
+      const coordinator = coordinatorRef.current;
+      const authorizationMode = new LocalAgentSettingsStore().load().authorizationMode;
+      const proposalIds =
+        authorizationMode === "cautious"
+          ? [pendingProposals[0].id]
+          : pendingProposals.map((entry) => entry.id);
+      const receipt = await coordinator.commit({
+        authorizationMode,
+        proposalIds,
+        signature: { signer: "user", signedAt: Date.now() },
+      });
+      setLatestReceipt(receipt);
+      setAssistantMemory(null);
+      setSuspendedRequest(null);
+      setAssistantContextNotice("档案已更新，上一版工具记忆已失效；下次会重新读取。");
+      toast.success(t(`已原子执行 ${receipt.operationIds.length} 项档案变更`));
       setTurns((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: `已按你的批准完整执行「${pendingApproval.title}」中的 ${result.operationIds.length} 项变更。后续提问会从更新后的档案重新读取。`,
+          text: `已签字执行 ${receipt.operationIds.length} 项变更并生成可撤销收据。后续提问会从更新后的档案重新读取。`,
         },
       ]);
-      setPendingApproval(null);
-      setApprovalRows([]);
+      const queue = coordinator.pending();
+      let nextRows: ArchiveMutationDiffRow[] = [];
+      if (queue.length) {
+        const nextIds =
+          authorizationMode === "cautious" ? [queue[0].id] : queue.map((entry) => entry.id);
+        nextRows = (await coordinator.prepare({ proposalIds: nextIds })).diff;
+      }
+      setApprovalRows(nextRows);
+      setPendingProposals(queue);
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -238,14 +474,30 @@ export function ModelsPanel({
   };
 
   const rejectUpdate = () => {
-    if (!pendingApproval) return;
-    const title = pendingApproval.title;
-    setPendingApproval(null);
+    if (!pendingProposals.length) return;
+    const authorizationMode = new LocalAgentSettingsStore().load().authorizationMode;
+    const rejected = authorizationMode === "cautious" ? [pendingProposals[0]] : pendingProposals;
+    coordinatorRef.current.discard(rejected.map((entry) => entry.id));
+    setPendingProposals(coordinatorRef.current.pending());
     setApprovalRows([]);
     setTurns((prev) => [
       ...prev,
-      { role: "assistant", text: `已拒绝「${title}」，本机档案没有发生变化。` },
+      { role: "assistant", text: `已拒绝 ${rejected.length} 份提案，本机档案没有发生变化。` },
     ]);
+  };
+
+  const undoLatestReceipt = async () => {
+    if (!latestReceipt || latestReceipt.undoneAt) return;
+    try {
+      const receipt = await coordinatorRef.current.undo(latestReceipt.id);
+      setLatestReceipt(receipt);
+      setAssistantMemory(null);
+      setSuspendedRequest(null);
+      setAssistantContextNotice("档案已撤销到上一版本，工具记忆已清空。");
+      toast.success("已按收据恢复到提交前的完整档案");
+    } catch (error) {
+      toast.error((error as Error).message);
+    }
   };
 
   return (
@@ -487,6 +739,70 @@ export function ModelsPanel({
           ))}
         </div>
 
+        {assistantContextNotice && (
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground" role="status">
+            {assistantContextNotice}
+          </p>
+        )}
+
+        {assistantCitations.length > 0 && (
+          <section
+            className="mt-3 space-y-2 rounded-xl border border-primary/30 bg-primary/5 p-3"
+            aria-label="可核验档案依据"
+          >
+            <p className="text-xs font-semibold">档案依据（本地生成，可逐条核对）</p>
+            {assistantCitations.map((citation) => {
+              const feedback = citationFeedback[citationKey(citation)];
+              return (
+                <article
+                  key={citationKey(citation)}
+                  className="rounded-lg border border-border bg-background/70 p-2.5 text-xs"
+                >
+                  <p className="font-medium text-foreground">{citation.claim}</p>
+                  <p className="mt-1 break-all text-[11px] text-muted-foreground">
+                    {citation.sourceRef} · 原记录：“{citation.quote}”
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={feedback === "correct" ? "default" : "outline"}
+                      className="h-7 text-[11px]"
+                      onClick={() => confirmCitation(citation)}
+                    >
+                      <Check className="size-3.5" aria-hidden="true" />
+                      {feedback === "correct" ? "已确认" : "正确"}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={feedback === "incorrect" ? "destructive" : "outline"}
+                      className="h-7 text-[11px]"
+                      onClick={() => startCitationCorrection(citation)}
+                    >
+                      <X className="size-3.5" aria-hidden="true" />
+                      不正确，发起更正
+                    </Button>
+                  </div>
+                </article>
+              );
+            })}
+          </section>
+        )}
+
+        {suspendedRequest && (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/50 bg-amber-500/10 p-3 text-xs">
+            <span>
+              上游服务暂时不可用；前 {suspendedRequest.checkpoint.nextRound - 1}{" "}
+              轮与工具结果已保留。
+            </span>
+            <Button type="button" size="sm" onClick={() => void resumeAssistant()} disabled={busy}>
+              {busy ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
+              从第 {suspendedRequest.checkpoint.nextRound} 轮继续
+            </Button>
+          </div>
+        )}
+
         {assistantTrace.length > 0 && (
           <div className="mt-2">
             <ReasoningDisclosure
@@ -500,7 +816,7 @@ export function ModelsPanel({
           </div>
         )}
 
-        {pendingApproval && (
+        {pendingProposals.length > 0 && (
           <div
             className="mt-3 rounded-xl border border-amber-500/60 bg-amber-500/10 p-3"
             role="region"
@@ -509,25 +825,54 @@ export function ModelsPanel({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-medium">
-                  {t("AI 请求批量修改档案")}：{pendingApproval.title}
+                  {t("待签字的档案提案队列")} · {pendingProposals.length} 份
                 </p>
-                <p className="mt-1 text-xs text-muted-foreground">{pendingApproval.reason}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {pendingProposals.map((entry) => entry.plan.title).join("；")}
+                </p>
               </div>
               <span className="shrink-0 rounded-full border border-amber-500/50 px-2 py-0.5 text-[10px] text-amber-600 dark:text-amber-300">
                 {t("尚未写入")}
               </span>
             </div>
             <dl className="mt-3 space-y-2 text-xs">
+              {approvalRows.length === 0 && (
+                <div className="rounded-lg bg-background/60 p-2.5 text-muted-foreground">
+                  {t("正在生成可核对的变更差异…")}
+                </div>
+              )}
               {approvalRows.map((row) => (
                 <div
                   key={`${row.operationId}:${row.targetId}:${row.field}`}
-                  className="grid gap-1 rounded-lg bg-background/60 p-2 md:grid-cols-[5rem_1fr_1fr]"
+                  className="min-w-0 rounded-lg bg-background/60 p-2.5"
                 >
-                  <dt className="font-medium">{row.field}</dt>
-                  <dd className="text-muted-foreground line-through">{row.before}</dd>
-                  <dd className={row.destructive ? "text-destructive" : "text-foreground"}>
-                    {row.after}
-                  </dd>
+                  <dt className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span className="break-words font-semibold text-foreground">
+                      {row.targetLabel}
+                    </span>
+                    <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      {mutationFieldLabel(row.field)}
+                    </span>
+                  </dt>
+                  <div className="mt-2 grid min-w-0 gap-2 sm:grid-cols-2">
+                    <dd className="min-w-0 rounded-md border border-border/70 px-2 py-1.5 text-muted-foreground">
+                      <span className="mb-0.5 block text-[10px] no-underline">{t("变更前")}</span>
+                      <span className="block whitespace-pre-wrap break-words line-through">
+                        {row.before}
+                      </span>
+                    </dd>
+                    <dd
+                      className={cn(
+                        "min-w-0 rounded-md border border-border/70 px-2 py-1.5",
+                        row.destructive ? "text-destructive" : "text-foreground",
+                      )}
+                    >
+                      <span className="mb-0.5 block text-[10px] text-muted-foreground">
+                        {t("变更后")}
+                      </span>
+                      <span className="block whitespace-pre-wrap break-words">{row.after}</span>
+                    </dd>
+                  </div>
                 </div>
               ))}
             </dl>
@@ -539,31 +884,51 @@ export function ModelsPanel({
                 <X className="size-3.5" aria-hidden="true" />
                 {t("拒绝")}
               </Button>
-              <Button size="sm" onClick={() => void approveUpdate()} disabled={approving}>
+              <Button
+                size="sm"
+                onClick={() => void approveUpdate()}
+                disabled={approving || approvalRows.length === 0}
+              >
                 {approving ? (
                   <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
                 ) : (
                   <Check className="size-3.5" aria-hidden="true" />
                 )}
-                {t(`批准全部并执行（${pendingApproval.operations.length} 项）`)}
+                {t(
+                  `签字并原子执行（${pendingProposals.reduce((sum, entry) => sum + entry.plan.operations.length, 0)} 项）`,
+                )}
               </Button>
             </div>
           </div>
         )}
 
+        {latestReceipt && (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/5 p-3 text-xs">
+            <span>
+              变更收据 · {latestReceipt.operationIds.length} 项 ·
+              {new Date(latestReceipt.committedAt).toLocaleTimeString()}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={Boolean(latestReceipt.undoneAt)}
+              onClick={() => void undoLatestReceipt()}
+            >
+              {latestReceipt.undoneAt ? "已撤销" : "整批撤销"}
+            </Button>
+          </div>
+        )}
+
         <div className="mt-3 flex gap-2">
           <Textarea
+            ref={inputRef}
             value={input}
             rows={2}
             placeholder={t("问点什么，比如：这周该联系谁？")}
             onChange={(e) => setInput(e.target.value)}
-            disabled={Boolean(pendingApproval)}
           />
-          <Button
-            onClick={handleSend}
-            disabled={busy || Boolean(pendingApproval)}
-            aria-label={t("发送问题")}
-          >
+          <Button onClick={handleSend} disabled={busy} aria-label={t("发送问题")}>
             {busy ? (
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             ) : (

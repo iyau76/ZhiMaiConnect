@@ -222,8 +222,9 @@ test("草稿中人工修改的关系、证据与 Fact 不会被误标为 AI 来�
 
   await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
   await page.getByRole("tab", { name: "关系网" }).click();
-  const graph = page.locator("svg").filter({ has: page.locator("#relation-arrow") });
-  await graph.getByRole("button", { name: /查看关系详情：唐悦 ⇄ 周宁/ }).click();
+  const relationList = page.getByText(/完整关系列表 · 1/);
+  await relationList.click();
+  await relationList.locator("..").getByRole("button", { name: "详情" }).click();
   const relationDetail = page.getByRole("region", { name: "关系详情" });
   await expect(relationDetail).toContainText("人工录入");
   await expect(relationDetail).toContainText("草稿中人工编辑");

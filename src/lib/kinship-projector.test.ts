@@ -133,6 +133,37 @@ describe("assertion-only kinship projection", () => {
     );
   });
 
+  it("recovers maternal branch roles from canonical labels when stored qualifiers are empty", () => {
+    const canonicalFact = (
+      id: string,
+      fromId: string,
+      toId: string,
+      label: string,
+    ): RelationshipAssertionInput => ({
+      ...fact(id, fromId, toId, label),
+      predicate: "parent_of",
+      qualifiers: {},
+    });
+    const projection = projectKinshipRelations({
+      assertions: [
+        canonicalFact("grandma-min", "grandma", "min", "母女"),
+        canonicalFact("grandma-zheng", "grandma", "zheng", "母子"),
+        canonicalFact("min-daiyu", "min", "daiyu", "母女"),
+      ],
+      persons: people.map(({ id, name }) => ({ id, name })),
+    });
+    expect(projection.relations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fromId: "zheng",
+          toId: "daiyu",
+          predicate: "uncle_aunt_of",
+          label: "舅甥",
+        }),
+      ]),
+    );
+  });
+
   it("does not create cross-family ghost edges for equal display names with different ids", () => {
     const projection = projectKinshipRelations({
       assertions: [

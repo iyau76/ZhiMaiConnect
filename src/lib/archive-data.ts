@@ -24,7 +24,7 @@ import {
   type TaskRecord,
 } from "./face-db";
 import { KINSHIP_PROJECTOR_VERSION, type DerivedRelationshipRecord } from "./kinship-projector";
-import { inferRelationSemantics, RELATION_PREDICATES } from "./relation-ontology";
+import { RELATION_PREDICATES, resolveRelationSemantics } from "./relation-ontology";
 
 export const ARCHIVE_V2_SCHEMA = "zhimai-connect/archive@2" as const;
 export const LEGACY_ARCHIVE_V1_SCHEMA = "zhimai-connect/archive@1" as const;
@@ -814,11 +814,7 @@ function legacyIsDerived(relation: z.infer<typeof legacyRelationSchema>) {
 }
 
 function legacySemantics(relation: z.infer<typeof legacyRelationSchema>) {
-  const inferred = inferRelationSemantics(relation.label);
-  return {
-    predicate: relation.predicate ?? inferred.predicate,
-    qualifiers: relation.qualifiers ?? inferred.qualifiers,
-  };
+  return resolveRelationSemantics(relation);
 }
 
 function legacyAssertion(relation: z.infer<typeof legacyRelationSchema>): RelationAssertionRecord {

@@ -1,5 +1,5 @@
 export type AgentRunStatus =
-  "pending" | "running" | "completed" | "failed" | "cancelled" | "budget_exceeded";
+  "pending" | "running" | "completed" | "suspended" | "failed" | "cancelled" | "budget_exceeded";
 
 export type AgentStepKind = "model" | "tool" | "validation" | "proposal" | "approval" | "system";
 
@@ -32,6 +32,11 @@ export interface AgentStep {
   toolName?: string;
   input?: unknown;
   output?: unknown;
+  /** Input-contract result correlated to this tool invocation. */
+  validation?: {
+    status?: AgentStepStatus;
+    output?: unknown;
+  };
   startedAt?: number;
   endedAt?: number;
   durationMs?: number;
@@ -295,6 +300,7 @@ function projectedRunStatus(events: readonly AgentRunEvent[]): AgentRunStatus {
   const finalEvent = [...events].reverse().find((event) => event.kind === "finalize");
   const reason = (finalEvent?.payload as { reason?: unknown } | undefined)?.reason;
   if (reason === "completed" || reason === "manual") return "completed";
+  if (reason === "suspended") return "suspended";
   if (reason === "aborted") return "cancelled";
   if (typeof reason === "string" && reason.startsWith("max_")) return "budget_exceeded";
   if (events.some((event) => event.kind === "error" && event.status === "failed")) {
@@ -328,10 +334,34 @@ function legacyInvocationKey(event: AgentRunEvent) {
 
 function projectAgentSteps(events: readonly AgentRunEvent[]) {
   const steps: AgentStep[] = [];
+  const pendingModels = new Map<number, AgentStep[]>();
   const pendingByInvocation = new Map<string, AgentStep>();
   const pendingLegacy = new Map<string, AgentStep[]>();
 
   events.forEach((event) => {
+    if (event.kind === "model_request") {
+      const step = { ...projectEventStep(event), title: "model_round" };
+      steps.push(step);
+      const round = event.round ?? 0;
+      pendingModels.set(round, [...(pendingModels.get(round) ?? []), step]);
+      return;
+    }
+
+    if (event.kind === "model_response") {
+      const round = event.round ?? 0;
+      const queue = pendingModels.get(round);
+      const requestStep = queue?.shift();
+      if (!queue?.length) pendingModels.delete(round);
+      if (requestStep) {
+        requestStep.output = event.payload;
+        requestStep.status = event.status ? EVENT_STEP_STATUS[event.status] : requestStep.status;
+        requestStep.endedAt = event.at;
+        requestStep.durationMs =
+          event.durationMs ?? Math.max(0, event.at - (requestStep.startedAt ?? event.at));
+        return;
+      }
+    }
+
     if (event.kind === "tool_call") {
       const step = projectEventStep(event);
       steps.push(step);
@@ -342,6 +372,17 @@ function projectAgentSteps(events: readonly AgentRunEvent[]) {
         pendingLegacy.set(key, [...(pendingLegacy.get(key) ?? []), step]);
       }
       return;
+    }
+
+    if (event.kind === "validation" && event.invocationId) {
+      const callStep = pendingByInvocation.get(event.invocationId);
+      if (callStep) {
+        callStep.validation = {
+          status: event.status ? EVENT_STEP_STATUS[event.status] : undefined,
+          output: event.payload,
+        };
+        return;
+      }
     }
 
     if (event.kind === "tool_result") {

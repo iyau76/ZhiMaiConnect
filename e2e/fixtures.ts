@@ -43,37 +43,102 @@ const intakeDraft = {
   summary: "识别出一位大学同学、一项共同活动和一个待办；写入前仍可编辑。",
 };
 
+function intakePlanReply(prompt: string) {
+  if (prompt.includes("团队聚餐改到 9 月 2 日")) {
+    return JSON.stringify({
+      type: "plan",
+      summary: "把已有团队聚餐调整到 9 月 2 日",
+      tasks: [
+        {
+          id: "event-update",
+          domain: "event",
+          intent: "update",
+          target: {
+            title: "团队聚餐",
+            eventId: "event-update-agent",
+            date: "2026-09-01",
+          },
+          changes: { date: "2026-09-02" },
+        },
+      ],
+    });
+  }
+  const existing = prompt.includes('"id":"existing-tangyue"');
+  return JSON.stringify({
+    type: "plan",
+    summary: "识别出一位大学同学、一项共同活动和一个待办；写入前仍可编辑。",
+    tasks: [
+      {
+        id: "person-tangyue",
+        domain: "person",
+        intent: existing ? "update" : "create",
+        target: {
+          name: "唐悦",
+          ...(existing ? { personId: "existing-tangyue" } : {}),
+        },
+        changes: {
+          name: "唐悦",
+          relation: "大学摄影社搭档",
+          contact: "微信 tangyue_photo",
+          birthday: "03-12",
+          closeness: 5,
+          likes: ["人像摄影", "手冲咖啡"],
+          confidence: 0.94,
+        },
+      },
+      {
+        id: "event-memory-exhibition",
+        domain: "event",
+        intent: "create",
+        target: { title: "讨论校园记忆展" },
+        changes: {
+          date: "2026-08-29",
+          precision: "day",
+          people: ["唐悦"],
+          confidence: 0.9,
+        },
+      },
+      {
+        id: "reminder-photo-list",
+        domain: "reminder",
+        intent: "create",
+        target: { title: "给唐悦发送拍摄清单" },
+        changes: {
+          due: "2026-08-28",
+          people: ["唐悦"],
+          kind: "custom",
+          confidence: 0.91,
+        },
+      },
+    ],
+  });
+}
+
 function visionReply(body: Record<string, unknown>) {
   if (body.action === "test") return "连接正常";
   const prompt = typeof body.prompt === "string" ? body.prompt : "";
+  if (prompt.includes("本轮唯一动作是一次性声明所有新增和更新")) {
+    return intakePlanReply(prompt);
+  }
   if (prompt.includes("结构化 JSON") || prompt.includes("structured JSON")) {
-    if (prompt.includes("团队聚餐改到 9 月 2 日")) {
-      if (!prompt.includes('"tool":"search_events"')) {
-        return JSON.stringify({
-          type: "tool",
-          summary: "先查找已录入的聚餐事件",
-          tool: "search_events",
-          args: { query: "团队聚餐" },
-        });
-      }
-      if (!prompt.includes('"tool":"stage_event_update"')) {
-        return JSON.stringify({
-          type: "tool",
-          summary: "暂存日期修改，等待用户确认",
-          tool: "stage_event_update",
-          args: { eventId: "event-update-agent", changes: { date: "2026-09-02" } },
-        });
-      }
-      return JSON.stringify({
-        type: "final",
-        summary: "事件更新已暂存",
-        draft: { summary: "将已有团队聚餐调整到 9 月 2 日。" },
-      });
-    }
+    if (prompt.includes("团队聚餐改到 9 月 2 日")) return intakePlanReply(prompt);
     return JSON.stringify(intakeDraft);
   }
   if (prompt.includes("以下候选及排序由本地确定性规则产生")) {
     return "首选陈安：人物档案明确记录了合同审阅经验。为什么不是赵宇：赵宇更擅长网站开发，缺少合同证据。\n\n可编辑话术：陈安你好，方便时能否帮我看一下租房合同中的违约条款？不用着急，我会先隐去无关个人信息。";
+  }
+  if (prompt.includes("你负责理解一项人际协作任务")) {
+    return JSON.stringify({
+      type: "recommendation_plan",
+      mode: "open",
+      slots: [
+        {
+          label: "合同审查",
+          deliverable: "核对租房合同违约条款与法律风险",
+          searchTerms: ["合同", "法律", "律师", "合同审阅"],
+        },
+      ],
+    });
   }
   if (prompt.includes("人际协作推荐智能体")) {
     if (!prompt.includes('"call":{"tool":"search_profiles"')) {
@@ -84,12 +149,15 @@ function visionReply(body: Record<string, unknown>) {
         args: { query: "合同 法律", limit: 8 },
       });
     }
+    const orderedPersonIds = prompt.includes('"orderedPersonIds":["person-lawyer-agent"]')
+      ? ["person-lawyer-agent"]
+      : ["person-lawyer-agent", "person-dev-agent"];
     return JSON.stringify({
       type: "final",
       summary: "已结合档案与共同事件完成比较",
       decision: {
         mode: "open",
-        orderedPersonIds: ["person-lawyer-agent", "person-dev-agent"],
+        orderedPersonIds,
         accessVerified: false,
       },
       outreachDraft: "陈安你好，方便时能否帮我看一下租房合同中的违约条款？",
@@ -106,21 +174,17 @@ function visionReply(body: Record<string, unknown>) {
         });
       }
       return JSON.stringify({
-        type: "tool",
-        summary: "准备关系修改提案",
-        tool: "propose_archive_mutations",
-        args: {
-          title: "把甲乙关系更新为前同事",
-          reason: "用户明确纠正人物关系",
-          operations: [
-            {
-              kind: "update_relation",
-              relationId: "relation-update-agent",
-              reason: "用户明确纠正人物关系",
-              changes: { label: "前同事", basis: "原文：甲和乙现在是前同事" },
-            },
-          ],
-        },
+        type: "proposal",
+        title: "把甲乙关系更新为前同事",
+        reason: "用户明确纠正人物关系",
+        operations: [
+          {
+            kind: "update_relation",
+            relationId: "relation-update-agent",
+            reason: "用户明确纠正人物关系",
+            changes: { label: "前同事", basis: "原文：甲和乙现在是前同事" },
+          },
+        ],
       });
     }
     if (prompt.includes("把合成测试人物的职位改成品牌总监")) {
@@ -133,21 +197,17 @@ function visionReply(body: Record<string, unknown>) {
         });
       }
       return JSON.stringify({
-        type: "tool",
-        summary: "准备职位修改提案",
-        tool: "propose_archive_mutations",
-        args: {
-          title: "把合成测试人物更新为品牌总监",
-          reason: "用户明确要求修改职位",
-          operations: [
-            {
-              kind: "update_person",
-              personId: "person-update-agent",
-              reason: "用户明确要求修改职位",
-              changes: { set: { profile: { title: "品牌总监" } } },
-            },
-          ],
-        },
+        type: "proposal",
+        title: "把合成测试人物更新为品牌总监",
+        reason: "用户明确要求修改职位",
+        operations: [
+          {
+            kind: "update_person",
+            personId: "person-update-agent",
+            reason: "用户明确要求修改职位",
+            changes: { set: { profile: { title: "品牌总监" } } },
+          },
+        ],
       });
     }
     if (!prompt.includes('"call":{"tool":"search_web"')) {

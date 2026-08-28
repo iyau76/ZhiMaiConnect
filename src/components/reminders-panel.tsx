@@ -27,7 +27,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { askText } from "@/lib/ai-text";
 import type { AgentRun } from "@/lib/agent-run-log";
 import {
-  detectTargetIntent,
+  mentionedArchivePeople,
   rankConnectionPaths,
   rankTargetSideEntries,
 } from "@/lib/connection-paths";
@@ -216,20 +216,20 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
 
   const findWho = () => {
     if (!ask.trim()) return;
-    const intent = detectTargetIntent(ask.trim(), persons);
-    if (intent.mode === "ambiguous") {
+    const mentionedPeople = mentionedArchivePeople(ask.trim(), persons);
+    if (mentionedPeople.length) {
       setCandidates([]);
-      setTargetChoices(intent.matches);
+      setTargetChoices(mentionedPeople);
       setSelectedTargetId("");
       setCandidateMode("local");
-      setRecommendationNotice(t("问题中出现了多个可能的目标人物，请先选择要联系的对象。"));
+      setRecommendationNotice(
+        t(
+          "本地只召回了问题中出现的人名，不猜测谁是目标。若要查联系路径，请选择目标；也可让 AI 理解完整问题。",
+        ),
+      );
       return;
     }
     setTargetChoices([]);
-    if (intent.mode === "target" && intent.target) {
-      runTargetRecommendation(intent.target.id);
-      return;
-    }
     const ranked = rankCandidates(ask.trim(), persons, events).slice(0, 3);
     setCandidates(ranked.map((candidate) => ({ ...candidate, mode: "open" as const })));
     setSelectedTargetId("");
@@ -274,13 +274,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
 
   const analyzeFullArchive = async () => {
     if (!ask.trim() || agentBusy) return;
-    const intent = detectTargetIntent(ask.trim(), persons);
-    if (intent.mode === "ambiguous" && !selectedTargetId) {
-      setTargetChoices(intent.matches);
-      setRecommendationNotice(t("问题中出现了多个可能的目标人物，请先选择要联系的对象。"));
-      return;
-    }
-    const targetPersonId = selectedTargetId || intent.target?.id;
+    const targetPersonId = selectedTargetId || undefined;
     agentAbortRef.current?.abort();
     const controller = new AbortController();
     agentAbortRef.current = controller;
@@ -304,10 +298,25 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       setCandidateMode("agent");
       setAskAnswer(result.answer);
       setLatestAgentRun(result.run);
+      if (result.targetResolution.mode === "ambiguous") {
+        setTargetChoices(
+          result.targetResolution.candidatePersonIds.flatMap((id) => {
+            const person = persons.find((row) => row.id === id);
+            return person ? [person] : [];
+          }),
+        );
+        setSelectedTargetId("");
+        setRecommendationNotice(result.targetResolution.question ?? result.answer);
+        toast.success(t("AI 已理解问题，请选择目标人物后继续"));
+        return;
+      }
+      setTargetChoices([]);
+      setSelectedTargetId(result.targetResolution.targetPersonId ?? "");
       setRecommendationNotice(
-        result.candidates.some((candidate) => candidate.path)
+        result.targetResolution.mode === "target" &&
+          result.candidates.some((candidate) => candidate.path)
           ? t("目标模式：候选、分数和路径由本地确定性工具锁定，AI 只负责解释与措辞。")
-          : result.candidates.some((candidate) => candidate.mode === "target_side")
+          : result.targetResolution.mode === "target"
             ? t("未找到本人到目标的已验证路径；AI 已核对档案，当前候选仅是目标侧潜在线索。")
             : t("开放求助模式：AI 已按需读取档案，候选仍需人工复核。"),
       );
@@ -547,7 +556,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
           placeholder={t("例如：我想找人帮忙看一下租房合同，谁比较合适？")}
           className="mt-3"
         />
-        {targetChoices.length > 1 && (
+        {targetChoices.length > 0 && (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/35 bg-amber-500/5 p-3 text-xs">
             <span>{recommendationNotice}</span>
             <select
@@ -634,7 +643,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
             </Button>
           )}
         </div>
-        {recommendationNotice && targetChoices.length <= 1 && (
+        {recommendationNotice && targetChoices.length === 0 && (
           <p className="mt-3 rounded-lg border border-border bg-muted/25 px-3 py-2 text-[11px] text-muted-foreground">
             {recommendationNotice}
           </p>

@@ -50,6 +50,7 @@ export type AgentBudgetPreset = keyof typeof AGENT_BUDGET_PRESETS;
 export type AgentFinalizeReason =
   | "completed"
   | "manual"
+  | "suspended"
   | "aborted"
   | "max_rounds"
   | "max_tool_calls"
@@ -234,6 +235,8 @@ export interface AgentRuntimeOptions<TServices> {
   recorder?: AgentRunRecorder;
   signal?: AbortSignal;
   now?: () => number;
+  /** Logical round offset used when a suspended run resumes in a new runtime. */
+  roundOffset?: number;
 }
 
 export interface AgentModelRoundInput {
@@ -278,6 +281,7 @@ export class AgentRuntime<TServices = unknown> {
   private readonly toolNames?: ReadonlySet<string>;
   private readonly signal?: AbortSignal;
   private readonly now: () => number;
+  private readonly roundOffset: number;
   private finalDecision?: AgentFinalizeDecision;
 
   constructor(options: AgentRuntimeOptions<TServices>) {
@@ -293,6 +297,7 @@ export class AgentRuntime<TServices = unknown> {
         : new Set(options.toolNames)
       : undefined;
     this.now = options.now ?? Date.now;
+    this.roundOffset = Math.max(0, Math.trunc(options.roundOffset ?? 0));
     this.recorder = options.recorder ?? new MemoryAgentRunRecorder({ now: this.now });
     this.contextBudget = new ContextBudget(options.budget, { now: this.now });
     this.signal = options.signal;
@@ -318,7 +323,7 @@ export class AgentRuntime<TServices = unknown> {
     const tokens = input.tokens ?? estimateAgentTokens(input.payload);
     const decision = this.contextBudget.claimModelRound(tokens);
     if (decision.status === "finalize") return this.finalizeBudget(decision);
-    const round = decision.budget.rounds;
+    const round = decision.budget.rounds + this.roundOffset;
     this.recorder.record({
       kind: "model_request",
       status: "started",
@@ -335,7 +340,7 @@ export class AgentRuntime<TServices = unknown> {
     this.recorder.record({
       kind: "model_response",
       status: "succeeded",
-      round: this.contextBudget.snapshot().rounds,
+      round: this.contextBudget.snapshot().rounds + this.roundOffset,
       payload: input.payload,
       usage: { output: tokens },
     });
@@ -357,7 +362,7 @@ export class AgentRuntime<TServices = unknown> {
             recorder: this.recorder,
             permissions: this.permissions,
             allowedToolNames: this.toolNames,
-            round: budgetDecision.budget.rounds,
+            round: budgetDecision.budget.rounds + this.roundOffset,
             signal,
             now: this.now,
           }),
@@ -430,7 +435,7 @@ export class AgentRuntime<TServices = unknown> {
     return this.recorder.record({
       kind,
       status,
-      round: this.contextBudget.snapshot().rounds,
+      round: this.contextBudget.snapshot().rounds + this.roundOffset,
       payload,
     });
   }

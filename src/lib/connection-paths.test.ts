@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { PersonRecord, RelationRecord } from "./face-db";
-import { detectTargetIntent, rankConnectionPaths, rankTargetSideEntries } from "./connection-paths";
+import {
+  mentionedArchivePeople,
+  rankConnectionPaths,
+  rankTargetSideEntries,
+} from "./connection-paths";
 
 const NOW = new Date("2026-08-28T00:00:00Z");
 
@@ -31,36 +35,36 @@ function relation(id: string, fromId: string, toId: string, patch: Partial<Relat
   } satisfies RelationRecord;
 }
 
-describe("target intent", () => {
+describe("archive person recall without local intent guessing", () => {
   const persons = [person("jia-mu", "贾母"), person("jia-lian", "贾琏")];
 
-  it("recognizes an archived person as a target", () => {
-    expect(detectTargetIntent("我想找贾母办事，应该通过谁联系？", persons)).toMatchObject({
-      mode: "target",
-      target: { id: "jia-mu" },
-    });
+  it("recalls an archived person mentioned in the question", () => {
+    expect(mentionedArchivePeople("我想给贾母送一份寿礼，应该怎么安排？", persons)).toEqual([
+      expect.objectContaining({ id: "jia-mu" }),
+    ]);
   });
 
-  it("never offers the ego record as a target in a first-person question", () => {
+  it("never offers the ego record as a recalled archive person", () => {
     const self = { ...person("self", "我"), entityRole: "ego" as const };
+    expect(mentionedArchivePeople("我想找贾母办事，应该通过谁联系？", [self, ...persons])).toEqual([
+      expect.objectContaining({ id: "jia-mu" }),
+    ]);
+  });
+
+  it("does not invent a person match for a capability request", () => {
+    expect(mentionedArchivePeople("找一个懂摄影的人", persons)).toEqual([]);
+  });
+
+  it("recalls every named person without deciding which one is the target", () => {
     expect(
-      detectTargetIntent("我想找贾母办事，应该通过谁联系？", [self, ...persons]),
-    ).toMatchObject({ mode: "target", target: { id: "jia-mu" } });
+      mentionedArchivePeople("想请贾琏帮我给贾母送寿礼", persons).map((row) => row.id),
+    ).toEqual(["jia-mu", "jia-lian"]);
   });
 
-  it("keeps a skill request in open recommendation mode", () => {
-    expect(detectTargetIntent("找一个懂摄影的人", persons).mode).toBe("open");
-  });
-
-  it("does not guess when multiple named targets are requested", () => {
-    expect(detectTargetIntent("想联系贾母和贾琏", persons).mode).toBe("ambiguous");
-  });
-
-  it("recognizes a one-character archived name", () => {
-    expect(detectTargetIntent("我想找婷办事", [person("ting", "婷")])).toMatchObject({
-      mode: "target",
-      target: { id: "ting" },
-    });
+  it("recalls a one-character archived name", () => {
+    expect(mentionedArchivePeople("我想给婷送礼物", [person("ting", "婷")])).toEqual([
+      expect.objectContaining({ id: "ting" }),
+    ]);
   });
 });
 

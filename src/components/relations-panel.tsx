@@ -47,6 +47,13 @@ import {
   relationCommunityMap,
 } from "@/lib/relation-community";
 import {
+  buildCircleLayoutProjection,
+  DEFAULT_RELATION_GRAPH_GROUPING,
+  loadRelationGraphGrouping,
+  saveRelationGraphGrouping,
+  type RelationGraphGroupingMode,
+} from "@/lib/relation-graph-grouping";
+import {
   relationCategory,
   relationEvidenceMode,
   selectVisibleRelations,
@@ -114,8 +121,12 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   const relationLabelRef = useRef<HTMLInputElement | null>(null);
   /** auto = 按关系词推断方向；mutual = 双箭头；directed = 单箭头 */
   const [dirMode, setDirMode] = useState<"auto" | "mutual" | "directed">("auto");
-  /** 关系网布局：按标签分圈 / 不分组 */
-  const [groupBy, setGroupBy] = useState<"none" | "tag">("tag");
+  /** 关系网布局：用户圈层 / 拓扑社区 / 不分组。 */
+  const [groupBy, setGroupBy] = useState<RelationGraphGroupingMode>(() =>
+    typeof localStorage === "undefined"
+      ? DEFAULT_RELATION_GRAPH_GROUPING
+      : loadRelationGraphGrouping(localStorage),
+  );
   const [relationFilter, setRelationFilter] = useState("all");
   const [relationCategoryFilter, setRelationCategoryFilter] = useState<RelationCategory | "all">(
     "all",
@@ -192,6 +203,10 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (typeof localStorage !== "undefined") saveRelationGraphGrouping(localStorage, groupBy);
+  }, [groupBy]);
 
   const nameOf = useCallback(
     (id: string) => people.find((person) => person.id === id)?.name ?? t("已删除"),
@@ -470,10 +485,28 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       ),
     [people, relationCommunities],
   );
-  const groupOf = useCallback(
-    (person: PersonRecord) =>
-      communityNames.get(communityByPersonId.get(person.id) ?? "") ?? t("未连接"),
-    [communityByPersonId, communityNames],
+  const circleLayout = useMemo(
+    () => buildCircleLayoutProjection(people, collections, collectionMemberships, t("未分圈层")),
+    [people, collections, collectionMemberships],
+  );
+  const layoutGroupOf = useCallback(
+    (person: PersonRecord) => {
+      if (groupBy === "circles") {
+        const circle = circleLayout.groupByPersonId.get(person.id);
+        return circle
+          ? { key: circle.key, label: circle.label }
+          : { key: "circles:none", label: t("未分圈层") };
+      }
+      if (groupBy === "communities") {
+        const communityId = communityByPersonId.get(person.id) ?? `community:person:${person.id}`;
+        return {
+          key: communityId,
+          label: communityNames.get(communityId) ?? t("未连接"),
+        };
+      }
+      return { key: "", label: "" };
+    },
+    [circleLayout, communityByPersonId, communityNames, groupBy],
   );
 
   const openCollection = collections.find((collection) => collection.id === tagOpen) ?? null;
@@ -548,9 +581,9 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     }
     if (groupBy === "none") return collectionPeople;
     if (drill.mode === "group")
-      return collectionPeople.filter((person) => groupOf(person) === drill.key);
+      return collectionPeople.filter((person) => layoutGroupOf(person).key === drill.key);
     return collectionPeople;
-  }, [people, groupBy, drill, groupOf, collectionFilterId, collectionMemberships]);
+  }, [people, groupBy, drill, layoutGroupOf, collectionFilterId, collectionMemberships]);
 
   const policyFilteredRelations = useMemo(
     () =>
@@ -591,7 +624,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
    */
   const aggregateOverview =
     graphViewMode === "overview" &&
-    groupBy === "tag" &&
+    groupBy === "communities" &&
     drill.mode === "blocks" &&
     visiblePeople.length > 60;
   const communityOverview = useMemo(
@@ -648,7 +681,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       color: ReturnType<typeof graphColor>;
     };
     const nodes: Node[] = [];
-    const clusters: { name: string; x: number; y: number; r: number }[] = [];
+    const clusters: { key: string; name: string; x: number; y: number; r: number }[] = [];
 
     /** 环形排布时，为了让相邻两点至少隔开 MIN_EDGE 所需的半径 */
     const ringFor = (count: number) =>
@@ -687,16 +720,16 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     let size = 640;
 
     if (groupBy !== "none") {
-      const buckets = new Map<string, PersonRecord[]>();
+      const buckets = new Map<string, { name: string; members: PersonRecord[] }>();
       for (const person of people) {
-        const key = groupOf(person);
-        const list = buckets.get(key);
-        if (list) list.push(person);
-        else buckets.set(key, [person]);
+        const group = layoutGroupOf(person);
+        const bucket = buckets.get(group.key);
+        if (bucket) bucket.members.push(person);
+        else buckets.set(group.key, { name: group.label, members: [person] });
       }
-      const groups = [...buckets.entries()].map(([name, members]) => {
-        const layout = layeredRing(members.length);
-        return { name, members, inner: layout.radius, points: layout.points };
+      const groups = [...buckets.entries()].map(([key, bucket]) => {
+        const layout = layeredRing(bucket.members.length);
+        return { key, ...bucket, inner: layout.radius, points: layout.points };
       });
       const maxR = Math.max(...groups.map((group) => group.inner + 52), 120);
       // 多个圈层时，各簇均匀分布在一个更大的环上，彼此不重叠
@@ -711,14 +744,14 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
         const angle = (groupIndex / groups.length) * Math.PI * 2 - Math.PI / 2;
         const cx = center + ringRadius * Math.cos(angle);
         const cy = center + ringRadius * Math.sin(angle);
-        clusters.push({ name: group.name, x: cx, y: cy, r: group.inner + 52 });
+        clusters.push({ key: group.key, name: group.name, x: cx, y: cy, r: group.inner + 52 });
         group.members.forEach((person, index) => {
           const point = group.points[index] ?? { x: 0, y: 0 };
           nodes.push({
             id: person.id,
             name: person.name,
-            group: group.name,
-            color: graphColor(group.name),
+            group: group.key,
+            color: graphColor(group.key),
             x: cx + point.x,
             y: cy + point.y,
           });
@@ -731,12 +764,11 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       const center = size / 2;
       people.forEach((person, index) => {
         const point = layout.points[index] ?? { x: 0, y: 0 };
-        const group = groupOf(person);
         nodes.push({
           id: person.id,
           name: person.name,
-          group,
-          color: graphColor(group),
+          group: "",
+          color: graphColor("all"),
           x: center + point.x,
           y: center + point.y,
         });
@@ -755,7 +787,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
     // 圈层跟着点走：用该圈层所有点的实际位置重新算圆心和半径
     for (const cluster of clusters) {
-      const members = nodes.filter((node) => node.group === cluster.name);
+      const members = nodes.filter((node) => node.group === cluster.key);
       if (!members.length) continue;
       const cx = members.reduce((sum, node) => sum + node.x, 0) / members.length;
       const cy = members.reduce((sum, node) => sum + node.y, 0) / members.length;
@@ -906,18 +938,25 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
     const shaped = clusters.map((cluster) => ({
       ...cluster,
-      color: graphColor(cluster.name),
+      color: graphColor(cluster.key),
       path: blob(
         cluster.x,
         cluster.y,
         cluster.r * 1.08,
-        cluster.name,
-        nodes.filter((node) => node.group === cluster.name),
+        cluster.key,
+        nodes.filter((node) => node.group === cluster.key),
       ),
     }));
 
     return { size, nodes, edges: labelled, clusters: shaped };
-  }, [aggregateOverview, visiblePeople, graphVisibility.visible, groupBy, groupOf, positions]);
+  }, [
+    aggregateOverview,
+    visiblePeople,
+    graphVisibility.visible,
+    groupBy,
+    layoutGroupOf,
+    positions,
+  ]);
 
   const relationLabels = useMemo(
     () => [...new Set(relations.map((relation) => relation.label).filter(Boolean))].sort(),
@@ -1559,12 +1598,19 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             </Button>
             <select
               value={groupBy}
-              onChange={(event) => setGroupBy(event.target.value as typeof groupBy)}
+              onChange={(event) => {
+                setGroupBy(event.target.value as RelationGraphGroupingMode);
+                setDrill({ mode: "blocks" });
+                setPositions({});
+                resetView();
+              }}
               className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              aria-label={t("分组布局")}
               title={t("布局")}
             >
-              <option value="tag">{t("按拓扑社区布局")}</option>
               <option value="none">{t("不分组")}</option>
+              <option value="circles">{t("按圈层布局")}</option>
+              <option value="communities">{t("按拓扑社区布局")}</option>
             </select>
             <select
               value={graphViewMode}
@@ -1819,14 +1865,22 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             </div>
           )}
 
-          {groupBy === "tag" && graph.clusters.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2" aria-label={t("拓扑社区图例")}>
+          {groupBy !== "none" && graph.clusters.length > 0 && (
+            <div
+              className="flex flex-wrap items-center gap-2"
+              aria-label={t(groupBy === "circles" ? "圈层图例" : "拓扑社区图例")}
+            >
               <span className="text-[11px] text-muted-foreground">
-                {t("拓扑社区（自动计算，不写入档案）")}：
+                {t(
+                  groupBy === "circles"
+                    ? "圈层布局（仅使用已确认关系圈；标签与场景集合不参与）"
+                    : "拓扑社区（Louvain 自动计算，不写入档案）",
+                )}
+                ：
               </span>
               {graph.clusters.map((cluster) => (
                 <div
-                  key={cluster.name}
+                  key={cluster.key}
                   className="inline-flex overflow-hidden rounded-full border border-border bg-background text-[11px]"
                 >
                   <span className="flex min-h-8 items-center gap-1.5 px-2.5">
@@ -1840,16 +1894,18 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   <button
                     type="button"
                     className="min-h-8 border-l border-border px-2.5 text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    aria-label={`${t("只看圈层")}：${cluster.name}`}
+                    aria-label={`${t(
+                      groupBy === "circles" ? "只看圈层" : "只看拓扑社区",
+                    )}：${cluster.name}`}
                     onClick={() => {
                       setSelectedId(null);
                       setGraphViewMode("overview");
                       setDrill({
                         mode: "members",
                         key: cluster.name,
-                        memberIds: visiblePeople
-                          .filter((person) => groupOf(person) === cluster.name)
-                          .map((person) => person.id),
+                        memberIds: graph.nodes
+                          .filter((node) => node.group === cluster.key)
+                          .map((node) => node.id),
                       });
                     }}
                   >
@@ -2340,7 +2396,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
                 {!aggregateOverview &&
                   graph.clusters.map((cluster) => (
-                    <g key={cluster.name}>
+                    <g key={cluster.key}>
                       <path
                         d={cluster.path}
                         pointerEvents="none"
@@ -2360,14 +2416,16 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                         role="button"
                         tabIndex={0}
                         className="cursor-pointer fill-primary text-[11px] font-medium underline-offset-2 hover:underline"
-                        aria-label={`${t("只看拓扑社区")}：${cluster.name}`}
+                        aria-label={`${t(
+                          groupBy === "circles" ? "只看圈层" : "只看拓扑社区",
+                        )}：${cluster.name}`}
                         onClick={() =>
                           setDrill({
                             mode: "members",
                             key: cluster.name,
-                            memberIds: visiblePeople
-                              .filter((person) => groupOf(person) === cluster.name)
-                              .map((person) => person.id),
+                            memberIds: graph.nodes
+                              .filter((node) => node.group === cluster.key)
+                              .map((node) => node.id),
                           })
                         }
                         onKeyDown={(event) => {
@@ -2376,13 +2434,15 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                           setDrill({
                             mode: "members",
                             key: cluster.name,
-                            memberIds: visiblePeople
-                              .filter((person) => groupOf(person) === cluster.name)
-                              .map((person) => person.id),
+                            memberIds: graph.nodes
+                              .filter((node) => node.group === cluster.key)
+                              .map((node) => node.id),
                           });
                         }}
                       >
-                        <title>{t("点击只看这个拓扑社区")}</title>
+                        <title>
+                          {t(groupBy === "circles" ? "点击只看这个圈层" : "点击只看这个拓扑社区")}
+                        </title>
 
                         {cluster.name}
                       </text>

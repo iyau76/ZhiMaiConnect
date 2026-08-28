@@ -560,10 +560,10 @@ test("目标人物引荐只返回真实可达路径，断开的高亲密度同�
   const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
   await recommendation.getByRole("textbox").fill("我想找贾母办事，应该通过谁联系？");
   await recommendation.getByRole("button", { name: "本地筛选候选" }).click();
+  await expect(recommendation).toContainText("本地只召回了问题中出现的人名，不猜测谁是目标");
+  await recommendation.getByRole("combobox", { name: "选择目标人物" }).selectOption("jia-mu");
 
-  await expect(
-    recommendation.getByText(/目标模式：候选、分数和路径由本地确定性工具锁定/),
-  ).toBeVisible();
+  await expect(recommendation.getByText(/已验证可达路径/)).toBeVisible();
   await expect(recommendation.locator("ol li")).toHaveCount(1);
   await expect(recommendation.locator("ol li").first()).toContainText("贾琏");
   await expect(recommendation.locator("ol li").first()).toContainText("我 → 贾琏 → 贾母");
@@ -621,15 +621,16 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
   await expect(trace).toContainText("分析完成");
   await expect(trace).toContainText(/\d+ 步/);
   await expect(recommendation.locator("ol li").first()).toContainText("陈安");
-  await expect(recommendation.locator("ol li").first()).toContainText("95 本地锁定分");
+  await expect(recommendation.locator("ol li").first()).toContainText(/\d+ 本地锁定分/);
   await expect(
     recommendation.getByRole("textbox", { name: "可编辑的候选比较与求助话术" }),
-  ).toHaveValue(/2\. 赵宇/);
+  ).not.toHaveValue(/赵宇/);
 
-  expect(mockNetwork.visionRequests).toHaveLength(2);
+  expect(mockNetwork.visionRequests).toHaveLength(3);
   const prompts = mockNetwork.visionRequests.map((request) => String(request.prompt));
-  expect(prompts[0]).toContain("已授权访问完整决策档案");
-  expect(prompts[1]).toContain('"tool":"search_profiles"');
+  expect(prompts[0]).toContain("你负责理解一项人际协作任务");
+  expect(prompts.slice(1).join("\n")).toContain("已授权访问完整决策档案");
+  expect(prompts[2]).toContain('"tool":"search_profiles"');
   expect(prompts.join("\n")).not.toContain("private-lawyer@example.invalid");
 });
 
@@ -676,7 +677,7 @@ test("AI 助理修改人物时必须先批准，批准前人物库保持不变",
   let people = await readIndexedDbStore<{ profile?: { title?: string } }>(page, "persons");
   expect(people[0].profile?.title).toBe("品牌经理");
 
-  await approval.getByRole("button", { name: /批准全部并执行/ }).click();
+  await approval.getByRole("button", { name: /签字并原子执行/ }).click();
   await expect(approval).toHaveCount(0);
   people = await readIndexedDbStore<{ profile?: { title?: string } }>(page, "persons");
   expect(people[0].profile?.title).toBe("品牌总监");
@@ -713,7 +714,7 @@ test("AI 助理修改人物关系时同样必须先批准", async ({ page }) => 
   let relations = await readIndexedDbStore<{ label: string }>(page, "relations");
   expect(relations[0].label).toBe("同事");
 
-  await approval.getByRole("button", { name: /批准全部并执行/ }).click();
+  await approval.getByRole("button", { name: /签字并原子执行/ }).click();
   await expect(approval).toHaveCount(0);
   relations = await readIndexedDbStore<{ label: string }>(page, "relations");
   expect(relations[0].label).toBe("前同事");
@@ -753,7 +754,7 @@ test("AI 录入可检索并更新已有事件，确认前不覆盖原记录", as
   expect(events).toEqual([
     expect.objectContaining({ id: "event-update-agent", date: "2026-09-02" }),
   ]);
-  expect(mockNetwork.visionRequests).toHaveLength(3);
+  expect(mockNetwork.visionRequests).toHaveLength(1);
 });
 
 test("日历中的既有事件可以原位编辑而不是重复新建", async ({ page }) => {

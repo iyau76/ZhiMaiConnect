@@ -41,18 +41,49 @@ export function clipTextHeadTail(value: string, maxCharacters: number, headRatio
   return `${value.slice(0, head)}${marker}${value.slice(value.length - (remaining - head))}`;
 }
 
-export function fitVisionHistory<T extends { text: string }>(history: readonly T[]): T[] {
-  const candidates = history.slice(-VISION_TEXT_LIMITS.historyTurns).map((turn) => ({
+export interface FittedVisionHistory<T> {
+  turns: T[];
+  omittedTurns: number;
+  /** Deterministic, bounded context for the model and an explicit UI notice. */
+  summary: string;
+}
+
+function summarizeOmittedHistory<T extends { text: string; role?: string }>(turns: readonly T[]) {
+  if (!turns.length) return "";
+  const samples = turns.length <= 4 ? [...turns] : [...turns.slice(0, 2), ...turns.slice(-2)];
+  const rows = samples.map((turn) => {
+    const role = turn.role === "assistant" ? "助手" : "用户";
+    const text = turn.text.replace(/\s+/g, " ").trim();
+    return `${role}：${text.slice(0, 80) || "（空消息）"}`;
+  });
+  return `较早 ${turns.length} 条对话已压缩（不是遗忘）：${rows.join("；")}`.slice(0, 520);
+}
+
+/**
+ * Fits transport history while reporting every omitted turn. Consumers must
+ * pass `summary` to the model and may show `omittedTurns` in the UI.
+ */
+export function fitVisionHistory<T extends { text: string; role?: string }>(
+  history: readonly T[],
+): FittedVisionHistory<T> {
+  const candidates = history.map((turn) => ({
     ...turn,
     text: clipTextHeadTail(turn.text, VISION_TEXT_LIMITS.historyTurnCharacters),
   }));
-  const selected: T[] = [];
+  const selected: Array<{ turn: T; index: number }> = [];
   let used = 0;
   for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    if (selected.length >= VISION_TEXT_LIMITS.historyTurns) break;
     const turn = candidates[index]!;
     if (used + turn.text.length > VISION_TEXT_LIMITS.historyTotalCharacters) continue;
-    selected.unshift(turn);
+    selected.unshift({ turn, index });
     used += turn.text.length;
   }
-  return selected;
+  const selectedIndexes = new Set(selected.map((entry) => entry.index));
+  const omitted = candidates.filter((_, index) => !selectedIndexes.has(index));
+  return {
+    turns: selected.map((entry) => entry.turn),
+    omittedTurns: omitted.length,
+    summary: summarizeOmittedHistory(omitted),
+  };
 }

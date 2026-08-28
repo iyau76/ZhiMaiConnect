@@ -476,7 +476,17 @@ const EN: Record<string, string> = {
   关系类型筛选: "Relationship type filter",
   全部关系: "All relationships",
   显示边标签: "Show edge labels",
+  分组布局: "Grouping layout",
+  按圈层布局: "Group by circles",
+  按拓扑社区布局: "Group by topology communities",
+  未分圈层: "No confirmed circle",
   圈层图例: "Circle legend",
+  拓扑社区图例: "Topology community legend",
+  "圈层布局（仅使用已确认成员关系）": "Circle layout (confirmed memberships only)",
+  "拓扑社区（Louvain 自动计算，不写入档案）":
+    "Topology communities (computed with Louvain; never saved as archive facts)",
+  只看拓扑社区: "Show only topology community",
+  点击只看这个拓扑社区: "Show only this topology community",
   最近共同事件: "Recent shared events",
   身份与昵称历史: "Identity and alias history",
   "保留平台账号、曾用昵称和生效时间，改名不会覆盖旧身份。":

@@ -106,9 +106,66 @@ describe("agent run log", () => {
       endedAt: 16,
       durationMs: 6,
     });
-    expect(view.steps.find((step) => step.kind === "validation")).toMatchObject({
-      title: "lookup",
-      toolName: undefined,
+    expect(toolSteps[0]?.validation).toMatchObject({
+      status: "completed",
+      output: { reason: "input_valid" },
+    });
+    expect(view.steps.find((step) => step.kind === "validation")).toBeUndefined();
+  });
+
+  it("pairs each model request and response into one closed round without changing the ledger", () => {
+    const recorder = new MemoryAgentRunRecorder({ runId: "model-run" });
+    recorder.record({
+      kind: "model_request",
+      status: "started",
+      round: 1,
+      at: 10,
+      payload: { prompt: "first" },
+    });
+    recorder.record({
+      kind: "model_response",
+      status: "succeeded",
+      round: 1,
+      at: 18,
+      payload: { response: "done" },
+    });
+    recorder.record({
+      kind: "model_request",
+      status: "started",
+      round: 2,
+      at: 20,
+      payload: { prompt: "second" },
+    });
+    recorder.record({
+      kind: "model_response",
+      status: "failed",
+      round: 2,
+      at: 25,
+      payload: { name: "Error", message: "503" },
+    });
+
+    const events = recorder.events();
+    const view = projectAgentRun(events, { id: recorder.runId });
+
+    expect(events).toHaveLength(4);
+    expect(view.steps).toHaveLength(2);
+    expect(view.steps[0]).toMatchObject({
+      id: "model-run:1",
+      round: 1,
+      kind: "model",
+      status: "completed",
+      title: "model_round",
+      input: { prompt: "first" },
+      output: { response: "done" },
+      startedAt: 10,
+      endedAt: 18,
+      durationMs: 8,
+    });
+    expect(view.steps[1]).toMatchObject({
+      id: "model-run:3",
+      round: 2,
+      status: "failed",
+      durationMs: 5,
     });
   });
 

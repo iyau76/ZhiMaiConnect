@@ -941,11 +941,14 @@ export function createDeletePeopleOperations(
 export interface ArchiveMutationDiffRow {
   operationId: string;
   targetId: string;
+  targetLabel: string;
   field: string;
   before: string;
   after: string;
   destructive: boolean;
 }
+
+type ArchiveMutationDiffDraft = Omit<ArchiveMutationDiffRow, "targetLabel">;
 
 function displayValue(value: unknown) {
   if (value === undefined || value === null || value === "") return "（空）";
@@ -1041,9 +1044,75 @@ function personPatchDiff(
             destructive:
               (operation.changes.unset ?? []).includes(path as never) ||
               (operation.changes.clear ?? []).includes(path as never),
-          } satisfies ArchiveMutationDiffRow,
+          } satisfies ArchiveMutationDiffDraft,
         ];
   });
+}
+
+function mutationDiffTargetLabel(
+  row: ArchiveMutationDiffDraft,
+  snapshot: ArchiveMutationSnapshot,
+  batch: ArchiveMutationWriteBatch,
+) {
+  const persons = new Map(
+    [...snapshot.persons, ...(batch.persons ?? [])].map((record) => [record.id, record]),
+  );
+  const collections = new Map(
+    [...snapshot.collections, ...(batch.collections ?? [])].map((record) => [record.id, record]),
+  );
+  const memberships = new Map(
+    [...snapshot.collectionMemberships, ...(batch.collectionMemberships ?? [])].map((record) => [
+      record.id,
+      record,
+    ]),
+  );
+  const personName = (id: string) => persons.get(id)?.name ?? id;
+
+  if (row.field === "collection.membership" || row.field === "delete.collection_membership") {
+    const membership = memberships.get(row.targetId);
+    if (membership) {
+      return `${personName(membership.personId)} · ${
+        collections.get(membership.collectionId)?.name ?? membership.collectionId
+      }`;
+    }
+  }
+
+  if (row.field.startsWith("relation.") || row.field === "delete.relation_assertion") {
+    const assertion = [...snapshot.assertions, ...(batch.assertions ?? [])].find(
+      (record) => record.id === row.targetId,
+    );
+    if (assertion) {
+      return `${personName(assertion.fromId)} → ${personName(assertion.toId)} · ${assertion.label}`;
+    }
+  }
+
+  if (row.field === "person" || row.field === "name" || row.field === "note") {
+    return persons.get(row.targetId)?.name ?? row.targetId;
+  }
+  if (row.field.startsWith("profile.")) return persons.get(row.targetId)?.name ?? row.targetId;
+
+  if (row.field.startsWith("event.") || row.field === "delete.life_event") {
+    return snapshot.lifeEvents.find((record) => record.id === row.targetId)?.title ?? row.targetId;
+  }
+  if (row.field.startsWith("collection.")) {
+    return collections.get(row.targetId)?.name ?? row.targetId;
+  }
+  if (row.field === "delete.reminder") {
+    return snapshot.reminders.find((record) => record.id === row.targetId)?.title ?? row.targetId;
+  }
+  if (row.field === "delete.task") {
+    return snapshot.tasks.find((record) => record.id === row.targetId)?.title ?? row.targetId;
+  }
+  if (row.field === "delete.case_event") {
+    return snapshot.caseEvents.find((record) => record.id === row.targetId)?.title ?? row.targetId;
+  }
+  if (row.field === "delete.evidence") {
+    return snapshot.evidence.find((record) => record.id === row.targetId)?.title ?? row.targetId;
+  }
+  if (row.field === "delete.project") {
+    return snapshot.projects.find((record) => record.id === row.targetId)?.title ?? row.targetId;
+  }
+  return row.targetId;
 }
 
 function pushUnique<T>(target: T[] | undefined, value: T) {
@@ -1067,7 +1136,7 @@ export function prepareArchiveMutationPlan(
   const plan = archiveMutationPlanSchema.parse(rawPlan);
   const now = options.now ?? Date.now();
   const batch: ArchiveMutationWriteBatch = {};
-  const diff: ArchiveMutationDiffRow[] = [];
+  const diff: ArchiveMutationDiffDraft[] = [];
   const personById = new Map(snapshot.persons.map((row) => [row.id, row]));
   const assertionById = new Map(snapshot.assertions.map((row) => [row.id, row]));
   const eventById = new Map(snapshot.lifeEvents.map((row) => [row.id, row]));
@@ -1518,7 +1587,14 @@ export function prepareArchiveMutationPlan(
   }
 
   if (!diff.length) throw new Error("计划与当前档案没有差异，无需批准");
-  return { plan, batch, diff };
+  return {
+    plan,
+    batch,
+    diff: diff.map((row) => ({
+      ...row,
+      targetLabel: mutationDiffTargetLabel(row, snapshot, batch),
+    })),
+  };
 }
 
 export async function applyArchiveMutationPlan(

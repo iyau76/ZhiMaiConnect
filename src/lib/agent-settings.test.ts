@@ -33,8 +33,9 @@ describe("LocalAgentSettingsStore", () => {
     const store = new LocalAgentSettingsStore({ storage, now: () => 123 });
 
     expect(store.load()).toEqual({
-      version: 1,
+      version: 2,
       profile: "standard",
+      authorizationMode: "standard",
       savePrivatePayload: false,
       updatedAt: 0,
     });
@@ -53,9 +54,10 @@ describe("LocalAgentSettingsStore", () => {
     const store = new LocalAgentSettingsStore({ storage, now: () => 456 });
 
     expect(store.saveCustomBudget(CUSTOM_BUDGET)).toEqual({
-      version: 1,
+      version: 2,
       profile: "custom",
       customBudget: CUSTOM_BUDGET,
+      authorizationMode: "standard",
       savePrivatePayload: false,
       updatedAt: 456,
     });
@@ -77,6 +79,15 @@ describe("LocalAgentSettingsStore", () => {
     expect(store.resolveBudget()).toEqual(store.presets().deep);
   });
 
+  it("rehydrates the selected deep preset as the complete active budget", () => {
+    const storage = new MemoryStorage();
+    new LocalAgentSettingsStore({ storage, now: () => 7 }).selectPreset("deep");
+
+    const rebuilt = new LocalAgentSettingsStore({ storage });
+    expect(rebuilt.load()).toMatchObject({ profile: "deep", updatedAt: 7 });
+    expect(rebuilt.resolveBudget()).toEqual(rebuilt.presets().deep);
+  });
+
   it("falls back from corrupt settings and can reset persisted state", () => {
     const storage = new MemoryStorage();
     storage.setItem("zhimai.agent-settings.v1", "not-json");
@@ -85,8 +96,9 @@ describe("LocalAgentSettingsStore", () => {
 
     store.selectPreset("quick");
     expect(store.reset()).toEqual({
-      version: 1,
+      version: 2,
       profile: "standard",
+      authorizationMode: "standard",
       savePrivatePayload: false,
       updatedAt: 0,
     });
@@ -103,5 +115,41 @@ describe("LocalAgentSettingsStore", () => {
     });
     store.selectPreset("deep");
     expect(store.load().savePrivatePayload).toBe(true);
+  });
+
+  it("migrates v1 settings to v2 with standard authorization", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(
+      "zhimai.agent-settings.v1",
+      JSON.stringify({
+        version: 1,
+        profile: "deep",
+        savePrivatePayload: true,
+        updatedAt: 12,
+      }),
+    );
+    const store = new LocalAgentSettingsStore({ storage, now: () => 34 });
+
+    expect(store.load()).toMatchObject({
+      version: 2,
+      profile: "deep",
+      authorizationMode: "standard",
+      savePrivatePayload: true,
+      updatedAt: 12,
+    });
+    expect(storage.getItem("zhimai.agent-settings.v1")).toBeNull();
+    expect(storage.getItem("zhimai.agent-settings.v2")).not.toBeNull();
+  });
+
+  it("stores authorization independently from the run budget", () => {
+    const storage = new MemoryStorage();
+    const store = new LocalAgentSettingsStore({ storage, now: () => 99 });
+    store.selectPreset("quick");
+
+    expect(store.setAuthorizationMode("cautious")).toMatchObject({
+      profile: "quick",
+      authorizationMode: "cautious",
+      updatedAt: 99,
+    });
   });
 });

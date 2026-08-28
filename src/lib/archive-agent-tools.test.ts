@@ -45,6 +45,7 @@ describe("archiveAgentToolRegistry", () => {
       },
     );
     expect(assistantGuide).toContain("propose_archive_mutations");
+    expect(assistantGuide).toContain("migrate_collection_members");
     expect(assistantGuide).toContain("propose_person_deletion");
     expect(assistantGuide).toContain("原子删除计划");
     expect(assistantGuide).not.toContain("stage_person_update");

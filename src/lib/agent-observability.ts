@@ -1,5 +1,9 @@
 import type { AgentRun, AgentRunEvent } from "./agent-run-log";
-import { LocalAgentRunStore, type StoredAgentRun } from "./agent-run-store";
+import {
+  LocalAgentRunStore,
+  sanitizeAgentRunSnapshot,
+  type StoredAgentRun,
+} from "./agent-run-store";
 import type { AgentBudget, AgentBudgetPreset } from "./agent-runtime";
 import { resolveAgentBudget } from "./agent-runtime";
 import { LocalAgentSettingsStore } from "./agent-settings";
@@ -12,8 +16,7 @@ export function resolveSavedAgentBudget(
 ): AgentBudget {
   try {
     const store = new LocalAgentSettingsStore();
-    const settings = store.load();
-    return settings.updatedAt === 0 ? resolveAgentBudget(fallback) : store.resolveBudget(settings);
+    return store.resolveBudget(store.load());
   } catch {
     return resolveAgentBudget(fallback);
   }
@@ -44,9 +47,10 @@ export function saveAgentRunBestEffort(
     };
   } catch (error) {
     const now = Date.now();
+    const sanitized = sanitizeAgentRunSnapshot(run, events, privatePayload);
     volatileRuns.unshift({
-      run,
-      events: [...events],
+      run: sanitized.run,
+      events: sanitized.events,
       privatePayload,
       createdAt: now,
       updatedAt: now,

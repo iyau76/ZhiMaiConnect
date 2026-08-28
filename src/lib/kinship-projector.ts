@@ -1,5 +1,5 @@
 import {
-  inferRelationSemantics,
+  resolveRelationSemantics,
   relationshipProjectionKey,
   type RelationPredicate,
   type RelationQualifiers,
@@ -89,11 +89,11 @@ function isLegacyDerived(relation: RelationshipAssertionInput) {
 }
 
 function canonicalize(relation: RelationshipAssertionInput): CanonicalAssertion {
-  const inferred = inferRelationSemantics(relation.label);
+  const semantics = resolveRelationSemantics(relation);
   return {
     ...relation,
-    predicate: relation.predicate ?? inferred.predicate,
-    qualifiers: relation.qualifiers ?? inferred.qualifiers,
+    predicate: semantics.predicate,
+    qualifiers: semantics.qualifiers,
   };
 }
 
@@ -233,6 +233,11 @@ export function projectKinshipRelations(options: {
       genderById.set(edge.fromId, "male");
     if (role === "mother" && genderById.get(edge.fromId) === "unknown")
       genderById.set(edge.fromId, "female");
+    const childRole = edge.qualifiers.childRole;
+    if (childRole === "son" && genderById.get(edge.toId) === "unknown")
+      genderById.set(edge.toId, "male");
+    if (childRole === "daughter" && genderById.get(edge.toId) === "unknown")
+      genderById.set(edge.toId, "female");
   }
 
   // Shared explicit parents -> one current sibling projection per child pair.

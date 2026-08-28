@@ -1,5 +1,5 @@
 import { Gauge, History, ShieldAlert, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { AgentRunInspector } from "@/components/agent-run-inspector";
@@ -7,16 +7,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { AgentRun } from "@/lib/agent-run-log";
 import { LocalAgentRunStore, type StoredAgentRunSummary } from "@/lib/agent-run-store";
-import { AGENT_BUDGET_PRESETS, type AgentBudget } from "@/lib/agent-runtime";
-import { LocalAgentSettingsStore, type AgentSettings } from "@/lib/agent-settings";
+import type { AgentBudget } from "@/lib/agent-runtime";
+import {
+  LocalAgentSettingsStore,
+  resolveAgentSettingsBudget,
+  type AgentAuthorizationMode,
+  type AgentSettings,
+} from "@/lib/agent-settings";
 
 interface AgentControlCenterProps {
   latestRun?: AgentRun | null;
 }
 
 const FALLBACK_SETTINGS: AgentSettings = {
-  version: 1,
+  version: 2,
   profile: "standard",
+  authorizationMode: "standard",
   savePrivatePayload: false,
   updatedAt: 0,
 };
@@ -39,18 +45,10 @@ function safeRunSummaries() {
 
 export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
   const [settings, setSettings] = useState<AgentSettings>(safeSettings);
-  const initialBudget = useMemo(
-    () =>
-      settings.profile === "custom" && settings.customBudget
-        ? settings.customBudget
-        : { ...AGENT_BUDGET_PRESETS.standard },
-    // The initial form is deliberately not reset when a preset button is clicked.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
-  const [custom, setCustom] = useState<AgentBudget>(initialBudget);
+  const [budgetSaveStatus, setBudgetSaveStatus] = useState("已保存");
   const [summaries, setSummaries] = useState<StoredAgentRunSummary[]>(safeRunSummaries);
   const [selectedRun, setSelectedRun] = useState<AgentRun | null>(latestRun ?? null);
+  const budget = resolveAgentSettingsBudget(settings);
 
   useEffect(() => {
     if (!latestRun) return;
@@ -62,18 +60,20 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
     try {
       const store = new LocalAgentSettingsStore();
       setSettings(store.selectPreset(profile));
-      setCustom({ ...AGENT_BUDGET_PRESETS[profile] });
+      setBudgetSaveStatus("已保存");
       toast.success(`Agent 预算已切换为 ${profile}`);
     } catch {
       toast.error("浏览器设置存储不可用；本轮仍可使用默认预算");
     }
   };
 
-  const saveCustom = () => {
+  const updateBudgetField = (key: keyof AgentBudget, value: number) => {
     try {
-      setSettings(new LocalAgentSettingsStore().saveCustomBudget(custom));
-      toast.success("自定义 Agent 预算已保存");
+      const next = { ...budget, [key]: value };
+      setSettings(new LocalAgentSettingsStore().saveCustomBudget(next));
+      setBudgetSaveStatus("已自动保存");
     } catch (error) {
+      setBudgetSaveStatus("保存失败");
       toast.error(error instanceof Error ? error.message : "预算格式无效");
     }
   };
@@ -83,6 +83,15 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
       setSettings(new LocalAgentSettingsStore().setSavePrivatePayload(enabled));
     } catch {
       toast.error("无法保存日志隐私设置");
+    }
+  };
+
+  const chooseAuthorization = (mode: AgentAuthorizationMode) => {
+    try {
+      setSettings(new LocalAgentSettingsStore().setAuthorizationMode(mode));
+      toast.success(mode === "cautious" ? "已切换为逐份签字" : "已切换为汇总签字");
+    } catch {
+      toast.error("无法保存授权设置");
     }
   };
 
@@ -113,12 +122,12 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
         type="number"
         min={minimum}
         step={step}
-        value={custom[key]}
+        value={budget[key]}
         onChange={(event) =>
-          setCustom((previous) => ({
-            ...previous,
-            [key]: Math.max(minimum, Math.floor(Number(event.target.value) || minimum)),
-          }))
+          updateBudgetField(
+            key,
+            Math.max(minimum, Math.floor(Number(event.target.value) || minimum)),
+          )
         }
         className="h-8 text-xs"
       />
@@ -129,35 +138,71 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
     <details className="rounded-xl border border-border bg-card/45">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-sm font-medium">
         <Gauge className="size-4 text-primary" aria-hidden />
-        Agent 运行预算与日志
+        Agent 控制中心
         <span className="ml-auto text-[11px] font-normal text-muted-foreground">
-          {settings.profile} · 最多{" "}
-          {settings.profile === "custom"
-            ? custom.maxRounds
-            : AGENT_BUDGET_PRESETS[settings.profile].maxRounds}{" "}
-          轮
+          {settings.profile} · 最多 {budget.maxRounds} 轮
         </span>
       </summary>
 
       <div className="space-y-4 border-t border-border px-3 py-3">
+        <section className="space-y-2" aria-labelledby="agent-authorization-heading">
+          <h3 id="agent-authorization-heading" className="text-xs font-semibold">
+            档案写入授权
+          </h3>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Button
+              type="button"
+              variant={settings.authorizationMode === "cautious" ? "default" : "outline"}
+              size="sm"
+              onClick={() => chooseAuthorization("cautious")}
+            >
+              谨慎 · 每份签字
+            </Button>
+            <Button
+              type="button"
+              variant={settings.authorizationMode === "standard" ? "default" : "outline"}
+              size="sm"
+              onClick={() => chooseAuthorization("standard")}
+            >
+              标准 · 汇总签字
+            </Button>
+            <Button
+              type="button"
+              variant={settings.authorizationMode === "full" ? "default" : "outline"}
+              size="sm"
+              onClick={() => chooseAuthorization("full")}
+            >
+              全权 · 自动提交
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            授权只改变签字时机；全权模式会自动提交非删除提案。校验、原子事务、收据和撤销始终生效，删除人物始终单独确认。
+          </p>
+        </section>
+
         <section className="space-y-2" aria-labelledby="agent-budget-heading">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 id="agent-budget-heading" className="text-xs font-semibold">
               预算上限
             </h3>
-            <div className="flex gap-1">
-              {(["quick", "standard", "deep"] as const).map((profile) => (
-                <Button
-                  key={profile}
-                  type="button"
-                  variant={settings.profile === profile ? "default" : "outline"}
-                  size="sm"
-                  className="h-7 px-2 text-[11px]"
-                  onClick={() => choosePreset(profile)}
-                >
-                  {profile}
-                </Button>
-              ))}
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-muted-foreground" role="status">
+                {budgetSaveStatus}
+              </span>
+              <div className="flex gap-1">
+                {(["quick", "standard", "deep"] as const).map((profile) => (
+                  <Button
+                    key={profile}
+                    type="button"
+                    variant={settings.profile === profile ? "default" : "outline"}
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() => choosePreset(profile)}
+                  >
+                    {profile}
+                  </Button>
+                ))}
+              </div>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
@@ -167,9 +212,9 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
             {numberField("maxOutputTokens", "输出 token", 500)}
             {numberField("maxWallTimeMs", "总时限 ms", 1_000)}
           </div>
-          <Button type="button" variant="outline" size="sm" className="h-8" onClick={saveCustom}>
-            保存为自定义预算
-          </Button>
+          <p className="text-[11px] text-muted-foreground">
+            修改任一字段会切换为 custom 并立即保存。
+          </p>
         </section>
 
         <section

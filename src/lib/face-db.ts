@@ -8,8 +8,8 @@ import {
   type DerivedRelationshipRecord,
 } from "./kinship-projector";
 import {
-  inferRelationSemantics,
   relationIsSymmetric,
+  resolveRelationSemantics,
   type RelationPredicate,
   type RelationQualifiers,
 } from "./relation-ontology";
@@ -518,9 +518,7 @@ function openDb() {
           const cursor = (cursorEvent.target as IDBRequest<IDBCursorWithValue | null>).result;
           if (!cursor) return;
           const relation = cursor.value as RelationRecord;
-          const semantics = inferRelationSemantics(relation.label);
-          const predicate = relation.predicate ?? semantics.predicate;
-          const qualifiers = relation.qualifiers ?? semantics.qualifiers;
+          const { predicate, qualifiers } = resolveRelationSemantics(relation);
           const basis = relation.basis?.trim();
           const legacyDerived =
             relation.recordType === "derived" ||
@@ -688,9 +686,7 @@ function assertionFromRelationView(relation: RelationRecord): RelationAssertionR
   if (relation.recordType === "derived" || relation.evidenceMode === "inferred") {
     throw new Error("派生关系是可重建投影，不能作为事实写入；请修改它所依据的事实关系");
   }
-  const semantics = inferRelationSemantics(relation.label);
-  const predicate = relation.predicate ?? semantics.predicate;
-  const qualifiers = relation.qualifiers ?? semantics.qualifiers;
+  const { predicate, qualifiers } = resolveRelationSemantics(relation);
   const updatedAt = relation.updatedAt ?? relation.createdAt;
   return {
     id: relation.id,

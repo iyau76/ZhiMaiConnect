@@ -15,7 +15,7 @@ import type {
   PersonRecord,
   RelationRecord,
 } from "./face-db";
-import { rankCandidates, taskSafetyNotice } from "./recommendation";
+import { rankCandidates, rankCapabilityCandidates, taskSafetyNotice } from "./recommendation";
 import { callWebTool } from "./web-tools-client";
 
 export interface ArchiveAgentData {
@@ -60,7 +60,6 @@ export function compactArchivePerson(person: PersonRecord) {
     name: cleanArchiveText(person.name, 80),
     entityRole: person.entityRole ?? "contact",
     relation: cleanArchiveText(profile.relation, 80),
-    circle: cleanArchiveText(profile.circle, 60),
     title: cleanArchiveText(profile.title, 100),
     org: cleanArchiveText(profile.org, 120),
     department: cleanArchiveText(profile.department, 100),
@@ -198,6 +197,15 @@ const querySchema = z
 
 const idsSchema = z
   .object({ personIds: z.array(z.string().min(1).max(200)).min(1).max(20) })
+  .strict();
+
+const recommendationCapabilitySchema = z
+  .object({
+    id: z.string().trim().min(1).max(80),
+    label: z.string().trim().min(1).max(60),
+    deliverable: z.string().trim().min(1).max(160),
+    searchTerms: z.array(z.string().trim().min(1).max(40)).min(1).max(10),
+  })
   .strict();
 
 export const archiveAgentToolRegistry = new AgentToolRegistry<ArchiveAgentServices>();
@@ -425,7 +433,7 @@ archiveAgentToolRegistry
       name: "propose_archive_mutations",
       label: "生成批量档案变更计划",
       description:
-        "把人物、事实关系、事件、圈层或删除变更组合成一个待批准计划；不会直接写库。必须先读取目标稳定 ID。delete_person 是完整的原子级联操作，会自动删除或解绑该人物关联的关系、事件、提醒、事务、项目、圈层成员和证据；删除人物时只提交一次 delete_person，不要再为其依赖追加 update_relation、update_event、organize_collection 或重复 delete_person。",
+        "把人物、事实关系、事件、圈层或删除变更组合成一个待批准计划；不会直接写库。必须先读取目标稳定 ID。跨圈迁移使用一次 migrate_collection_members 声明源圈、目标圈和选中人物；目标不存在时省略 target.collectionId，compiler 会原子地创建目标、移出源圈并加入目标圈。delete_person 是完整的原子级联操作，会自动删除或解绑该人物关联的关系、事件、提醒、事务、项目、圈层成员和证据；删除人物时只提交一次 delete_person，不要再为其依赖追加 update_relation、update_event、organize_collection 或重复 delete_person。",
       input: agentMutationRequestSchema,
       permission: "proposal",
       handler: (request, { services }) => {
@@ -512,16 +520,20 @@ archiveAgentToolRegistry
       input: z
         .object({
           task: z.string().trim().min(1).max(1_500),
+          capability: recommendationCapabilitySchema.optional(),
           limit: z.number().int().min(1).max(10).optional(),
         })
         .strict(),
       permission: "private_read",
-      handler: ({ task, limit = 5 }, { services }) => ({
-        rankingLocked: true,
-        safetyNotice: taskSafetyNotice(task),
-        rows: rankCandidates(task, services.archive.persons, services.archive.events)
-          .slice(0, limit)
-          .map((candidate) => ({
+      handler: ({ task, capability, limit = 5 }, { services }) => {
+        const candidates = capability
+          ? rankCapabilityCandidates(capability, services.archive.persons, services.archive.events)
+          : rankCandidates(task, services.archive.persons, services.archive.events);
+        return {
+          rankingLocked: true,
+          safetyNotice: taskSafetyNotice(task),
+          capability,
+          rows: candidates.slice(0, limit).map((candidate) => ({
             personId: candidate.person.id,
             personName: candidate.person.name,
             score: candidate.score,
@@ -529,9 +541,13 @@ archiveAgentToolRegistry
             reasons: candidate.reasons,
             evidence: candidate.evidence,
             risks: candidate.risks,
+            capabilityMatches: candidate.capabilityMatches,
           })),
-        note: "候选、分数和顺序由本地证据算法锁定；模型只能解释，不能调序或添加人物。",
-      }),
+          note: capability
+            ? "先在全库按槽位档案证据形成候选集合，再按证据强度与联系可行性排序；模型不能补人或调序。"
+            : "候选、分数和顺序由本地证据算法锁定；模型只能解释，不能调序或添加人物。",
+        };
+      },
     }),
   )
   .register(

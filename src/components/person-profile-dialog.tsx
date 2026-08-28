@@ -33,7 +33,7 @@ import { normalizeCloseness } from "@/lib/person-profile";
 import { askModel } from "@/lib/vision-client";
 import type { ProviderPreset } from "@/lib/vision-providers";
 import { t } from "@/lib/i18n";
-import { PRESET_TAGS, autoTagsOf } from "@/lib/circle-tags";
+import { PRESET_TAGS } from "@/lib/circle-tags";
 
 interface Props {
   person: PersonRecord | null;
@@ -176,12 +176,11 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
     }
   };
 
-  /** 标签分组：手填的标签 + 从档案文字自动识别的固定身份 */
+  /** 标签只展示已经由用户确认的值；AI 整理结果仍要在保存前签字。 */
   const manualTags = (profile.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
-  const autoTags = autoTagsOf({ ...(person ?? ({} as PersonRecord)), note, profile });
-  const allTags = [...new Set([...manualTags, ...autoTags])];
+  const allTags = [...new Set(manualTags)];
 
-  /** 点一下加/去标签；自动识别出来的取消后写入排除，不再显示 */
+  /** 点一下加/去标签。 */
   const toggleTag = (label: string) => {
     setProfile((prev) => {
       const list = (prev.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
@@ -415,19 +414,17 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
               )}
             </div>
             <p className="text-[11px] text-muted-foreground">
-              {t("固定身份（同学、同事、老师、亲戚等）会自动识别；朋友这类会变的关系需要自己点。")}
+              {t("这里只使用你确认过的标签；AI 整理出的标签会在保存前供你检查。")}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {PRESET_TAGS.map((raw) => {
                 const label = t(raw);
-                const auto = autoTags.includes(label);
-                const on = manualTags.includes(label) || auto;
+                const on = manualTags.includes(label);
                 return (
                   <button
                     key={raw}
                     type="button"
                     onClick={() => toggleTag(label)}
-                    title={auto ? t("自动识别") : undefined}
                     className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
                       on
                         ? "border-primary bg-primary/10 text-foreground"
@@ -435,7 +432,6 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
                     }`}
                   >
                     {label}
-                    {auto && <span className="ml-1 text-primary">·{t("自动")}</span>}
                   </button>
                 );
               })}

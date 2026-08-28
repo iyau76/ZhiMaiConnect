@@ -4,12 +4,6 @@ import { relationEvidenceMode } from "./relation-graph";
 
 const DAY = 86_400_000;
 
-export interface TargetIntent {
-  mode: "open" | "target" | "ambiguous";
-  matches: PersonRecord[];
-  target?: PersonRecord;
-}
-
 export interface ConnectionPathOptions {
   persons: PersonRecord[];
   relations: RelationRecord[];
@@ -112,41 +106,24 @@ function normalized(value: string) {
   return value.toLowerCase().replace(/[\s·•._-]+/g, "");
 }
 
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function aliases(person: PersonRecord) {
   return [person.name, ...(person.profile?.identities ?? []).map((identity) => identity.alias)]
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
-/** 只把档案中真实出现的人名当目标；多人同时命中时交给用户选择。 */
-export function detectTargetIntent(task: string, persons: PersonRecord[]): TargetIntent {
+/**
+ * 只召回问题中逐字出现的档案人物；不在本地猜测这些人物是不是任务目标。
+ * 目标/开放任务/歧义属于语言理解，由模型声明，本地只校验稳定 ID。
+ */
+export function mentionedArchivePeople(task: string, persons: PersonRecord[]): PersonRecord[] {
   const compactTask = normalized(task);
-  const matches = persons.filter(
+  return persons.filter(
     (person) =>
       person.entityRole !== "ego" &&
       !["我", "me"].includes(person.name.trim().toLowerCase()) &&
       aliases(person).some((alias) => compactTask.includes(normalized(alias))),
   );
-  if (!matches.length) return { mode: "open", matches: [] };
-
-  const targetTerms = /找|联系|接触|拜访|请教|引荐|介绍|通过谁|办事|约到|牵线/;
-  const targeted = matches.filter((person) =>
-    aliases(person).some((alias) => {
-      const escaped = escapeRegExp(normalized(alias));
-      return new RegExp(
-        `(?:找|联系|接触|拜访|请教|引荐|介绍|约到|牵线).{0,12}${escaped}|${escaped}.{0,12}(?:联系|办事|引荐|介绍|牵线)`,
-      ).test(compactTask);
-    }),
-  );
-  const candidates = targeted.length ? targeted : targetTerms.test(compactTask) ? matches : [];
-  if (candidates.length === 1)
-    return { mode: "target", matches: candidates, target: candidates[0] };
-  if (candidates.length > 1) return { mode: "ambiguous", matches: candidates };
-  return { mode: "open", matches };
 }
 
 function eventAt(event?: LifeEventRecord) {

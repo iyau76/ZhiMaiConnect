@@ -44,6 +44,7 @@ import {
 } from "@/lib/face-db";
 import { matchIdentity } from "@/lib/identity-match";
 import { getLang, t } from "@/lib/i18n";
+import { isSelfReference, SELF_PERSON_ID } from "@/lib/person-identity";
 import { carryManualState } from "@/lib/intake-manual-state";
 import {
   enforceSensitiveFieldGrounding,
@@ -91,8 +92,6 @@ import { runIntakeAgent, type IntakePromptSections } from "@/lib/intake-agent";
 import type { AgentRun } from "@/lib/agent-run-log";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
-const SELF_PERSON_ID = "zhimai:self";
-
 /** 一个人物档案里希望齐全的字段 */
 const REQUIRED: Array<{ key: keyof DraftPerson; zh: string; en: string }> = [
   { key: "relation", zh: "和我的关系", en: "relationship to me" },
@@ -120,7 +119,12 @@ function withIdentityDecision(person: DraftPerson, persons: PersonRecord[]): Dra
     person.targetPersonId !== CREATE_NEW_PERSON &&
     persons.some((existing) => existing.id === person.targetPersonId)
   ) {
-    return { ...person, _identityChecked: true };
+    return {
+      ...person,
+      _identityCandidateIds: [person.targetPersonId],
+      _identityReason: person._identityReason,
+      _identityChecked: true,
+    };
   }
   const result = matchIdentity(
     {
@@ -1363,9 +1367,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         if (key) draftNameBuckets.set(key, [...(draftNameBuckets.get(key) ?? []), person]);
       }
       const draftIds = new Set((commitDraft.people ?? []).map((person) => person._draftId));
-      const ambiguousReference = (name: string, draftId?: string) => {
+      const ambiguousReference = (name: string, draftId?: string, personId?: string) => {
         const key = name.trim();
-        if (!key || key === "我" || key.toLowerCase() === "me") return false;
+        if (!key || isSelfReference(key)) return false;
+        if (personId && byId.has(personId)) return false;
         if (draftId && draftIds.has(draftId)) return false;
         const draftMatches = draftNameBuckets.get(key) ?? [];
         if (draftMatches.length) return draftMatches.length !== 1;
@@ -1373,19 +1378,27 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       };
       const ambiguous = [
         ...(commitDraft.facts ?? []).flatMap((fact) =>
-          ambiguousReference(fact.person, fact.personDraftId) ? [`事实：${fact.person}`] : [],
+          ambiguousReference(fact.person, fact.personDraftId, fact.personId)
+            ? [`事实：${fact.person}`]
+            : [],
         ),
         ...(commitDraft.relations ?? []).flatMap((relation) => [
-          ...(ambiguousReference(relation.from, relation.fromDraftId)
+          ...(ambiguousReference(relation.from, relation.fromDraftId, relation.fromPersonId)
             ? [`关系起点：${relation.from}`]
             : []),
-          ...(ambiguousReference(relation.to, relation.toDraftId)
+          ...(ambiguousReference(relation.to, relation.toDraftId, relation.toPersonId)
             ? [`关系终点：${relation.to}`]
             : []),
         ]),
         ...(commitDraft.events ?? []).flatMap((event) =>
           (event.people ?? [])
-            .filter((name, index) => ambiguousReference(name, event.peopleDraftIds?.[index]))
+            .filter((name, index) =>
+              ambiguousReference(
+                name,
+                event.peopleDraftIds?.[index],
+                event.peoplePersonIds?.[index],
+              ),
+            )
             .map((name) => `事件：${name}`),
         ),
         ...(commitDraft.reminders ?? []).flatMap((reminder) =>
@@ -1407,13 +1420,15 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       };
       const resolvePersonName = (name: string) => {
         const key = name.trim();
-        if (key === "我" || key.toLowerCase() === "me") return byId.get(SELF_PERSON_ID);
+        if (isSelfReference(key)) return byId.get(SELF_PERSON_ID);
         if (resolvedDraftNames.has(key)) return resolvedDraftNames.get(key) ?? undefined;
         const matches = exactNameBuckets.get(key) ?? [];
         return matches.length === 1 ? matches[0] : undefined;
       };
-      const resolvePersonRef = (name: string, draftId?: string) =>
-        (draftId ? resolvedDraftIds.get(draftId) : undefined) ?? resolvePersonName(name);
+      const resolvePersonRef = (name: string, draftId?: string, personId?: string) =>
+        (personId ? byId.get(personId) : undefined) ??
+        (draftId ? resolvedDraftIds.get(draftId) : undefined) ??
+        resolvePersonName(name);
       let created = 0;
       let updated = 0;
 
@@ -1423,7 +1438,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         ...(commitDraft.relations ?? []).flatMap((item) => [item.from, item.to]),
         ...(commitDraft.events ?? []).flatMap((item) => item.people ?? []),
         ...(commitDraft.reminders ?? []).flatMap((item) => item.people ?? []),
-      ].some((name) => name.trim() === "我" || name.trim().toLowerCase() === "me");
+      ].some(isSelfReference);
       if (referencesSelf && !byId.has(SELF_PERSON_ID)) {
         const self: PersonRecord = {
           id: SELF_PERSON_ID,
@@ -1513,7 +1528,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           Object.entries(profileValues).filter(([, value]) => value !== undefined),
         ) as NonNullable<PersonRecord["profile"]>;
 
-        if (name === "我" || name.toLowerCase() === "me") {
+        if (isSelfReference(name)) {
           const self = byId.get(SELF_PERSON_ID);
           if (!self) throw new Error("本人关系锚点创建失败");
           const record: PersonRecord = {
@@ -1641,7 +1656,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       for (const item of commitDraft.facts ?? []) {
         const key = item.key?.trim();
         const value = item.value?.trim();
-        const person = resolvePersonRef(item.person ?? "", item.personDraftId);
+        const person = resolvePersonRef(item.person ?? "", item.personDraftId, item.personId);
         if (!key || !value) continue;
         if (!person) throw new Error(`${t("事实关联人物无法唯一确定")}：${item.person}`);
         if (
@@ -1728,8 +1743,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       );
       const relationDrafts = [...(commitDraft.relations ?? [])];
       for (const item of relationDrafts) {
-        const a = resolvePersonRef(item.from ?? "", item.fromDraftId);
-        const b = resolvePersonRef(item.to ?? "", item.toDraftId);
+        const a = resolvePersonRef(item.from ?? "", item.fromDraftId, item.fromPersonId);
+        const b = resolvePersonRef(item.to ?? "", item.toDraftId, item.toPersonId);
         if (!a || !b) throw new Error(`关系端点无法确定：${item.from} → ${item.to}`);
         if (a.id === b.id) throw new Error(`关系不能连接同一人物：${item.from}`);
         const now = Date.now();
@@ -1823,7 +1838,14 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           personIds:
             item.people !== undefined
               ? item.people
-                  .map((name, index) => resolvePersonRef(name, item.peopleDraftIds?.[index])?.id)
+                  .map(
+                    (name, index) =>
+                      resolvePersonRef(
+                        name,
+                        item.peopleDraftIds?.[index],
+                        item.peoplePersonIds?.[index],
+                      )?.id,
+                  )
                   .filter((id): id is string => Boolean(id))
               : previous?.personIds,
           kind: item.kind !== undefined ? item.kind || undefined : previous?.kind,
@@ -1859,7 +1881,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           detail: item.detail || undefined,
           due: item.due || undefined,
           personIds: (item.people ?? [])
-            .map((name, index) => resolvePersonRef(name, item.peopleDraftIds?.[index])?.id)
+            .map(
+              (name, index) =>
+                resolvePersonRef(name, item.peopleDraftIds?.[index], item.peoplePersonIds?.[index])
+                  ?.id,
+            )
             .filter((id): id is string => Boolean(id)),
           kind,
           done: false,
@@ -2792,7 +2818,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     name={relation.from ?? ""}
                     draftId={relation.fromDraftId}
                     people={draft.people ?? []}
-                    onChange={(from, fromDraftId) => patchRelation(index, { from, fromDraftId })}
+                    onChange={(from, fromDraftId) =>
+                      patchRelation(index, { from, fromDraftId, fromPersonId: undefined })
+                    }
                     className="h-8 w-28 text-xs"
                     placeholder={t("谁")}
                   />
@@ -2808,7 +2836,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     name={relation.to ?? ""}
                     draftId={relation.toDraftId}
                     people={draft.people ?? []}
-                    onChange={(to, toDraftId) => patchRelation(index, { to, toDraftId })}
+                    onChange={(to, toDraftId) =>
+                      patchRelation(index, { to, toDraftId, toPersonId: undefined })
+                    }
                     className="h-8 w-28 text-xs"
                     placeholder={t("对谁")}
                   />
@@ -2997,6 +3027,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                             .map((name) => name.trim())
                             .filter(Boolean),
                           peopleDraftIds: undefined,
+                          peoplePersonIds: undefined,
                         })
                       }
                       className="h-8 text-xs"
@@ -3006,7 +3037,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                       names={item.people ?? []}
                       draftIds={item.peopleDraftIds}
                       people={draft.people ?? []}
-                      onChange={(peopleDraftIds) => patchEvent(index, { peopleDraftIds })}
+                      onChange={(peopleDraftIds) =>
+                        patchEvent(index, { peopleDraftIds, peoplePersonIds: undefined })
+                      }
                     />
                   </div>
                   <Input

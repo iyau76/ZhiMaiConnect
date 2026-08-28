@@ -130,6 +130,9 @@ export interface IngestRelation extends IngestAuditFields {
   /** Stable client-side endpoint references used when multiple people share a name. */
   fromDraftId?: string;
   toDraftId?: string;
+  /** Existing archive endpoints selected by the typed intake compiler. */
+  fromPersonId?: string;
+  toPersonId?: string;
 }
 
 export interface IngestFact extends IngestAuditFields {
@@ -140,6 +143,8 @@ export interface IngestFact extends IngestAuditFields {
   validTo?: string;
   /** Stable client-side person reference; never accepted from the model. */
   personDraftId?: string;
+  /** Existing archive person selected by the typed intake compiler. */
+  personId?: string;
 }
 
 export interface IngestEvidence extends IngestAuditFields {
@@ -158,6 +163,8 @@ export interface IngestEvent extends IngestAuditFields {
   place?: string;
   people?: string[];
   peopleDraftIds?: Array<string | undefined>;
+  /** Existing archive people selected by the typed intake compiler. */
+  peoplePersonIds?: Array<string | undefined>;
   kind?: string;
   /** Client-side update decision; never accepted directly from the model schema. */
   targetEventId?: string;
@@ -175,6 +182,8 @@ export interface IngestReminder extends IngestAuditFields {
   due?: string;
   people?: string[];
   peopleDraftIds?: Array<string | undefined>;
+  /** Existing archive people selected by the typed intake compiler. */
+  peoplePersonIds?: Array<string | undefined>;
   kind?: "birthday" | "festival" | "gift" | "custom";
 }
 

@@ -157,6 +157,115 @@ describe("createAgentMutationPlan", () => {
     );
   });
 
+  it("compiles repeated edits to one collection into one atomic membership operation", () => {
+    const result = createAgentMutationPlan(
+      {
+        title: "重整亲戚圈层",
+        reason: "将虚构人物迁出并加入现实亲属",
+        operations: [
+          {
+            kind: "organize_collection",
+            collectionId: "collection-relatives",
+            reason: "移出唐悦",
+            replacement: { name: "亲戚", kind: "relationship_circle" },
+            removePersonIds: ["tang"],
+          },
+          {
+            kind: "organize_collection",
+            collectionId: "collection-relatives",
+            reason: "加入周宁",
+            replacement: { name: "亲戚", kind: "relationship_circle" },
+            addPersonIds: ["zhou"],
+          },
+        ],
+      },
+      snapshot(),
+    );
+
+    expect(result.plan.operations).toHaveLength(1);
+    expect(result.plan.operations[0]).toMatchObject({
+      kind: "organize_collection",
+      targetId: "collection-relatives",
+      memberships: expect.arrayContaining([
+        expect.objectContaining({ personId: "tang", action: "remove" }),
+        expect.objectContaining({ personId: "zhou", action: "add" }),
+      ]),
+    });
+  });
+
+  it("compiles one semantic circle migration into create, remove, and add diffs", () => {
+    const archive = snapshot();
+    archive.persons.push(person("jm", "贾母"), person("jz", "贾政"), person("real-aunt", "张姨"));
+    archive.collectionMemberships = ["jm", "jz", "real-aunt"].map((personId) => ({
+      id: `collection-relatives\u0000${personId}`,
+      collectionId: "collection-relatives",
+      personId,
+      source: "manual" as const,
+      createdAt: 1,
+    }));
+
+    const result = createAgentMutationPlan(
+      {
+        title: "把红楼梦人物迁到虚构圈层",
+        reason: "用户明确要求整理亲戚圈层",
+        operations: [
+          {
+            kind: "migrate_collection_members",
+            sourceCollectionId: "collection-relatives",
+            target: { name: "虚构", kind: "context" },
+            selectedPersonIds: ["jm", "jz"],
+            reason: "贾母和贾政是红楼梦人物，张姨保持原圈层",
+          },
+        ],
+      },
+      archive,
+      { id: "circle-migration-plan", createdAt: 10 },
+    );
+
+    expect(result.plan.operations).toHaveLength(2);
+    const source = result.plan.operations.find(
+      (operation) =>
+        operation.kind === "organize_collection" && operation.targetId === "collection-relatives",
+    );
+    const target = result.plan.operations.find(
+      (operation) =>
+        operation.kind === "organize_collection" && operation.targetId !== "collection-relatives",
+    );
+    expect(source).toMatchObject({
+      kind: "organize_collection",
+      replacement: { name: "亲戚" },
+      memberships: [
+        expect.objectContaining({ personId: "jm", action: "remove" }),
+        expect.objectContaining({ personId: "jz", action: "remove" }),
+      ],
+    });
+    expect(target).toMatchObject({
+      kind: "organize_collection",
+      expectedRevision: null,
+      replacement: { name: "虚构", kind: "context" },
+      memberships: [
+        expect.objectContaining({ personId: "jm", action: "add" }),
+        expect.objectContaining({ personId: "jz", action: "add" }),
+      ],
+    });
+    expect(result.diff).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ targetId: "collection-relatives\u0000jm", after: "移出圈层" }),
+        expect.objectContaining({ targetId: "collection-relatives\u0000jz", after: "移出圈层" }),
+        expect.objectContaining({ field: "collection.name", after: "虚构" }),
+        expect.objectContaining({
+          targetId: expect.stringContaining("\u0000jm"),
+          after: "加入圈层",
+        }),
+        expect.objectContaining({
+          targetId: expect.stringContaining("\u0000jz"),
+          after: "加入圈层",
+        }),
+      ]),
+    );
+    expect(result.diff.some((row) => row.targetId.endsWith("\u0000real-aunt"))).toBe(false);
+  });
+
   it("coordinates shared dependencies when an agent proposes deleting several people", () => {
     const result = createAgentMutationPlan(
       {

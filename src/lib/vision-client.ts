@@ -2,6 +2,7 @@ import { assertVision, type ChatTurn, type ProviderPreset } from "./vision-provi
 import { confirmCloudTransfer, type CloudDataType } from "./cloud-consent";
 import { apiSessionHeaders } from "./api-session";
 import { assertVisionPromptFits, fitVisionHistory } from "./ai-request-contract";
+import { ModelTransportError } from "./model-transport-resilience";
 
 function stripDataUrl(dataUrl: string) {
   const idx = dataUrl.indexOf(",");
@@ -40,7 +41,10 @@ async function streamOllama(
   });
 
   if (!response.ok) {
-    throw new Error(`Ollama 返回 ${response.status}：${(await response.text()).slice(0, 300)}`);
+    throw new ModelTransportError(
+      `Ollama 返回 ${response.status}：${(await response.text()).slice(0, 300)}`,
+      response.status,
+    );
   }
   if (!response.body) throw new Error("Ollama 没有返回内容");
 
@@ -94,22 +98,29 @@ async function streamServer(
 
   if (!response.ok) {
     let message = `请求失败（${response.status}）`;
+    let code: string | undefined;
     try {
-      const json = (await response.json()) as { error?: string };
+      const json = (await response.json()) as { error?: string; code?: string };
       if (json.error) message = json.error;
+      code = json.code;
     } catch {
       /* 保留默认信息 */
     }
-    throw new Error(message);
+    throw new ModelTransportError(message, response.status, code);
   }
   if (!response.body) throw new Error("接口没有返回内容");
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    onChunk(decoder.decode(value, { stream: true }));
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      onChunk(decoder.decode(value, { stream: true }));
+    }
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new ModelTransportError("上游 AI 流式响应中断", 502, "STREAM_INTERRUPTED");
   }
 }
 
@@ -136,14 +147,18 @@ export async function askModel(
   options: { maxOutputTokens?: number } = {},
 ) {
   assertConfigured(preset);
-  assertVisionPromptFits(prompt);
-  const boundedHistory = fitVisionHistory(history);
+  const fittedHistory = fitVisionHistory(history);
+  const effectivePrompt = fittedHistory.summary
+    ? `${prompt}\n\n对话历史压缩说明：${fittedHistory.summary}`
+    : prompt;
+  assertVisionPromptFits(effectivePrompt);
+  const boundedHistory = fittedHistory.turns;
   // 有图就必须是验证过的多模态模型，避免拿纯文本模型瞎分析
   if (image || boundedHistory.some((turn) => turn.image)) assertVision(preset);
   if (preset.kind === "ollama") {
     return streamOllama(
       preset,
-      prompt,
+      effectivePrompt,
       image,
       boundedHistory,
       onChunk,
@@ -157,7 +172,7 @@ export async function askModel(
   confirmCloudTransfer(preset, dataTypes);
   return streamServer(
     preset,
-    prompt,
+    effectivePrompt,
     image,
     boundedHistory,
     onChunk,

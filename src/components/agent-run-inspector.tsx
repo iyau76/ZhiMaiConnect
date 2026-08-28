@@ -79,6 +79,10 @@ const RUN_STATUS: Record<AgentRunStatus, { label: string; className: string }> =
     label: "完成",
     className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
   },
+  suspended: {
+    label: "已暂停，可继续",
+    className: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  },
   failed: { label: "失败", className: "bg-destructive/10 text-destructive" },
   cancelled: { label: "已取消", className: "bg-muted text-muted-foreground" },
   budget_exceeded: {

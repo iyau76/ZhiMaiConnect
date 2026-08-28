@@ -15,9 +15,35 @@ describe("agent observability fallbacks", () => {
   });
 
   it("keeps a run in memory when persistent storage is unavailable", () => {
-    const run = { id: "run-1", status: "completed" as const, steps: [] };
-    const result = saveAgentRunBestEffort(run, []);
+    const run = {
+      id: "run-1",
+      title: "私人标题",
+      status: "completed" as const,
+      steps: [
+        {
+          id: "step-1",
+          kind: "model" as const,
+          input: { prompt: "私人问题" },
+        },
+      ],
+    };
+    const events = [
+      {
+        id: "run-1:1",
+        runId: "run-1",
+        sequence: 1,
+        at: 1,
+        kind: "model_request" as const,
+        status: "started" as const,
+        payload: { prompt: "私人问题" },
+      },
+    ];
+    const result = saveAgentRunBestEffort(run, events);
     expect(result.stored).toBe(false);
-    expect(listVolatileAgentRuns().map((entry) => entry.run.id)).toEqual(["run-1"]);
+    const [entry] = listVolatileAgentRuns();
+    expect(entry.run.id).toBe("run-1");
+    expect(JSON.stringify(entry)).not.toContain("私人问题");
+    expect(entry.run.title).toBe("[PRIVATE_PAYLOAD_HIDDEN]");
+    expect(entry.events[0]?.payload).toBe("[PRIVATE_PAYLOAD_HIDDEN]");
   });
 });

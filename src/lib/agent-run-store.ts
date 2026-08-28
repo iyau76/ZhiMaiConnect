@@ -93,6 +93,13 @@ function sanitizeStep(step: AgentStep, privatePayload: boolean): AgentStep {
     message: baseline.message === undefined ? undefined : PRIVATE_PAYLOAD_HIDDEN,
     input: baseline.input === undefined ? undefined : PRIVATE_PAYLOAD_HIDDEN,
     output: baseline.output === undefined ? undefined : PRIVATE_PAYLOAD_HIDDEN,
+    validation:
+      baseline.validation === undefined
+        ? undefined
+        : {
+            ...baseline.validation,
+            output: baseline.validation.output === undefined ? undefined : PRIVATE_PAYLOAD_HIDDEN,
+          },
   };
 }
 
@@ -115,6 +122,18 @@ function sanitizeEvent(event: AgentRunEvent, privatePayload: boolean): AgentRunE
         : privatePayload
           ? redactAgentPayload(event.payload)
           : PRIVATE_PAYLOAD_HIDDEN,
+  };
+}
+
+/** Shared privacy boundary for durable storage and its in-memory fallback. */
+export function sanitizeAgentRunSnapshot(
+  run: AgentRun,
+  events: readonly AgentRunEvent[],
+  privatePayload = false,
+) {
+  return {
+    run: sanitizeRun(run, privatePayload),
+    events: events.map((event) => sanitizeEvent(event, privatePayload)),
   };
 }
 
@@ -193,9 +212,10 @@ export class LocalAgentRunStore {
     const now = this.now();
     const current = this.readEnvelope();
     const existing = current.runs.find((entry) => entry.run.id === run.id);
+    const sanitized = sanitizeAgentRunSnapshot(run, events, privatePayload);
     const stored: StoredAgentRun = {
-      run: sanitizeRun(run, privatePayload),
-      events: events.map((event) => sanitizeEvent(event, privatePayload)),
+      run: sanitized.run,
+      events: sanitized.events,
       privatePayload,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
