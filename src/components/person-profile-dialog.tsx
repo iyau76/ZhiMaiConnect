@@ -22,7 +22,14 @@ import {
 } from "@/lib/card-template";
 import { PhotoNotes } from "@/components/photo-notes";
 import { SourceBadge } from "@/components/source-badge";
-import { facesDb, type PersonProfile, type PersonRecord, type PhotoNote } from "@/lib/face-db";
+import {
+  facesDb,
+  personRecordRevision,
+  type PersonProfile,
+  type PersonRecord,
+  type PhotoNote,
+} from "@/lib/face-db";
+import { normalizeCloseness } from "@/lib/person-profile";
 import { askModel } from "@/lib/vision-client";
 import type { ProviderPreset } from "@/lib/vision-providers";
 import { t } from "@/lib/i18n";
@@ -37,7 +44,7 @@ interface Props {
 
 const EXTRACT_PROMPT = `你是个人人脉助手。用户会给你一段关于身边某个人的自由描述，请整理成 JSON。
 只输出 JSON，不要任何解释、不要代码块标记。字段如下（没有信息就省略该字段，不要编造）：
-{"age":"年龄","gender":"性别","birthday":"生日 MM-DD 或 YYYY-MM-DD","circle":"圈子：家人/亲戚/朋友/同学/同事/邻居/其它","closeness":3,"relation":"和我的关系，如大学同学","likes":["喜好1","喜好2"],"dislikes":["忌口或不喜欢"],"gifts":["以前送过的礼物"],"metAt":"在哪认识的","title":"职业/职位","org":"单位/学校","tags":["简短标签"],"contact":"联系方式","address":"常住地","note":"其它补充说明，一句话","extra":{"自定义字段名":"值"}}`;
+{"age":"年龄","gender":"性别","birthday":"生日 MM-DD 或 YYYY-MM-DD","closeness":3,"relation":"和我的关系，如大学同学","likes":["喜好1","喜好2"],"dislikes":["忌口或不喜欢"],"gifts":["以前送过的礼物"],"metAt":"在哪认识的","title":"职业/职位","org":"单位/学校","tags":["简短标签"],"contact":"联系方式","address":"常住地","note":"其它补充说明，一句话","extra":{"自定义字段名":"值"}}`;
 
 function parseJson(text: string) {
   const cleaned = text
@@ -52,11 +59,6 @@ function parseJson(text: string) {
 
 const toList = (value: unknown) =>
   Array.isArray(value) ? value.map(String).filter(Boolean) : undefined;
-
-function validCloseness(value: unknown) {
-  const numeric = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(numeric) ? Math.max(1, Math.min(5, Math.round(numeric))) : undefined;
-}
 
 export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props) {
   const [raw, setRaw] = useState("");
@@ -106,8 +108,7 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
         gender: str(parsed.gender) ?? prev.gender,
         relation: str(parsed.relation) ?? prev.relation,
         birthday: str(parsed.birthday) ?? prev.birthday,
-        circle: str(parsed.circle) ?? prev.circle,
-        closeness: validCloseness(parsed.closeness) ?? prev.closeness,
+        closeness: normalizeCloseness(parsed.closeness) ?? prev.closeness,
         likes: toList(parsed.likes) ?? prev.likes,
         dislikes: toList(parsed.dislikes) ?? prev.dislikes,
         gifts: toList(parsed.gifts) ?? prev.gifts,
@@ -140,27 +141,31 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
     if (!person) return;
     setSaving(true);
     try {
-      const latest = (await facesDb.listPersons()).find((record) => record.id === person.id);
-      if (!latest) {
-        toast.error(t("这份人物档案已被删除，无法保存"));
-        onClose();
-        return;
+      let base = person;
+      while (true) {
+        const result = await facesDb.compareAndSwapPerson(
+          {
+            ...base,
+            name: name.trim() || base.name,
+            note,
+            profile: { ...profile, closeness: normalizeCloseness(profile.closeness) },
+            rawProfileText: raw,
+            photos,
+            updatedAt: Date.now(),
+          },
+          personRecordRevision(base),
+        );
+        if (result.status === "saved") break;
+        if (result.status === "missing") {
+          toast.error(t("这份人物档案已被删除，无法保存"));
+          onClose();
+          return;
+        }
+        if (!window.confirm(t("这份档案已在其他窗口更新。仍要用当前编辑内容覆盖吗？"))) {
+          return;
+        }
+        base = result.current;
       }
-      if (
-        (latest.updatedAt ?? latest.createdAt) !== (person.updatedAt ?? person.createdAt) &&
-        !window.confirm(t("这份档案已在其他窗口更新。仍要用当前编辑内容覆盖吗？"))
-      ) {
-        return;
-      }
-      await facesDb.putPerson({
-        ...latest,
-        name: name.trim() || latest.name,
-        note,
-        profile: { ...profile, closeness: validCloseness(profile.closeness) },
-        rawProfileText: raw,
-        photos,
-        updatedAt: Date.now(),
-      });
       await onSaved();
       toast.success(t("资料已保存"));
       onClose();
@@ -250,7 +255,7 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
           <DialogTitle>{t("编辑人员资料")}</DialogTitle>
           <DialogDescription>
             {t(
-              "写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、圈子、喜好、送礼记录等字段。",
+              "写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、关系、喜好、送礼记录等字段。集合请在关系网中单独管理。",
             )}
           </DialogDescription>
         </DialogHeader>
@@ -289,7 +294,6 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
 
           <div className="grid grid-cols-2 gap-3">
             {field("birthday", t("生日（MM-DD）"))}
-            {field("circle", t("圈子"))}
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">{t("亲密度 1-5")}</Label>
               <Input
@@ -300,7 +304,9 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
                 onChange={(event) =>
                   setProfile((prev) => ({
                     ...prev,
-                    closeness: event.target.value ? validCloseness(event.target.value) : undefined,
+                    closeness: event.target.value
+                      ? normalizeCloseness(event.target.value)
+                      : undefined,
                   }))
                 }
                 className="h-8 text-xs"

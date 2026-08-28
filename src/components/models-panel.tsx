@@ -14,6 +14,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { AgentControlCenter } from "@/components/agent-control-center";
 import { Button } from "@/components/ui/button";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { Input } from "@/components/ui/input";
@@ -27,13 +28,14 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { runAssistantAgent, type AssistantAgentResult } from "@/lib/assistant-agent";
+import type { AgentRun } from "@/lib/agent-run-log";
+import {
+  applyArchiveMutationPlan,
+  type ArchiveMutationDiffRow,
+  type ArchiveMutationPlan,
+} from "@/lib/archive-mutation-plan";
 import { facesDb } from "@/lib/face-db";
 import { t } from "@/lib/i18n";
-import {
-  applyArchiveUpdateProposal,
-  archiveUpdateDiff,
-  type ArchiveUpdateProposal,
-} from "@/lib/archive-update-tool";
 import type { AgentTraceEvent } from "@/lib/recommendation-agent";
 
 import { cn } from "@/lib/utils";
@@ -74,10 +76,9 @@ export function ModelsPanel({
 
   const [busy, setBusy] = useState(false);
   const [assistantTrace, setAssistantTrace] = useState<AgentTraceEvent[]>([]);
-  const [pendingApproval, setPendingApproval] = useState<ArchiveUpdateProposal | null>(null);
-  const [approvalRows, setApprovalRows] = useState<
-    Array<{ field: string; before: string; after: string }>
-  >([]);
+  const [pendingApproval, setPendingApproval] = useState<ArchiveMutationPlan | null>(null);
+  const [approvalRows, setApprovalRows] = useState<ArchiveMutationDiffRow[]>([]);
+  const [latestAgentRun, setLatestAgentRun] = useState<AgentRun | null>(null);
   const [approving, setApproving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [auditing, setAuditing] = useState(false);
@@ -154,20 +155,25 @@ export function ModelsPanel({
     try {
       let archive: Pick<
         Parameters<typeof runAssistantAgent>[0],
-        "persons" | "relations" | "events"
+        "persons" | "relations" | "events" | "collections" | "collectionMemberships"
       > = {
         persons: [],
         relations: [],
         events: [],
+        collections: [],
+        collectionMemberships: [],
       };
       if (useData) {
         try {
-          const [persons, relations, events] = await Promise.all([
-            facesDb.listPersons(),
-            facesDb.listRelations(),
-            facesDb.listLifeEvents(),
-          ]);
-          archive = { persons, relations, events };
+          const [persons, relations, events, collections, collectionMemberships] =
+            await Promise.all([
+              facesDb.listPersons(),
+              facesDb.listRelations(),
+              facesDb.listLifeEvents(),
+              facesDb.listCollections(),
+              facesDb.listCollectionMemberships(),
+            ]);
+          archive = { persons, relations, events, collections, collectionMemberships };
         } catch {
           toast.error(t("读不到本机资料，这次按普通提问发送"));
         }
@@ -181,6 +187,7 @@ export function ModelsPanel({
         image: sentFrame,
         onTrace: (event) => setAssistantTrace((prev) => [...prev.slice(-23), event]),
       });
+      setLatestAgentRun(result.run);
       setTurns((prev) => {
         const next = [...prev];
         const last = next[next.length - 1];
@@ -188,9 +195,8 @@ export function ModelsPanel({
         return next;
       });
       if (result.pendingApproval) {
-        const approval = result.pendingApproval;
-        setPendingApproval(approval);
-        setApprovalRows(archiveUpdateDiff(approval, archive));
+        setPendingApproval(result.pendingApproval);
+        setApprovalRows(result.approvalRows ?? []);
       }
     } catch (error) {
       toast.error((error as Error).message);
@@ -213,16 +219,13 @@ export function ModelsPanel({
     if (!pendingApproval || approving) return;
     setApproving(true);
     try {
-      const isPerson = pendingApproval.tool === "update_person";
-      const updated = await applyArchiveUpdateProposal(pendingApproval);
-      toast.success(t(isPerson ? "人物档案修改已执行" : "人物关系修改已执行"));
+      const result = await applyArchiveMutationPlan(pendingApproval);
+      toast.success(t(`已原子执行 ${result.operationIds.length} 项档案变更`));
       setTurns((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: isPerson
-            ? `已按你的批准更新「${"name" in updated ? updated.name : ""}」的人物档案。`
-            : `已按你的批准更新关系「${"label" in updated ? updated.label : ""}」。`,
+          text: `已按你的批准完整执行「${pendingApproval.title}」中的 ${result.operationIds.length} 项变更。后续提问会从更新后的档案重新读取。`,
         },
       ]);
       setPendingApproval(null);
@@ -236,15 +239,12 @@ export function ModelsPanel({
 
   const rejectUpdate = () => {
     if (!pendingApproval) return;
-    const name =
-      pendingApproval.tool === "update_person"
-        ? pendingApproval.personName
-        : pendingApproval.endpointNames.join(" ↔ ");
+    const title = pendingApproval.title;
     setPendingApproval(null);
     setApprovalRows([]);
     setTurns((prev) => [
       ...prev,
-      { role: "assistant", text: `已取消对「${name}」的修改，本机档案没有发生变化。` },
+      { role: "assistant", text: `已拒绝「${title}」，本机档案没有发生变化。` },
     ]);
   };
 
@@ -448,6 +448,8 @@ export function ModelsPanel({
         </p>
       </div>
 
+      <AgentControlCenter latestRun={latestAgentRun} />
+
       {/* 问一问：可带上本机资料做人际建议 */}
       <div className="rounded-2xl border border-border bg-card/40 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -502,22 +504,12 @@ export function ModelsPanel({
           <div
             className="mt-3 rounded-xl border border-amber-500/60 bg-amber-500/10 p-3"
             role="region"
-            aria-label={t(
-              pendingApproval.tool === "update_person" ? "待批准的人物修改" : "待批准的关系修改",
-            )}
+            aria-label={t("待批准的批量档案修改")}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-medium">
-                  {t(
-                    pendingApproval.tool === "update_person"
-                      ? "AI 请求修改人物档案"
-                      : "AI 请求修改人物关系",
-                  )}
-                  ：
-                  {pendingApproval.tool === "update_person"
-                    ? pendingApproval.personName
-                    : pendingApproval.endpointNames.join(" ↔ ")}
+                  {t("AI 请求批量修改档案")}：{pendingApproval.title}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">{pendingApproval.reason}</p>
               </div>
@@ -528,12 +520,14 @@ export function ModelsPanel({
             <dl className="mt-3 space-y-2 text-xs">
               {approvalRows.map((row) => (
                 <div
-                  key={row.field}
+                  key={`${row.operationId}:${row.targetId}:${row.field}`}
                   className="grid gap-1 rounded-lg bg-background/60 p-2 md:grid-cols-[5rem_1fr_1fr]"
                 >
                   <dt className="font-medium">{row.field}</dt>
                   <dd className="text-muted-foreground line-through">{row.before}</dd>
-                  <dd className="text-foreground">{row.after}</dd>
+                  <dd className={row.destructive ? "text-destructive" : "text-foreground"}>
+                    {row.after}
+                  </dd>
                 </div>
               ))}
             </dl>
@@ -551,7 +545,7 @@ export function ModelsPanel({
                 ) : (
                   <Check className="size-3.5" aria-hidden="true" />
                 )}
-                {t("批准并执行")}
+                {t(`批准全部并执行（${pendingApproval.operations.length} 项）`)}
               </Button>
             </div>
           </div>

@@ -1,6 +1,7 @@
 import type { LifeEventRecord, RelationRecord } from "./face-db";
+import { inferRelationSemantics, relationCategoryFor } from "./relation-ontology";
 
-export type GraphViewMode = "overview" | "focus1" | "focus2" | "all";
+export type GraphViewMode = "overview" | "standard" | "all";
 export type RelationCategory = "family" | "in_law" | "work" | "school" | "friend" | "other";
 
 export interface RelationImportance {
@@ -27,6 +28,7 @@ export interface RelationVisibilityResult {
       | "outside-focus"
       | "derived-redundant"
       | "low-salience"
+      | "overview-redundant"
       | "parallel";
   }>;
   focusNodeIds: Set<string>;
@@ -38,6 +40,8 @@ export interface RelationVisibilityOptions {
   events?: LifeEventRecord[];
   mode: GraphViewMode;
   selectedId?: string | null;
+  /** Selection changes emphasis only; it never removes graph data. */
+  focusDepth?: 1 | 2;
   now?: Date;
   /** 产品校准参数集中在这里，不能伪装成论文给出的固定阈值。 */
   overviewMinScore?: number;
@@ -49,6 +53,8 @@ const EXPLICIT_BASIS = /^原文\s*[:：]|^original\s*[:：]/i;
 export function relationEvidenceMode(
   relation: RelationRecord,
 ): NonNullable<RelationRecord["evidenceMode"]> {
+  if (relation.recordType === "derived") return "inferred";
+  if (relation.recordType === "assertion") return "explicit";
   if (relation.evidenceMode) return relation.evidenceMode;
   const basis = relation.basis?.trim() ?? "";
   if (INFERRED_BASIS.test(basis)) return "inferred";
@@ -56,24 +62,16 @@ export function relationEvidenceMode(
   return "unknown";
 }
 
-export function relationCategory(relation: Pick<RelationRecord, "label" | "semanticKind">) {
-  const text = `${relation.semanticKind ?? ""} ${relation.label}`.toLowerCase();
-  if (/姻|夫妻|配偶|岳|翁媳|婆媳|妯娌|连襟|brother-in-law|sister-in-law|spouse/.test(text))
-    return "in_law" as const;
-  if (
-    /父|母|子|女|兄|弟|姐|妹|祖|孙|叔|伯|姑|舅|姨|侄|甥|堂|表|亲属|血亲|parent|child|sibling|family/.test(
-      text,
-    )
-  )
-    return "family" as const;
-  if (
-    /同事|领导|下属|上级|客户|供应|合作|导师|学生|老师|雇|员工|work|colleague|client|mentor/.test(
-      text,
-    )
-  )
-    return "work" as const;
-  if (/同学|校友|室友|舍友|classmate|schoolmate|roommate/.test(text)) return "school" as const;
-  if (/朋友|好友|闺蜜|伙伴|friend|buddy/.test(text)) return "friend" as const;
+export function relationCategory(
+  relation: Pick<RelationRecord, "label" | "semanticKind" | "predicate">,
+) {
+  const predicate = relation.predicate ?? inferRelationSemantics(relation.label).predicate;
+  if (predicate === "in_law_of" || predicate === "spouse_of") return "in_law" as const;
+  const category = relationCategoryFor(predicate);
+  if (category === "kinship") return "family" as const;
+  if (category === "work") return "work" as const;
+  if (category === "school") return "school" as const;
+  if (category === "social") return "friend" as const;
   return "other" as const;
 }
 
@@ -195,18 +193,77 @@ function bridgePairs(relations: RelationRecord[]) {
   return bridges;
 }
 
-function hasExplicitAlternativePath(relation: RelationRecord, relations: RelationRecord[]) {
-  const allowed = relations.filter(
-    (candidate) =>
-      candidate.id !== relation.id &&
-      candidate.confirmationStatus !== "rejected" &&
-      relationEvidenceMode(candidate) !== "inferred",
+function hasVisibleSupports(relation: RelationRecord, relationsById: Map<string, RelationRecord>) {
+  const supportIds = relation.supportingRelationIds ?? relation.derivedFromRelationIds ?? [];
+  return (
+    supportIds.length > 0 &&
+    supportIds.every((id) => {
+      const support = relationsById.get(id);
+      return (
+        support &&
+        support.confirmationStatus !== "rejected" &&
+        support.visibility !== "hidden" &&
+        relationEvidenceMode(support) !== "inferred"
+      );
+    })
   );
-  const graph = adjacency(allowed);
-  for (const middle of graph.get(relation.fromId) ?? []) {
-    if (middle !== relation.toId && graph.get(middle)?.has(relation.toId)) return true;
+}
+
+function semanticBundleKey(relation: RelationRecord) {
+  const predicate = relation.predicate ?? inferRelationSemantics(relation.label).predicate;
+  const qualifiers = relation.qualifiers ? JSON.stringify(relation.qualifiers) : "";
+  const customLabel = predicate === "custom" ? relation.label.trim().toLocaleLowerCase() : "";
+  return `${pairKey(relation.fromId, relation.toId)}|${predicate}|${customLabel}|${qualifiers}`;
+}
+
+function relationImportanceOrder(
+  importance: Map<string, RelationImportance>,
+  left: RelationRecord,
+  right: RelationRecord,
+) {
+  return (
+    (importance.get(right.id)?.score ?? 0) - (importance.get(left.id)?.score ?? 0) ||
+    (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+/**
+ * A maximum-weight spanning forest preserves a readable route through every
+ * connected component. This is the structural backbone of overview mode; a
+ * fixed score threshold alone cannot keep dense, uniformly fresh graphs legible.
+ */
+function maximumWeightForest(
+  relations: RelationRecord[],
+  importance: Map<string, RelationImportance>,
+) {
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    const current = parent.get(id) ?? id;
+    if (!parent.has(id)) parent.set(id, id);
+    if (current === id) return id;
+    const root = find(current);
+    parent.set(id, root);
+    return root;
+  };
+  const selected = new Set<string>();
+  for (const relation of [...relations].sort((left, right) =>
+    relationImportanceOrder(importance, left, right),
+  )) {
+    const fromRoot = find(relation.fromId);
+    const toRoot = find(relation.toId);
+    if (fromRoot === toRoot) continue;
+    parent.set(fromRoot, toRoot);
+    selected.add(relation.id);
   }
-  return false;
+  return selected;
+}
+
+function overviewEdgeBudget(relations: RelationRecord[], backboneSize: number) {
+  const nodeCount = new Set(relations.flatMap((relation) => [relation.fromId, relation.toId])).size;
+  // One spanning edge per node keeps paths legible; the extra 30% leaves room
+  // for strong non-tree ties without allowing a dense graph to fill the frame.
+  return Math.max(backboneSize, Math.ceil(nodeCount * 1.3));
 }
 
 export function selectVisibleRelations(
@@ -220,18 +277,17 @@ export function selectVisibleRelations(
       computeRelationImportance(relation, options.events ?? [], now),
     ]),
   );
-  const focusHops = options.mode === "focus2" ? 2 : 1;
-  const focusNodeIds =
-    options.selectedId && (options.mode === "focus1" || options.mode === "focus2")
-      ? nodesWithin(options.relations, options.selectedId, focusHops)
-      : new Set(options.relations.flatMap((relation) => [relation.fromId, relation.toId]));
+  const focusNodeIds = options.selectedId
+    ? nodesWithin(options.relations, options.selectedId, options.focusDepth ?? 1)
+    : new Set(options.relations.flatMap((relation) => [relation.fromId, relation.toId]));
   const bridges = bridgePairs(
     options.relations.filter((relation) => relation.visibility !== "hidden"),
   );
+  const relationsById = new Map(options.relations.map((relation) => [relation.id, relation]));
   const bestParallel = new Map<string, string>();
   for (const relation of options.relations) {
     if (relation.visibility === "hidden" || relation.confirmationStatus === "rejected") continue;
-    const key = pairKey(relation.fromId, relation.toId);
+    const key = semanticBundleKey(relation);
     const previousId = bestParallel.get(key);
     if (!previousId || importance.get(relation.id)!.score > importance.get(previousId)!.score)
       bestParallel.set(key, relation.id);
@@ -239,6 +295,7 @@ export function selectVisibleRelations(
 
   const visible: RelationRecord[] = [];
   const hidden: RelationVisibilityResult["hidden"] = [];
+  const overviewCandidates: RelationRecord[] = [];
   for (const relation of options.relations) {
     if (relation.confirmationStatus === "rejected") {
       hidden.push({ relation, reason: "rejected" });
@@ -252,31 +309,58 @@ export function selectVisibleRelations(
       hidden.push({ relation, reason: "user-hidden" });
       continue;
     }
-    if (relation.visibility === "always") {
+    if (relation.visibility === "always" && options.mode !== "overview") {
       visible.push(relation);
       continue;
     }
-    if (options.mode === "focus1" || options.mode === "focus2") {
-      if (focusNodeIds.has(relation.fromId) && focusNodeIds.has(relation.toId))
-        visible.push(relation);
-      else hidden.push({ relation, reason: "outside-focus" });
-      continue;
-    }
-
-    const key = pairKey(relation.fromId, relation.toId);
+    const key = semanticBundleKey(relation);
     if (bestParallel.get(key) !== relation.id) {
       hidden.push({ relation, reason: "parallel" });
       continue;
     }
     if (
       relationEvidenceMode(relation) === "inferred" &&
-      hasExplicitAlternativePath(relation, options.relations)
+      hasVisibleSupports(relation, relationsById)
     ) {
       hidden.push({ relation, reason: "derived-redundant" });
       continue;
     }
-    if (bridges.has(key) || importance.get(relation.id)!.score >= threshold) visible.push(relation);
-    else hidden.push({ relation, reason: "low-salience" });
+    if (options.mode === "standard") {
+      visible.push(relation);
+      continue;
+    }
+    overviewCandidates.push(relation);
+  }
+
+  if (options.mode === "overview") {
+    const selected = maximumWeightForest(overviewCandidates, importance);
+    for (const relation of overviewCandidates) {
+      if (
+        relation.visibility === "always" ||
+        bridges.has(pairKey(relation.fromId, relation.toId))
+      ) {
+        selected.add(relation.id);
+      }
+    }
+    const budget = overviewEdgeBudget(overviewCandidates, selected.size);
+    for (const relation of [...overviewCandidates].sort((left, right) =>
+      relationImportanceOrder(importance, left, right),
+    )) {
+      if (selected.size >= budget) break;
+      if ((importance.get(relation.id)?.score ?? 0) >= threshold) selected.add(relation.id);
+    }
+    for (const relation of overviewCandidates) {
+      if (selected.has(relation.id)) visible.push(relation);
+      else {
+        hidden.push({
+          relation,
+          reason:
+            (importance.get(relation.id)?.score ?? 0) < threshold
+              ? "low-salience"
+              : "overview-redundant",
+        });
+      }
+    }
   }
 
   return { visible, hidden, focusNodeIds, importance };

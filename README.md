@@ -58,6 +58,7 @@ cp .env.example .env.local
 | ------------------------ | ---------------------------------------------------------------- | -------- |
 | `LOVABLE_API_KEY`        | 调用 Lovable AI 的图像理解与语音转写接口                         | 否       |
 | `AI_PROXY_ALLOWED_HOSTS` | 允许服务端代理访问的额外 AI 主机名，以英文逗号分隔且必须精确匹配 | 否       |
+| `ZHIMAI_RATE_LIMIT_SALT` | 将 Cloudflare 边缘客户端标识做不可逆伪名化的服务端盐             | 否       |
 
 将真实密钥放在未提交的 `.env.local` 中：
 
@@ -118,6 +119,7 @@ npm run preview
 
 ```powershell
 npm run build
+npx wrangler secret put ZHIMAI_RATE_LIMIT_SALT --config .output/server/wrangler.json
 npx wrangler deploy --config .output/server/wrangler.json
 ```
 
@@ -128,7 +130,7 @@ npx wrangler deploy --config .output/server/wrangler.json
 - 人物、关系、提醒等结构化数据默认保存在当前浏览器的 IndexedDB 中；清理站点数据可能导致资料丢失。
 - 关系的“常隐”只控制画面；是否允许用于引荐由独立策略控制。目标引荐路径在浏览器本地计算，AI 只能解释锁定后的候选、顺序和路径。
 - 选择云端模型时，用户提交的文字、图片或音频会按功能需要发送给相应模型服务商，不等于“所有数据始终只在本机”。
-- 页面在调用 AI 路由前会建立短期同源会话令牌；服务端同时校验 SameSite HttpOnly cookie。Cloudflare 生产环境按已校验会话执行边缘共享限流，非 Workers/绑定临时不可用时使用有界内存限流回退；不会信任客户端伪造的 `X-Forwarded-For` 或 `X-Real-IP`。
+- 页面在调用 AI 路由前会建立短期同源会话令牌；服务端同时校验 SameSite HttpOnly cookie。Cloudflare 生产环境使用 `CF-Connecting-IP` 的加盐哈希和路由形成稳定的边缘共享限流桶，因此反复刷新公开状态接口、轮换会话 UUID 或伪造 `X-Forwarded-For` 都不能绕过主桶；非 Workers/绑定临时不可用时使用有界内存限流回退。
 - 选择本地 Ollama 时，模型请求通常留在用户配置的本地服务，但仍需由用户确认该地址与运行环境可信。
 - 不应在演示、日志、截图或提交记录中放入真实联系人隐私、API Key 或原始敏感材料。
 - 本项目不接入、抓取或宣称可以读取个人微信、QQ、小红书账号数据，也不会自动对外发送消息。

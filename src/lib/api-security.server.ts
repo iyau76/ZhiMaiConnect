@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { VISION_TEXT_LIMITS } from "./ai-request-contract";
 import { getRuntimeBindings, type DistributedRateLimiter } from "./runtime-bindings.server";
 
 const KIB = 1024;
@@ -9,10 +10,7 @@ export const API_LIMITS = {
   visionRequestBytes: 9 * MIB,
   transcribeRequestBytes: 21 * MIB,
   webToolRequestBytes: 8 * KIB,
-  promptCharacters: 12_000,
-  historyTurns: 8,
-  historyTurnCharacters: 6_000,
-  historyTotalCharacters: 24_000,
+  ...VISION_TEXT_LIMITS,
   imageBytes: 6 * MIB,
   audioBytes: 15 * MIB,
   upstreamErrorBytes: 2 * KIB,
@@ -169,6 +167,7 @@ export const visionBodySchema = z
     ...baseBodyShape,
     model: z.string().trim().min(1).max(200),
     action: z.enum(["chat", "test", "audit"]).default("chat"),
+    maxOutputTokens: z.number().int().min(1).max(32_768).optional(),
     prompt: optionalTrimmedString(API_LIMITS.promptCharacters),
     image: imageSchema.nullish(),
     history: z
@@ -440,23 +439,42 @@ function distributedLimiterFor(routeName: string): DistributedRateLimiter | unde
   return undefined;
 }
 
-function rateLimitActor(request: Request): string {
-  const session = request.headers.get("x-zhimai-session")?.trim();
-  if (session && /^[0-9a-f-]{36}$/i.test(session)) return `session:${session}`;
-  // Cloudflare overwrites this header at the trusted edge. Never trust client-set
-  // X-Forwarded-For/X-Real-IP fallbacks: rotating them would bypass the bucket.
-  const connectingIp = request.headers.get("cf-connecting-ip")?.trim() || "unverified-client";
-  return `edge:${connectingIp.slice(0, 100)}`;
+async function digestRateLimitIdentity(value: string): Promise<string> {
+  const bindings = getRuntimeBindings();
+  const salt =
+    bindings.ZHIMAI_RATE_LIMIT_SALT ??
+    process.env.ZHIMAI_RATE_LIMIT_SALT ??
+    "zhimai-connect-rate-limit-v1";
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${salt}\u0000${value}`),
+  );
+  return [...new Uint8Array(digest)]
+    .slice(0, 16)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function rateLimitActor(request: Request): Promise<string> {
+  // Cloudflare overwrites CF-Connecting-IP before the Worker runs. The public
+  // status endpoint may rotate session UUIDs, so the stable client bucket must
+  // be based on this edge identity, never X-Forwarded-For/X-Real-IP/session.
+  const connectingIp = request.headers.get("cf-connecting-ip")?.trim().toLowerCase() ?? "";
+  const edgeIdentity =
+    connectingIp.length <= 64 && (isIpv4(connectingIp) || isIpv6(connectingIp))
+      ? `edge-ip:${connectingIp}`
+      : "unverified-edge-client";
+  return `client:${await digestRateLimitIdentity(edgeIdentity)}`;
 }
 
 function enforceMemoryRateLimit(
-  request: Request,
+  actor: string,
   routeName: string,
   limit: number,
   windowMs = 60_000,
 ): void {
   const now = Date.now();
-  const key = `${routeName}:${rateLimitActor(request)}`;
+  const key = `${routeName}:${actor}`;
   const current = rateLimitBuckets.get(key);
   if (!current || now - current.windowStartedAt >= windowMs) {
     if (!current && rateLimitBuckets.size >= MAX_RATE_LIMIT_BUCKETS) {
@@ -488,11 +506,12 @@ export async function enforceRateLimit(
   limit: number,
   windowMs = 60_000,
 ): Promise<void> {
+  const actor = await rateLimitActor(request);
   const distributed = distributedLimiterFor(routeName);
   if (distributed) {
     try {
       const { success } = await distributed.limit({
-        key: `${routeName}:${rateLimitActor(request)}`,
+        key: `${routeName}:${actor}`,
       });
       if (!success) {
         throw new SafeApiError(
@@ -510,7 +529,7 @@ export async function enforceRateLimit(
       console.error("Cloudflare rate limiter unavailable; using local fallback", error);
     }
   }
-  enforceMemoryRateLimit(request, routeName, limit, windowMs);
+  enforceMemoryRateLimit(actor, routeName, limit, windowMs);
 }
 
 const API_SESSION_COOKIE = "zhimai_ai_session";

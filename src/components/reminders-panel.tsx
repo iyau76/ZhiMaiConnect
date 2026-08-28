@@ -18,13 +18,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { SourceBadge } from "@/components/source-badge";
+import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { askText } from "@/lib/ai-text";
-import { detectTargetIntent, rankConnectionPaths } from "@/lib/connection-paths";
+import type { AgentRun } from "@/lib/agent-run-log";
+import {
+  detectTargetIntent,
+  rankConnectionPaths,
+  rankTargetSideEntries,
+} from "@/lib/connection-paths";
 import {
   facesDb,
   type LifeEventRecord,
@@ -64,6 +70,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   const [aiArchiveMode, setAiArchiveMode] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentTrace, setAgentTrace] = useState<AgentTraceEvent[]>([]);
+  const [latestAgentRun, setLatestAgentRun] = useState<AgentRun | null>(null);
   const agentAbortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
@@ -176,7 +183,18 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       limit: 3,
       includeInferred,
     });
-    setCandidates(ranked);
+    const targetSide = ranked.length
+      ? []
+      : rankTargetSideEntries({
+          task: ask.trim(),
+          persons,
+          relations,
+          events,
+          targetId,
+          limit: 3,
+          includeInferred,
+        });
+    setCandidates(ranked.length ? ranked : targetSide);
     setCandidateMode("local");
     setAgentTrace([]);
     setAskAnswer("");
@@ -185,10 +203,14 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       getLang() === "en"
         ? ranked.length
           ? `Target mode: only genuine reachable paths from Me through an intermediary to ${target.name} are shown.`
-          : `No eligible path to ${target.name}. Add contact or interaction records, or verify required inferred relations.`
+          : targetSide.length
+            ? `No verified path from Me to ${target.name}; these are target-side leads only, not proven contacts.`
+            : `No verified path or sufficiently evidenced target-side lead for ${target.name}. Full archive analysis can still inspect the records.`
         : ranked.length
-          ? `目标模式：只显示“我 → 中间人 → ${target.name}”的真实可达路径。`
-          : `没有找到通往 ${target.name} 的合格路径。请补充联系方式/互动记录，或确认必要的推导关系。`,
+          ? `已验证可达路径：只显示“我 → 中间人 → ${target.name}”的有据路径。`
+          : targetSide.length
+            ? `未发现本人到 ${target.name} 的已验证路径；以下仅是目标侧潜在入口，不代表你能联系到他们。`
+            : `没有发现通往 ${target.name} 的已验证路径，目标侧也缺少足够关系证据。仍可点击“AI 全库分析”继续核对档案。`,
     );
   };
 
@@ -281,10 +303,13 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       setCandidates(result.candidates);
       setCandidateMode("agent");
       setAskAnswer(result.answer);
+      setLatestAgentRun(result.run);
       setRecommendationNotice(
         result.candidates.some((candidate) => candidate.path)
           ? t("目标模式：候选、分数和路径由本地确定性工具锁定，AI 只负责解释与措辞。")
-          : t("开放求助模式：AI 已按需读取档案，候选仍需人工复核。"),
+          : result.candidates.some((candidate) => candidate.mode === "target_side")
+            ? t("未找到本人到目标的已验证路径；AI 已核对档案，当前候选仅是目标侧潜在线索。")
+            : t("开放求助模式：AI 已按需读取档案，候选仍需人工复核。"),
       );
       toast.success(
         result.disclosureMode === "full"
@@ -626,6 +651,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
             />
           </div>
         )}
+        {latestAgentRun && !agentBusy && (
+          <div className="mt-3">
+            <AgentRunInspector run={latestAgentRun} />
+          </div>
+        )}
         {candidates.length > 0 && (
           <ol className="mt-3 grid gap-2 lg:grid-cols-3">
             {candidates.map((candidate, index) => (
@@ -642,9 +672,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                     {t(
                       candidate.path
                         ? "路径分"
-                        : candidateMode === "agent"
-                          ? "本地锁定分"
-                          : "本地分",
+                        : candidate.mode === "target_side"
+                          ? "目标侧相关分"
+                          : candidate.mode === "open" && candidateMode === "agent"
+                            ? "本地锁定分"
+                            : "本地分",
                     )}{" "}
                     · {t(candidate.confidence)} {t("置信度")}
                   </span>
@@ -660,6 +692,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                               persons.find((person) => person.id === id)?.name ?? t("未知人物"),
                           ),
                         ].join(" → ")}
+                  </p>
+                )}
+                {candidate.mode === "target_side" && (
+                  <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 font-medium text-amber-700 dark:text-amber-300">
+                    {t("目标侧潜在入口 · 尚未验证你能联系到此人")}
                   </p>
                 )}
                 <p className="mt-2 leading-relaxed">

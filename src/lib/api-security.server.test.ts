@@ -251,9 +251,34 @@ test("rate limiter does not trust forged forwarding headers outside Cloudflare",
   );
 });
 
-test("production rate limiter uses the Cloudflare binding and validated session actor", async () => {
+test("memory limiter cannot be bypassed by rotating a status-session UUID", async () => {
+  registerRuntimeBindings({});
+  const route = `session-rotation-${crypto.randomUUID()}`;
+  await enforceRateLimit(
+    jsonRequest("{}", {
+      "CF-Connecting-IP": "2001:db8::42",
+      "X-Zhimai-Session": crypto.randomUUID(),
+    }),
+    route,
+    1,
+  );
+  await assert.rejects(
+    enforceRateLimit(
+      jsonRequest("{}", {
+        "CF-Connecting-IP": "2001:db8::42",
+        "X-Zhimai-Session": crypto.randomUUID(),
+      }),
+      route,
+      1,
+    ),
+    (error: unknown) => error instanceof SafeApiError && error.code === "RATE_LIMITED",
+  );
+});
+
+test("production limiter uses a pseudonymous stable edge-client bucket across rotated sessions", async () => {
   const seen: string[] = [];
   registerRuntimeBindings({
+    ZHIMAI_RATE_LIMIT_SALT: "unit-test-secret",
     ZHIMAI_VISION_LIMITER: {
       async limit({ key }: { key: string }) {
         seen.push(key);
@@ -261,15 +286,59 @@ test("production rate limiter uses the Cloudflare binding and validated session 
       },
     },
   });
-  const session = crypto.randomUUID();
-  const request = jsonRequest("{}", { "X-Zhimai-Session": session });
+  const firstSession = crypto.randomUUID();
+  const secondSession = crypto.randomUUID();
+  const first = jsonRequest("{}", {
+    "CF-Connecting-IP": "203.0.113.42",
+    "X-Forwarded-For": "1.1.1.1",
+    "X-Zhimai-Session": firstSession,
+  });
+  const rotated = jsonRequest("{}", {
+    "CF-Connecting-IP": "203.0.113.42",
+    "X-Forwarded-For": "2.2.2.2",
+    "X-Zhimai-Session": secondSession,
+  });
   try {
-    await enforceRateLimit(request, "vision", 30);
+    await enforceRateLimit(first, "vision", 30);
     await assert.rejects(
-      enforceRateLimit(request, "vision", 30),
+      enforceRateLimit(rotated, "vision", 30),
       (error: unknown) => error instanceof SafeApiError && error.code === "RATE_LIMITED",
     );
-    assert.deepEqual(seen, [`vision:session:${session}`, `vision:session:${session}`]);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0], seen[1]);
+    assert.match(seen[0]!, /^vision:client:[0-9a-f]{32}$/);
+    assert.equal(seen[0]!.includes("203.0.113.42"), false);
+    assert.equal(seen[0]!.includes(firstSession), false);
+    assert.equal(seen[0]!.includes(secondSession), false);
+  } finally {
+    registerRuntimeBindings({});
+  }
+});
+
+test("production limiter separates different Cloudflare edge clients", async () => {
+  const seen: string[] = [];
+  registerRuntimeBindings({
+    ZHIMAI_RATE_LIMIT_SALT: "unit-test-secret",
+    ZHIMAI_WEB_TOOLS_LIMITER: {
+      async limit({ key }: { key: string }) {
+        seen.push(key);
+        return { success: true };
+      },
+    },
+  });
+  try {
+    await enforceRateLimit(
+      jsonRequest("{}", { "CF-Connecting-IP": "203.0.113.10" }),
+      "web-tools",
+      30,
+    );
+    await enforceRateLimit(
+      jsonRequest("{}", { "CF-Connecting-IP": "203.0.113.11" }),
+      "web-tools",
+      30,
+    );
+    assert.equal(seen.length, 2);
+    assert.notEqual(seen[0], seen[1]);
   } finally {
     registerRuntimeBindings({});
   }

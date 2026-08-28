@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PersonRecord, RelationRecord } from "./face-db";
-import { detectTargetIntent, rankConnectionPaths } from "./connection-paths";
+import { detectTargetIntent, rankConnectionPaths, rankTargetSideEntries } from "./connection-paths";
 
 const NOW = new Date("2026-08-28T00:00:00Z");
 
@@ -39,6 +39,13 @@ describe("target intent", () => {
       mode: "target",
       target: { id: "jia-mu" },
     });
+  });
+
+  it("never offers the ego record as a target in a first-person question", () => {
+    const self = { ...person("self", "我"), entityRole: "ego" as const };
+    expect(
+      detectTargetIntent("我想找贾母办事，应该通过谁联系？", [self, ...persons]),
+    ).toMatchObject({ mode: "target", target: { id: "jia-mu" } });
   });
 
   it("keeps a skill request in open recommendation mode", () => {
@@ -116,6 +123,39 @@ describe("connection path ranking", () => {
         now: NOW,
       }),
     ).toHaveLength(1);
+  });
+
+  it("treats an explicit ego relationship as verified access", () => {
+    const self = { ...person("self", "我"), entityRole: "ego" as const };
+    const result = rankConnectionPaths({
+      persons: [self, selfContact, target],
+      relations: [
+        relation("access", self.id, selfContact.id, { label: "大学室友" }),
+        relation("family", selfContact.id, target.id),
+      ],
+      events: [],
+      targetId: target.id,
+      now: NOW,
+    });
+    expect(result[0].person.id).toBe(selfContact.id);
+    expect(result[0].evidence).toContain("与我的已记录关系：大学室友");
+  });
+
+  it("returns target-side leads without claiming they are reachable", () => {
+    const result = rankTargetSideEntries({
+      persons: [target, selfContact, classmateA],
+      relations: [relation("family", selfContact.id, target.id)],
+      events: [],
+      targetId: target.id,
+      now: NOW,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      person: { id: "jia-lian" },
+      mode: "target_side",
+      targetEntry: { targetId: "jia-mu", relationIds: ["family"] },
+    });
+    expect(result[0].risks.join(" ")).toContain("尚未证明你能联系此人");
   });
 
   it("enforces the total-hop limit including the virtual self edge", () => {

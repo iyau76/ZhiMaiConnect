@@ -1,8 +1,10 @@
 import {
   facesDb,
+  type CollectionMembershipRecord,
+  type CollectionRecord,
   type LifeEventRecord,
   type PersonRecord,
-  type RelationRecord,
+  type RelationAssertionRecord,
   type ReminderRecord,
 } from "./face-db";
 import type { Provenance } from "./provenance";
@@ -13,7 +15,7 @@ const demoSource: Provenance = { kind: "manual", detail: "合成演示数据", a
 
 type Seed = [
   name: string,
-  circle: string,
+  collection: string,
   relation: string,
   title: string,
   skill: string,
@@ -74,16 +76,14 @@ const SEEDS: Seed[] = [
 ];
 
 function demoPeople(): PersonRecord[] {
-  return SEEDS.map(([name, circle, relation, title, skill, closeness], index) => ({
+  return SEEDS.map(([name, collection, relation, title, skill, closeness], index) => ({
     id: `${DEMO_PREFIX}person-${String(index + 1).padStart(2, "0")}`,
     name,
     note: `合成角色：${relation}，可协助${skill}。`,
     profile: {
       relation,
-      circle,
-      tags: [circle],
       title,
-      org: circle === "科研" ? "知行实验室（模拟）" : `${circle}示范圈`,
+      org: collection === "科研" ? "知行实验室（模拟）" : `${collection}示范圈`,
       likes: [skill],
       projects: index === 10 || index % 4 === 0 ? ["校园记忆展（模拟）"] : undefined,
       contact:
@@ -126,30 +126,62 @@ function demoPeople(): PersonRecord[] {
   }));
 }
 
-function demoRelations(people: PersonRecord[]): RelationRecord[] {
-  const rows: RelationRecord[] = [];
+function demoCollections(people: PersonRecord[]) {
+  const names = [...new Set(SEEDS.map(([, collection]) => collection))];
+  const collections: CollectionRecord[] = names.map((name, index) => ({
+    id: `${DEMO_PREFIX}collection-${String(index + 1).padStart(2, "0")}`,
+    name,
+    kind: name === "家人" || name === "亲戚" ? "relationship_circle" : "context",
+    createdAt: DEMO_AT,
+    updatedAt: DEMO_AT,
+  }));
+  const collectionByName = new Map(collections.map((collection) => [collection.name, collection]));
+  const memberships: CollectionMembershipRecord[] = people.map((person, index) => {
+    const collectionName = SEEDS[index][1];
+    const collection = collectionByName.get(collectionName);
+    if (!collection) throw new Error(`演示集合不存在：${collectionName}`);
+    return {
+      id: `${collection.id}\u0000${person.id}`,
+      collectionId: collection.id,
+      personId: person.id,
+      source: "manual",
+      createdAt: DEMO_AT,
+    };
+  });
+  return { collections, memberships };
+}
+
+function demoRelations(people: PersonRecord[]): RelationAssertionRecord[] {
+  const rows: RelationAssertionRecord[] = [];
   const add = (from: number, to: number, label: string, index: number) => {
     const at = DEMO_AT - index * 60_000;
+    const predicate = label === "活动搭档" ? "collaborates_with" : "knows";
     rows.push({
       id: `${DEMO_PREFIX}relation-${String(index + 1).padStart(2, "0")}`,
+      recordType: "assertion",
       fromId: people[from].id,
       toId: people[to].id,
+      predicate,
+      qualifiers: { temporalStatus: "current" },
       label,
-      mutual: true,
+      direction: "ontology",
       note: "合成演示关系",
+      evidence: {
+        mode: "manual",
+        basis: "竞赛合成演示资料中的关系断言",
+        sourceIds: [],
+      },
+      validity: { status: "active" },
       createdAt: at,
       updatedAt: at,
       confirmationStatus: index === 63 ? "pending" : "confirmed",
-      evidenceMode: index === 63 ? "inferred" : "explicit",
       confidence: index === 63 ? 0.62 : 0.95,
-      visibility: "auto",
-      recommendationPolicy: "allow",
       source: index === 63 ? { kind: "ai", detail: "合成低置信度关系", at } : demoSource,
     });
   };
   const groups = new Map<string, number[]>();
-  people.forEach((person, index) => {
-    const key = person.profile?.circle ?? "其它";
+  people.forEach((_person, index) => {
+    const key = SEEDS[index][1];
     groups.set(key, [...(groups.get(key) ?? []), index]);
   });
   for (const members of groups.values()) {
@@ -213,46 +245,56 @@ function demoReminders(people: PersonRecord[]): ReminderRecord[] {
 export async function loadDemoData() {
   const people = demoPeople();
   const relations = demoRelations(people);
+  const { collections, memberships } = demoCollections(people);
   const events = demoEvents(people);
   const reminders = demoReminders(people);
-  await Promise.all(people.map((person) => facesDb.putPerson(person)));
-  await Promise.all(relations.map((relation) => facesDb.putRelation(relation)));
-  await Promise.all(events.map((event) => facesDb.putLifeEvent(event)));
-  await Promise.all(reminders.map((reminder) => facesDb.putReminder(reminder)));
+  await facesDb.applyArchiveMutationBatch({
+    persons: people,
+    assertions: relations,
+    collections,
+    collectionMemberships: memberships,
+    lifeEvents: events,
+    reminders,
+  });
   return { people: people.length, relations: relations.length, events: events.length };
 }
 
 export async function clearDemoData() {
-  const [people, relations, events, reminders] = await Promise.all([
+  const [people, relations, events, reminders, collections, memberships] = await Promise.all([
     facesDb.listPersons(),
-    facesDb.listRelations(),
+    facesDb.listRelationAssertions(),
     facesDb.listLifeEvents(),
     facesDb.listReminders(),
+    facesDb.listCollections(),
+    facesDb.listCollectionMemberships(),
   ]);
-  await Promise.all(
-    people
+  await facesDb.applyArchiveMutationBatch({
+    deletePersonIds: people
       .filter((item) => item.id.startsWith(DEMO_PREFIX))
-      .map((item) => facesDb.deletePerson(item.id)),
-  );
-  await Promise.all(
-    relations
+      .map((item) => item.id),
+    deleteAssertionIds: relations
       .filter((item) => item.id.startsWith(DEMO_PREFIX))
-      .map((item) => facesDb.deleteRelation(item.id)),
-  );
-  await Promise.all(
-    events
+      .map((item) => item.id),
+    deleteLifeEventIds: events
       .filter((item) => item.id.startsWith(DEMO_PREFIX))
-      .map((item) => facesDb.deleteLifeEvent(item.id)),
-  );
-  await Promise.all(
-    reminders
+      .map((item) => item.id),
+    deleteReminderIds: reminders
       .filter((item) => item.id.startsWith(DEMO_PREFIX))
-      .map((item) => facesDb.deleteReminder(item.id)),
-  );
+      .map((item) => item.id),
+    deleteCollectionIds: collections
+      .filter((item) => item.id.startsWith(DEMO_PREFIX))
+      .map((item) => item.id),
+    deleteCollectionMembershipIds: memberships
+      .filter((item) => item.id.startsWith(DEMO_PREFIX))
+      .map((item) => item.id),
+  });
 }
 
 export async function getDemoDataStatus() {
-  const [people, relations] = await Promise.all([facesDb.listPersons(), facesDb.listRelations()]);
+  const [people, relations] = await Promise.all([
+    facesDb.listPersons(),
+    facesDb.listRelationAssertions(),
+  ]);
   return {
     people: people.filter((item) => item.id.startsWith(DEMO_PREFIX)).length,
     relations: relations.filter((item) => item.id.startsWith(DEMO_PREFIX)).length,

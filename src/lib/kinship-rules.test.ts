@@ -30,13 +30,13 @@ describe("kinship inference contract", () => {
     );
   });
 
-  it.each(["共同", "祖孙", "同父异母", "姻亲", "姑表", "补建", "confidence", "basis"])(
-    "ships the required kinship instruction: %s",
+  it.each(["只负责抽取", "本地规则引擎", "稳定人物 ID", "原文：", "禁止输出", "关系本体"])(
+    "ships the explicit-only extraction contract: %s",
     (term) => expect(KINSHIP_RULES_ZH).toContain(term),
   );
 
   it("contains both required few-shot scenarios", () => {
     expect(KINSHIP_RULES_ZH).toContain("贾母有两个儿子贾赦和贾政");
-    expect(KINSHIP_RULES_ZH).toContain("我大姑有一个儿子和一个女儿");
+    expect(KINSHIP_RULES_ZH).toContain("不要输出贾赦↔贾政");
   });
 });

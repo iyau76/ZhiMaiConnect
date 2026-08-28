@@ -561,7 +561,9 @@ test("目标人物引荐只返回真实可达路径，断开的高亲密度同�
   await recommendation.getByRole("textbox").fill("我想找贾母办事，应该通过谁联系？");
   await recommendation.getByRole("button", { name: "本地筛选候选" }).click();
 
-  await expect(recommendation.getByText(/目标模式：只显示/)).toBeVisible();
+  await expect(
+    recommendation.getByText(/目标模式：候选、分数和路径由本地确定性工具锁定/),
+  ).toBeVisible();
   await expect(recommendation.locator("ol li")).toHaveCount(1);
   await expect(recommendation.locator("ol li").first()).toContainText("贾琏");
   await expect(recommendation.locator("ol li").first()).toContainText("我 → 贾琏 → 贾母");
@@ -619,10 +621,10 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
   await expect(trace).toContainText("分析完成");
   await expect(trace).toContainText(/\d+ 步/);
   await expect(recommendation.locator("ol li").first()).toContainText("陈安");
-  await expect(recommendation.locator("ol li").first()).toContainText("88 本地锁定分");
+  await expect(recommendation.locator("ol li").first()).toContainText("95 本地锁定分");
   await expect(
     recommendation.getByRole("textbox", { name: "可编辑的候选比较与求助话术" }),
-  ).toContainText("为什么不是赵宇");
+  ).toHaveValue(/2\. 赵宇/);
 
   expect(mockNetwork.visionRequests).toHaveLength(2);
   const prompts = mockNetwork.visionRequests.map((request) => String(request.prompt));
@@ -668,13 +670,13 @@ test("AI 助理修改人物时必须先批准，批准前人物库保持不变",
   await questionCard.getByRole("textbox").fill("把合成测试人物的职位改成品牌总监");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 
-  const approval = questionCard.getByRole("region", { name: "待批准的人物修改" });
+  const approval = questionCard.getByRole("region", { name: "待批准的批量档案修改" });
   await expect(approval).toContainText("品牌经理");
   await expect(approval).toContainText("品牌总监");
   let people = await readIndexedDbStore<{ profile?: { title?: string } }>(page, "persons");
   expect(people[0].profile?.title).toBe("品牌经理");
 
-  await approval.getByRole("button", { name: "批准并执行" }).click();
+  await approval.getByRole("button", { name: /批准全部并执行/ }).click();
   await expect(approval).toHaveCount(0);
   people = await readIndexedDbStore<{ profile?: { title?: string } }>(page, "persons");
   expect(people[0].profile?.title).toBe("品牌总监");
@@ -705,13 +707,13 @@ test("AI 助理修改人物关系时同样必须先批准", async ({ page }) => 
   await questionCard.getByRole("textbox").fill("把甲和乙的关系改成前同事");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 
-  const approval = questionCard.getByRole("region", { name: "待批准的关系修改" });
+  const approval = questionCard.getByRole("region", { name: "待批准的批量档案修改" });
   await expect(approval).toContainText("同事");
   await expect(approval).toContainText("前同事");
   let relations = await readIndexedDbStore<{ label: string }>(page, "relations");
   expect(relations[0].label).toBe("同事");
 
-  await approval.getByRole("button", { name: "批准并执行" }).click();
+  await approval.getByRole("button", { name: /批准全部并执行/ }).click();
   await expect(approval).toHaveCount(0);
   relations = await readIndexedDbStore<{ label: string }>(page, "relations");
   expect(relations[0].label).toBe("前同事");

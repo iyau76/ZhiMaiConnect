@@ -2,6 +2,7 @@
 
 import { askModel } from "./vision-client";
 import { assertVision, type ProviderPreset } from "./vision-providers";
+import { normalizeArchive } from "./archive-data";
 
 export interface ImportedDoc {
   name: string;
@@ -48,6 +49,28 @@ async function decodeTextFile(file: File) {
       throw new Error("文本编码无法识别，请另存为 UTF-8 或 GB18030 后重试");
     }
   }
+}
+
+/**
+ * A machine backup is a restore artifact, not untrusted prose for an LLM.
+ * Detect it before truncation so a full archive is never pasted into intake.
+ */
+export function assertNotMachineArchiveText(text: string) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return;
+  }
+  const schema =
+    parsed && typeof parsed === "object" && "schema" in parsed
+      ? (parsed as { schema?: unknown }).schema
+      : undefined;
+  if (typeof schema !== "string" || !schema.startsWith("zhimai-connect/")) return;
+  const normalized = normalizeArchive(parsed);
+  throw new Error(
+    `检测到知脉机器备份（${normalized.sourceSchema}）。机器备份不能作为 AI 录入材料，请使用备份恢复流程。`,
+  );
 }
 
 /** Parse RFC 4180-style quoting so embedded commas/newlines do not shift columns. */
@@ -227,6 +250,7 @@ export async function importFiles(
         });
       } else if (TEXT_EXT.some((ext) => lower.endsWith(ext)) || file.type.startsWith("text/")) {
         const decoded = await decodeTextFile(file);
+        if (lower.endsWith(".json")) assertNotMachineArchiveText(decoded);
         out.push({
           name: file.name,
           text: (lower.endsWith(".csv") ? normalizeCsv(decoded) : decoded)

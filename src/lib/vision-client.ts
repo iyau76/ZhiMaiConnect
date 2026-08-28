@@ -1,6 +1,7 @@
 import { assertVision, type ChatTurn, type ProviderPreset } from "./vision-providers";
 import { confirmCloudTransfer, type CloudDataType } from "./cloud-consent";
 import { apiSessionHeaders } from "./api-session";
+import { assertVisionPromptFits, fitVisionHistory } from "./ai-request-contract";
 
 function stripDataUrl(dataUrl: string) {
   const idx = dataUrl.indexOf(",");
@@ -14,6 +15,7 @@ async function streamOllama(
   history: ChatTurn[],
   onChunk: (text: string) => void,
   signal: AbortSignal,
+  maxOutputTokens?: number,
 ) {
   const base = preset.baseUrl.replace(/\/+$/, "");
   const messages = [
@@ -28,7 +30,12 @@ async function streamOllama(
   const response = await fetch(`${base}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: preset.model, messages, stream: true }),
+    body: JSON.stringify({
+      model: preset.model,
+      messages,
+      stream: true,
+      ...(maxOutputTokens ? { options: { num_predict: maxOutputTokens } } : {}),
+    }),
     signal,
   });
 
@@ -66,6 +73,7 @@ async function streamServer(
   history: ChatTurn[],
   onChunk: (text: string) => void,
   signal: AbortSignal,
+  maxOutputTokens?: number,
 ) {
   const response = await fetch("/api/vision", {
     method: "POST",
@@ -80,6 +88,7 @@ async function streamServer(
       prompt,
       image,
       history,
+      maxOutputTokens,
     }),
   });
 
@@ -124,18 +133,37 @@ export async function askModel(
   history: ChatTurn[],
   onChunk: (text: string) => void,
   signal: AbortSignal,
+  options: { maxOutputTokens?: number } = {},
 ) {
   assertConfigured(preset);
+  assertVisionPromptFits(prompt);
+  const boundedHistory = fitVisionHistory(history);
   // 有图就必须是验证过的多模态模型，避免拿纯文本模型瞎分析
-  if (image || history.some((turn) => turn.image)) assertVision(preset);
+  if (image || boundedHistory.some((turn) => turn.image)) assertVision(preset);
   if (preset.kind === "ollama") {
-    return streamOllama(preset, prompt, image, history, onChunk, signal);
+    return streamOllama(
+      preset,
+      prompt,
+      image,
+      boundedHistory,
+      onChunk,
+      signal,
+      options.maxOutputTokens,
+    );
   }
   const dataTypes: CloudDataType[] = ["文字内容"];
   if (/人物档案|人物关系|人脉库|关系网/.test(prompt)) dataTypes.push("人物关系上下文");
-  if (image || history.some((turn) => turn.image)) dataTypes.push("图片");
+  if (image || boundedHistory.some((turn) => turn.image)) dataTypes.push("图片");
   confirmCloudTransfer(preset, dataTypes);
-  return streamServer(preset, prompt, image, history, onChunk, signal);
+  return streamServer(
+    preset,
+    prompt,
+    image,
+    boundedHistory,
+    onChunk,
+    signal,
+    options.maxOutputTokens,
+  );
 }
 
 export async function testConnection(preset: ProviderPreset) {

@@ -19,6 +19,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { DraftGraph } from "@/components/draft-graph";
+import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { Button } from "@/components/ui/button";
 
@@ -26,13 +27,18 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { startRecording, transcribeAudio, type Recorder } from "@/lib/audio-client";
+import { AGENT_PROMPT_MAX_CHARACTERS } from "@/lib/ai-request-contract";
 import { IMPORT_LIMITS, importFiles } from "@/lib/doc-import";
 import { claimIntakeJob, getIntakeJob, startIntakeJob, subscribeIntakeJob } from "@/lib/intake-job";
 import {
   facesDb,
+  type CollectionMembershipRecord,
+  type CollectionRecord,
   type EvidenceRecord,
   type LifeEventRecord,
   type PersonRecord,
+  type RelationAssertionRecord,
+  type RelationEvidenceLinkRecord,
   type RelationRecord,
   type ReminderRecord,
 } from "@/lib/face-db";
@@ -72,12 +78,7 @@ import {
   undoLatestIntakeBatch,
   type IntakeUndoBatch,
 } from "@/lib/intake-undo";
-import { inferMutual } from "@/lib/relation-kind";
-import {
-  findRelationDependencies,
-  normalizeRelationSemanticKind,
-  relationSemanticKey,
-} from "@/lib/relation-semantics";
+import { inferRelationSemantics } from "@/lib/relation-ontology";
 import {
   isInferredRelationBasis,
   KINSHIP_RULES_EN,
@@ -86,7 +87,8 @@ import {
 } from "@/lib/kinship-rules";
 import { makeSource } from "@/lib/provenance";
 import { cn } from "@/lib/utils";
-import { runIntakeAgent } from "@/lib/intake-agent";
+import { runIntakeAgent, type IntakePromptSections } from "@/lib/intake-agent";
+import type { AgentRun } from "@/lib/agent-run-log";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 const SELF_PERSON_ID = "zhimai:self";
@@ -236,15 +238,13 @@ function decorateDraft(result: Draft, sourceSummary: string, material: string): 
   };
 }
 
-const MAX_PROMPT_CHARACTERS = 11_800;
-
 function buildPrompt(text: string, known: string[], previous: Draft | null) {
   const zh = getLang() !== "en";
   const base = zh
     ? `你是个人人脉整理助手。把下面这段自然语言材料整理成结构化 JSON，只输出 JSON，不要解释、不要 markdown。
 严格使用这个结构：${SCHEMA}
 规则：
-- 材料里没写的普通事实字段留空字符串或空数组；关系推导只按下面的亲属规则进行。
+ - 材料里没写的普通事实字段留空字符串或空数组；模型只抽取原文明说的关系，本地规则在提交后统一推导。
 - title、部门、单位、项目、地址、忌口、礼物等人物字段只保留材料明确写出的值；“喜欢摄影”不能改写成“摄影师”。
 - relation 写这个人和「我」的关系，如大学同学、表哥、前同事。
 - circle 只能是：家人 / 亲戚 / 朋友 / 同学 / 同事 / 邻居 / 其它。closeness 仅在材料明确给出 1-5 数值时填写，否则留空；不要根据关系称呼推断。
@@ -252,7 +252,7 @@ function buildPrompt(text: string, known: string[], previous: Draft | null) {
 - identities 只记录材料明确出现的平台、账号、当时昵称与生效/失效时间；不要根据姓名猜账号或时间。
 - facts 只放材料明确表达、但不属于固定人物字段的事实；person 指人物姓名，key 是短字段名，value 是原文可支持的值。validFrom/validTo 仅在材料给出有效期时填写。
 - evidence 只保留能核对抽取结果的短摘要或必要原文片段，不要复制整份聊天、文档或转写稿，text 最多 500 字。
-- relations 写人和人之间的关系。每条都填写 basis：明说关系写最短原文，推导关系写可复核依据。
+ - relations 写人和人之间原文明说的关系。每条 basis 都写“原文：最短支持片段”，不要输出推导关系。
 - events 放已经发生或计划发生、值得进入日历/时间线的事情；date 用 yyyy-mm-dd。只知道月份或年份时分别补为当月 01 日或当年 01-01，并把 precision 标为 month 或 year；一段时间用 range 和 dateEnd。people 写相关人物姓名。
 - reminders 放需要用户采取行动的待办，如「给小雨回电话」；due 仅在材料明确给出日期时使用 yyyy-mm-dd，people 写相关人物姓名。不要把同一件事同时放进 events 和 reminders，除非材料同时明确表达日历事件和后续行动。
 - confidence 是你对每一条抽取准确性的自评（0 到 1），无法判断时留空；它只是提示，不能代替用户确认。
@@ -261,7 +261,7 @@ ${KINSHIP_RULES_ZH}`
     : `You organise a personal contact network. Convert the text below into structured JSON. Output JSON only, no markdown, no explanation.
 Use exactly this structure: ${SCHEMA}
 Rules:
-- Leave ordinary fact fields empty when the text does not state them. Relation inference is allowed only under the auditable kinship rules below.
+ - Leave ordinary fact fields empty when the text does not state them. Extract explicit relations only; deterministic local rules derive kinship after commit.
 - Keep role, department, organisation, projects, address, dislikes and gifts only when explicitly stated. An interest in photography does not make someone a photographer.
 - relation = how this person relates to me (college roommate, cousin, ex-colleague).
 - circle is one of family / relatives / friends / classmates / colleagues / neighbours / other. Set closeness only when the material explicitly gives a 1-5 score; never infer it from a relationship label.
@@ -269,7 +269,7 @@ Rules:
 - identities contains only explicitly stated platform/account/alias and validity dates. Never guess an account or date from a name.
 - facts contains only explicit facts that do not fit a fixed person field; person is the person's name and validity dates are included only when stated.
 - evidence is a short source summary or the minimum excerpt needed for review (at most 500 characters), never a copy of the complete chat, document, or transcript.
-- relations = ties between people. Every relation includes basis: a short quote for explicit ties or a checkable inference basis.
+ - relations = explicitly stated ties between people. Every basis starts with “Original:” and quotes the shortest supporting text. Do not output inferred ties.
 - events are past or planned moments worth putting on a calendar/timeline. Use yyyy-mm-dd, with precision month/year/range when needed; people contains related names.
 - reminders are actions the user still needs to take. Set due only when the material gives a date. Do not duplicate one fact across events and reminders unless both a calendar moment and a follow-up action are explicit.
 - confidence is the model's 0-1 self-assessment for each extracted item and never replaces user confirmation.
@@ -285,7 +285,14 @@ ${KINSHIP_RULES_EN}`;
         : `\n\nMerge and extend this previous draft:\n`) + serializeDraftForPrompt(previous)
     : "";
   const prefix = `${base}${knownLine}${prev}\n\n${zh ? "材料" : "Material"}：\n`;
-  return fitPromptMaterial(prefix, text, MAX_PROMPT_CHARACTERS);
+  const fitted = fitPromptMaterial(prefix, text, AGENT_PROMPT_MAX_CHARACTERS);
+  const sections: IntakePromptSections = {
+    instructions: base,
+    knownContext: knownLine.trim(),
+    previousDraft: previous ? JSON.parse(serializeDraftForPrompt(previous)) : undefined,
+    sourceMaterial: text.slice(0, IMPORT_LIMITS.maxExtractedCharacters),
+  };
+  return { ...fitted, sections };
 }
 
 /** 切到别的页签再回来时，未提交的录入内容不能丢 —— 存在本地，15 秒自动暂存一次 */
@@ -598,6 +605,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
+  const [latestAgentRun, setLatestAgentRun] = useState<AgentRun | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -619,7 +627,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   }, []);
 
   useEffect(() => {
-    void Promise.all([facesDb.listPersons(), facesDb.listLifeEvents(), facesDb.listRelations()])
+    void Promise.all([
+      facesDb.listPersons(),
+      facesDb.listLifeEvents(),
+      facesDb.listRelationshipViews({ includeDerived: false }),
+    ])
       .then(([people, events, relations]) => {
         setExistingPeople(people);
         setExistingEvents(events);
@@ -843,16 +855,18 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         );
         const parsed = await runIntakeAgent({
           preset,
-          extractionPrompt: builtPrompt.prompt,
+          extractionPrompt: builtPrompt.sections,
           persons: allowArchiveTools ? existingPeople : [],
           events: allowArchiveTools ? existingEvents : [],
           relations: allowArchiveTools ? existingRelations : [],
           includeArchive: allowArchiveTools,
+          sourceMaterial: materialSource,
           onTrace: (event) =>
             report(
               event.text,
               event.kind === "check" ? "check" : event.kind === "model" ? "model" : "status",
             ),
+          onRun: setLatestAgentRun,
         });
         report(t("模型输出完成，正在解析结构化草稿"), "check");
         report(t("正在核对人物字段与原文证据"), "check");
@@ -1183,7 +1197,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       const [nextPeople, nextEvents, nextRelations] = await Promise.all([
         facesDb.listPersons(),
         facesDb.listLifeEvents(),
-        facesDb.listRelations(),
+        facesDb.listRelationshipViews({ includeDerived: false }),
       ]);
       setExistingPeople(nextPeople);
       setExistingEvents(nextEvents);
@@ -1281,22 +1295,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       );
       return;
     }
-    const inferredWithoutBasis = (commitDraft.relations ?? []).find(
-      (item) =>
-        !item._audit?.humanEdited &&
-        relationNeedsInferenceReview({
-          basis: item.basis,
-          note: item.note,
-          confidence: item._audit?.confidence,
-        }) &&
-        !isInferredRelationBasis(item.basis),
-    );
-    if (inferredWithoutBasis) {
-      toast.error(
-        `${t("推导关系缺少可核验依据")}：${inferredWithoutBasis.from} → ${inferredWithoutBasis.to}`,
-      );
-      return;
-    }
     const invalidEvent = (commitDraft.events ?? []).find(
       (item) =>
         item.title?.trim() &&
@@ -1326,7 +1324,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       createdReminderIds: [],
       previousPeople: [],
       previousEvents: [],
-      previousRelations: [],
     };
     const batchHasChanges = () =>
       batch.createdPersonIds.length > 0 ||
@@ -1335,22 +1332,26 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       batch.createdEventIds.length > 0 ||
       batch.createdReminderIds.length > 0 ||
       batch.previousPeople.length > 0 ||
-      (batch.previousEvents?.length ?? 0) > 0 ||
-      (batch.previousRelations?.length ?? 0) > 0;
+      (batch.previousEvents?.length ?? 0) > 0;
     try {
-      const [current, currentEvents, currentRelations] = await Promise.all([
+      const [current, currentEvents, currentAssertions, currentCollections] = await Promise.all([
         facesDb.listPersons(),
         facesDb.listLifeEvents(),
-        facesDb.listRelations(),
+        facesDb.listRelationAssertions(),
+        facesDb.listCollections(),
       ]);
       const byId = new Map(current.map((person) => [person.id, person]));
       const eventById = new Map(currentEvents.map((event) => [event.id, event]));
       const originalById = new Map(current.map((person) => [person.id, person]));
       const pendingPeople = new Map<string, PersonRecord>();
-      const pendingRelations = new Map<string, RelationRecord>();
+      const pendingAssertions = new Map<string, RelationAssertionRecord>();
+      const pendingRelationEvidenceLinks: RelationEvidenceLinkRecord[] = [];
       const pendingEvidence: EvidenceRecord[] = [];
       const pendingEvents = new Map<string, LifeEventRecord>();
       const pendingReminders: ReminderRecord[] = [];
+      const pendingCollections = new Map<string, CollectionRecord>();
+      const pendingCollectionMemberships: CollectionMembershipRecord[] = [];
+      const circleAssignments: Array<{ personId: string; name: string }> = [];
       const exactNameBuckets = new Map<string, PersonRecord[]>();
       current.forEach((person) => {
         const key = person.name.trim();
@@ -1431,6 +1432,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           descriptors: [],
           thumb: "",
           createdAt: Date.now(),
+          entityRole: "ego",
           source: makeSource("manual", "系统创建的本人关系锚点"),
         };
         pendingPeople.set(self.id, self);
@@ -1498,7 +1500,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           reportsTo: item.reportsTo || undefined,
           employeeId: item.employeeId || undefined,
           birthday: item.birthday || undefined,
-          circle: item.circle || undefined,
           closeness: typeof item.closeness === "number" ? item.closeness : undefined,
           likes: item.likes?.length ? item.likes : undefined,
           dislikes: item.dislikes?.length ? item.dislikes : undefined,
@@ -1526,6 +1527,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           byId.set(record.id, record);
           rememberDraftName(name, record);
           if (item._draftId) resolvedDraftIds.set(item._draftId, record);
+          if (item.circle?.trim())
+            circleAssignments.push({ personId: record.id, name: item.circle.trim() });
           continue;
         }
 
@@ -1575,6 +1578,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           byId.set(record.id, record);
           rememberDraftName(name, record);
           if (item._draftId) resolvedDraftIds.set(item._draftId, record);
+          if (item.circle?.trim())
+            circleAssignments.push({ personId: record.id, name: item.circle.trim() });
           updated += 1;
           continue;
         }
@@ -1597,7 +1602,39 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         exactNameBuckets.set(name, [...(exactNameBuckets.get(name) ?? []), record]);
         rememberDraftName(name, record);
         if (item._draftId) resolvedDraftIds.set(item._draftId, record);
+        if (item.circle?.trim())
+          circleAssignments.push({ personId: record.id, name: item.circle.trim() });
         created += 1;
+      }
+
+      const collectionByName = new Map(
+        currentCollections.map((collection) => [
+          collection.name.trim().toLocaleLowerCase("zh-CN"),
+          collection,
+        ]),
+      );
+      for (const assignment of circleAssignments) {
+        const key = assignment.name.toLocaleLowerCase("zh-CN");
+        let collection = collectionByName.get(key) ?? pendingCollections.get(key);
+        if (!collection) {
+          const now = Date.now();
+          collection = {
+            id: `collection:${crypto.randomUUID()}`,
+            name: assignment.name,
+            kind: "relationship_circle",
+            createdAt: now,
+            updatedAt: now,
+          };
+          pendingCollections.set(key, collection);
+          collectionByName.set(key, collection);
+        }
+        pendingCollectionMemberships.push({
+          id: `${collection.id}\u0000${assignment.personId}`,
+          collectionId: collection.id,
+          personId: assignment.personId,
+          source: "ai_approved",
+          createdAt: Date.now(),
+        });
       }
 
       let facts = 0;
@@ -1686,12 +1723,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       }
 
       let links = 0;
-      const committedRelations = [...currentRelations];
-      const relationDrafts = [...(commitDraft.relations ?? [])].sort(
-        (left, right) =>
-          Number(isInferredRelationBasis(left.basis)) -
-          Number(isInferredRelationBasis(right.basis)),
+      const currentAssertionById = new Map(
+        currentAssertions.map((assertion) => [assertion.id, assertion]),
       );
+      const relationDrafts = [...(commitDraft.relations ?? [])];
       for (const item of relationDrafts) {
         const a = resolvePersonRef(item.from ?? "", item.fromDraftId);
         const b = resolvePersonRef(item.to ?? "", item.toDraftId);
@@ -1699,76 +1734,59 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         if (a.id === b.id) throw new Error(`关系不能连接同一人物：${item.from}`);
         const now = Date.now();
         const label = (item.label ?? "").trim() || t("认识");
-        const mutual = inferMutual(label);
-        const semanticKind = normalizeRelationSemanticKind(label);
-        const semanticKey = relationSemanticKey({
-          fromId: a.id,
-          toId: b.id,
-          label,
-          mutual,
-          semanticKind,
-        });
+        const semantics = inferRelationSemantics(label);
         const target = item.targetRelationId
-          ? committedRelations.find((relation) => relation.id === item.targetRelationId)
-          : committedRelations.find((relation) => relationSemanticKey(relation) === semanticKey);
+          ? currentAssertionById.get(item.targetRelationId)
+          : undefined;
         if (item.targetRelationId && !target) {
           throw new Error(`${t("要更新的关系已不存在")}：${item.from} → ${item.to}`);
         }
-        if (
-          target &&
-          !batch.createdRelationIds.includes(target.id) &&
-          !batch.previousRelations?.some((relation) => relation.id === target.id)
-        ) {
-          batch.previousRelations?.push(structuredClone(target));
-        }
-        const relationId = target?.id ?? crypto.randomUUID();
-        const inferred = isInferredRelationBasis(item.basis);
-        const dependencies = inferred
-          ? findRelationDependencies(
-              a.id,
-              b.id,
-              committedRelations.filter((r) => r.id !== relationId),
-            )
-          : [];
-        const record: RelationRecord = {
-          ...target,
+        // Every accepted source statement is an assertion. Updates supersede the
+        // old assertion instead of overwriting its evidence/history in place.
+        const relationId = crypto.randomUUID();
+        const sourceIds = [...evidenceIds];
+        const record: RelationAssertionRecord = {
           id: relationId,
+          recordType: "assertion",
           fromId: a.id,
           toId: b.id,
+          predicate: semantics.predicate,
+          qualifiers: semantics.qualifiers,
           label,
-          mutual,
+          direction: semantics.predicate === "custom" ? "directed" : "ontology",
           note: item.note,
-          basis: item.basis?.trim() || undefined,
-          sourceId: evidenceIds[0] ?? target?.sourceId,
-          createdAt: target?.createdAt ?? now,
+          evidence: {
+            mode: item._audit?.humanEdited ? "manual" : "source_claim",
+            basis: item.basis?.trim() || undefined,
+            sourceIds,
+          },
+          validity: {
+            status: semantics.qualifiers.temporalStatus === "former" ? "ended" : "active",
+            validFrom: semantics.qualifiers.validFrom,
+            validTo: semantics.qualifiers.validTo,
+          },
+          createdAt: now,
           updatedAt: now,
           confirmationStatus: "confirmed",
-          evidenceMode: inferred ? "inferred" : "explicit",
           confidence: item._audit?.confidence,
-          visibility: target?.visibility ?? "auto",
-          recommendationPolicy: target?.recommendationPolicy ?? "allow",
-          semanticKind,
-          derivedFromRelationIds: dependencies.length ? dependencies : undefined,
+          supersedesAssertionId: target?.id,
           source: makeSource(
             item._audit?.humanEdited ? "manual" : "ai",
-            item._audit?.humanEdited
-              ? t("草稿中人工编辑")
-              : relationNeedsInferenceReview({
-                    basis: item.basis,
-                    note: item.note,
-                    confidence: item._audit?.confidence,
-                  })
-                ? t("AI 推断，经人工确认")
-                : t("资料整理"),
+            item._audit?.humanEdited ? t("草稿中人工编辑") : t("资料整理"),
           ),
         };
-        pendingRelations.set(record.id, record);
-        const previousIndex = committedRelations.findIndex(
-          (relation) => relation.id === relationId,
-        );
-        if (previousIndex >= 0) committedRelations[previousIndex] = record;
-        else committedRelations.push(record);
-        if (!target) batch.createdRelationIds.push(relationId);
+        pendingAssertions.set(record.id, record);
+        currentAssertionById.set(record.id, record);
+        for (const evidenceId of sourceIds) {
+          pendingRelationEvidenceLinks.push({
+            id: `${record.id}\u0000${evidenceId}`,
+            assertionId: record.id,
+            evidenceId,
+            excerpt: item.basis?.trim(),
+            createdAt: now,
+          });
+        }
+        batch.createdRelationIds.push(relationId);
         links += 1;
       }
 
@@ -1856,12 +1874,15 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         reminders += 1;
       }
 
-      await facesDb.putBatch({
+      await facesDb.applyArchiveMutationBatch({
         persons: [...pendingPeople.values()],
-        relations: [...pendingRelations.values()],
+        assertions: [...pendingAssertions.values()],
         evidence: pendingEvidence,
+        evidenceLinks: pendingRelationEvidenceLinks,
         lifeEvents: [...pendingEvents.values()],
         reminders: pendingReminders,
+        collections: [...pendingCollections.values()],
+        collectionMemberships: pendingCollectionMemberships,
       });
 
       setDraft(null);
@@ -1877,7 +1898,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       const nextPeople = [...byId.values()];
       const [nextEvents, nextRelations] = await Promise.all([
         facesDb.listLifeEvents(),
-        facesDb.listRelations(),
+        facesDb.listRelationshipViews(),
       ]);
       setExistingPeople(nextPeople);
       setExistingEvents(nextEvents);
@@ -2150,6 +2171,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               history={job.trace.map((item) => item.text)}
               stepLabel={t("步")}
             />
+          </div>
+        )}
+        {latestAgentRun && !job.busy && (
+          <div className="mt-3">
+            <AgentRunInspector run={latestAgentRun} />
           </div>
         )}
       </div>

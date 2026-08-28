@@ -1,3 +1,5 @@
+import { relationIsSymmetric, type RelationPredicate } from "./relation-ontology";
+
 /**
  * 关系方向判定：对等关系（亲戚 / 同事 / 朋友 / 夫妻…）画双箭头，
  * 有明确上下位关系（上下级 / 父子 / 师徒 / 举报…）画单箭头。
@@ -186,6 +188,15 @@ export function inferMutual(label: string): boolean {
 }
 
 /** 取一条关系的最终方向：显式字段优先，否则按词判断 */
-export function isMutualRelation(relation: { label: string; mutual?: boolean }): boolean {
+export function isMutualRelation(relation: {
+  label: string;
+  mutual?: boolean;
+  predicate?: RelationPredicate;
+}): boolean {
+  if (relation.predicate)
+    return relationIsSymmetric(
+      relation.predicate,
+      relation.predicate === "custom" && relation.mutual,
+    );
   return relation.mutual ?? inferMutual(relation.label);
 }

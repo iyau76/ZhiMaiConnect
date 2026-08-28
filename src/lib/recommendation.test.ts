@@ -54,7 +54,7 @@ describe("rankCandidates", () => {
 
     const [result] = rankCandidates("组织校园活动，找人拍照", [target], [cooperation], NOW);
 
-    expect(result.score).toBe(93);
+    expect(result.score).toBe(78);
     expect(result.confidence).toBe("高");
     expect(result.reasons).toEqual(
       expect.arrayContaining([
@@ -85,7 +85,7 @@ describe("rankCandidates", () => {
     const oldInteraction = event("old", risky.id, { date: "2023-01-01" });
     const [result] = rankCandidates("需要摄影", [risky], [oldInteraction], NOW);
 
-    expect(result.score).toBe(9);
+    expect(result.score).toBe(12);
     expect(result.risks).toEqual(
       expect.arrayContaining([
         "缺少可用联系方式",
@@ -103,6 +103,32 @@ describe("rankCandidates", () => {
     expect(
       rankCandidates("未知任务", [older, newerZ, newerA], [], NOW).map((row) => row.person.id),
     ).toEqual(["newer-a", "newer-z", "older"]);
+  });
+
+  it("ranks verified specialty above close but unqualified contacts for high-stakes tasks", () => {
+    const cardiologist = person("doctor", {
+      name: "林医生",
+      profile: { title: "心内科医生", org: "市中心医院", contact: "doctor@example.com" },
+    });
+    const closeFriend = person("friend", {
+      name: "老同学",
+      profile: { closeness: 5, contact: "friend@example.com", tags: ["热心"] },
+    });
+    const roommate = person("roommate", {
+      name: "室友",
+      profile: { closeness: 5, contact: "roommate@example.com", tags: ["随叫随到"] },
+    });
+
+    const rows = rankCandidates(
+      "最近心悸，想找懂心脏问题的人咨询",
+      [closeFriend, roommate, cardiologist],
+      [],
+      NOW,
+    );
+
+    expect(rows[0]?.person.id).toBe("doctor");
+    expect(rows[0]?.score).toBeGreaterThan(rows[1]?.score ?? 0);
+    expect(rows[1]?.risks).toContain("缺少该专业任务所需的能力证据，不能只因关系近而优先推荐");
   });
 
   it("never mutates the input person or event order", () => {

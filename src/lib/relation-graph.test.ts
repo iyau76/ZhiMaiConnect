@@ -104,6 +104,7 @@ describe("relationship graph visibility", () => {
       evidenceMode: "inferred",
       basis: "推断依据：同为 parent 之子",
       confidence: 0.7,
+      supportingRelationIds: ["parent-a", "parent-b"],
     });
     const result = selectVisibleRelations({
       relations: [parentA, parentB, sibling],
@@ -120,11 +121,74 @@ describe("relationship graph visibility", () => {
     const second = relation("second", "b", "c");
     const result = selectVisibleRelations({
       relations: [first, second],
-      mode: "focus1",
+      mode: "overview",
       selectedId: "a",
+      focusDepth: 1,
       now: NOW,
     });
-    expect(result.visible).toEqual([first]);
+    expect(result.visible).toEqual([first, second]);
     expect([...result.focusNodeIds]).toEqual(["a", "b"]);
+  });
+
+  it("keeps semantically different parallel relations available", () => {
+    const spouse = relation("spouse", "a", "b", { label: "夫妻" });
+    const colleague = relation("colleague", "a", "b", { label: "同事" });
+    const result = selectVisibleRelations({
+      relations: [spouse, colleague],
+      mode: "standard",
+      now: NOW,
+    });
+    expect(result.visible).toEqual([spouse, colleague]);
+  });
+
+  it("does not collapse two different custom labels into one generic edge", () => {
+    const mentor = relation("mentor", "a", "b", { label: "摄影导师" });
+    const investor = relation("investor", "a", "b", { label: "早期投资人" });
+    const result = selectVisibleRelations({
+      relations: [mentor, investor],
+      mode: "standard",
+      now: NOW,
+    });
+    expect(result.visible).toEqual([mentor, investor]);
+  });
+
+  it("uses a connected edge budget instead of rendering every dense high-score edge", () => {
+    const nodes = Array.from({ length: 10 }, (_, index) => `p${index}`);
+    const dense = Array.from({ length: 24 }, (_, index) =>
+      relation(
+        `dense-${index}`,
+        nodes[index % nodes.length],
+        nodes[(index * 3 + 1) % nodes.length],
+        {
+          label: `关系 ${index}`,
+          evidenceMode: "explicit",
+          confidence: 0.95,
+          updatedAt: NOW.getTime(),
+        },
+      ),
+    ).filter((item) => item.fromId !== item.toId);
+    const result = selectVisibleRelations({ relations: dense, mode: "overview", now: NOW });
+    const visibleNodes = new Set(result.visible.flatMap((item) => [item.fromId, item.toId]));
+
+    expect(result.visible.length).toBeLessThan(dense.length);
+    expect(result.visible.length).toBeLessThanOrEqual(Math.ceil(nodes.length * 1.3));
+    expect(visibleNodes).toEqual(new Set(nodes));
+    expect(result.hidden.some((item) => item.reason === "overview-redundant")).toBe(true);
+  });
+
+  it("does not fold a derived edge merely because an unrelated two-hop path exists", () => {
+    const first = relation("first", "a", "middle", { evidenceMode: "explicit" });
+    const second = relation("second", "middle", "b", { evidenceMode: "explicit" });
+    const derived = relation("derived", "a", "b", {
+      recordType: "derived",
+      evidenceMode: "inferred",
+      supportingRelationIds: ["different-support"],
+    });
+    const result = selectVisibleRelations({
+      relations: [first, second, derived],
+      mode: "standard",
+      now: NOW,
+    });
+    expect(result.visible).toContain(derived);
   });
 });

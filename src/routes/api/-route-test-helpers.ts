@@ -33,7 +33,11 @@ export async function routeRequest(
   } = {},
 ): Promise<Request> {
   const headers = options.authenticated ? await apiSessionHeaders() : new Headers();
-  headers.set("CF-Connecting-IP", `vitest-${crypto.randomUUID()}`);
+  const uniqueIp = crypto.randomUUID().replaceAll("-", "");
+  headers.set(
+    "CF-Connecting-IP",
+    `2001:db8:${uniqueIp.slice(0, 4)}:${uniqueIp.slice(4, 8)}:${uniqueIp.slice(8, 12)}:${uniqueIp.slice(12, 16)}`,
+  );
   if (options.contentType !== undefined) headers.set("Content-Type", options.contentType);
   else headers.set("Content-Type", "application/json");
   for (const [name, value] of new Headers(options.headers)) headers.set(name, value);

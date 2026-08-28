@@ -87,50 +87,66 @@ function visionReply(body: Record<string, unknown>) {
     return JSON.stringify({
       type: "final",
       summary: "已结合档案与共同事件完成比较",
-      recommendations: [
-        {
-          personId: "person-lawyer-agent",
-          score: 92,
-          confidence: "高",
-          reasons: ["法律职业与合同审阅经历直接匹配"],
-          evidence: ["档案记录：律师；共同事件：一起审核租房合同"],
-          risks: ["联系前仍需确认时间与意愿"],
-        },
-        {
-          personId: "person-dev-agent",
-          score: 35,
-          confidence: "低",
-          reasons: ["关系较熟悉"],
-          evidence: ["档案记录：前端工程师"],
-          risks: ["没有合同审阅证据"],
-        },
-      ],
-      answer:
-        "首选陈安：法律和合同经验最直接。为什么不是赵宇：现有档案只有开发经验。\n\n可编辑话术：陈安你好，方便时能否帮我看一下租房合同中的违约条款？",
+      decision: {
+        mode: "open",
+        orderedPersonIds: ["person-lawyer-agent", "person-dev-agent"],
+        accessVerified: false,
+      },
+      outreachDraft: "陈安你好，方便时能否帮我看一下租房合同中的违约条款？",
     });
   }
   if (prompt.includes("通用问答智能体")) {
     if (prompt.includes("把甲和乙的关系改成前同事")) {
+      if (!prompt.includes('"tool":"get_relation"')) {
+        return JSON.stringify({
+          type: "tool",
+          summary: "先核对现有关系",
+          tool: "get_relation",
+          args: { relationId: "relation-update-agent" },
+        });
+      }
       return JSON.stringify({
         type: "tool",
         summary: "准备关系修改提案",
-        tool: "update_relation",
+        tool: "propose_archive_mutations",
         args: {
-          relationId: "relation-update-agent",
+          title: "把甲乙关系更新为前同事",
           reason: "用户明确纠正人物关系",
-          changes: { label: "前同事", basis: "原文：甲和乙现在是前同事" },
+          operations: [
+            {
+              kind: "update_relation",
+              relationId: "relation-update-agent",
+              reason: "用户明确纠正人物关系",
+              changes: { label: "前同事", basis: "原文：甲和乙现在是前同事" },
+            },
+          ],
         },
       });
     }
     if (prompt.includes("把合成测试人物的职位改成品牌总监")) {
+      if (!prompt.includes('"tool":"get_profiles"')) {
+        return JSON.stringify({
+          type: "tool",
+          summary: "先核对人物现有职位",
+          tool: "get_profiles",
+          args: { personIds: ["person-update-agent"] },
+        });
+      }
       return JSON.stringify({
         type: "tool",
         summary: "准备职位修改提案",
-        tool: "update_person",
+        tool: "propose_archive_mutations",
         args: {
-          personId: "person-update-agent",
+          title: "把合成测试人物更新为品牌总监",
           reason: "用户明确要求修改职位",
-          changes: { title: "品牌总监" },
+          operations: [
+            {
+              kind: "update_person",
+              personId: "person-update-agent",
+              reason: "用户明确要求修改职位",
+              changes: { set: { profile: { title: "品牌总监" } } },
+            },
+          ],
         },
       });
     }
@@ -382,8 +398,19 @@ export interface IndexedDbSeed {
 
 export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {
   await page.evaluate(async (records) => {
+    const relationshipModule = await import("/src/lib/face-db.ts");
+    const relationshipBatch = {
+      persons: records.persons,
+      relations: records.relations,
+      lifeEvents: records.lifeEvents,
+      reminders: records.reminders,
+    };
+    if (Object.values(relationshipBatch).some((rows) => rows?.length)) {
+      await relationshipModule.facesDb.putBatch(relationshipBatch);
+    }
+
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openglass-faces", 9);
+      const request = indexedDB.open("openglass-faces", 12);
       request.onupgradeneeded = () => {
         const target = request.result;
         const stores = [
@@ -407,9 +434,10 @@ export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    const entries = Object.entries(records).filter(([, rows]) => rows?.length) as Array<
-      [string, SeedRecord[]]
-    >;
+    const relationshipStores = new Set(["persons", "relations", "lifeEvents", "reminders"]);
+    const entries = Object.entries(records).filter(
+      ([store, rows]) => !relationshipStores.has(store) && rows?.length,
+    ) as Array<[string, SeedRecord[]]>;
     if (!entries.length) return;
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(
@@ -428,8 +456,12 @@ export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {
 
 export async function readIndexedDbStore<T = SeedRecord>(page: Page, store: string) {
   return page.evaluate(async (storeName) => {
+    if (storeName === "relations") {
+      const relationshipModule = await import("/src/lib/face-db.ts");
+      return (await relationshipModule.facesDb.listRelations()) as T[];
+    }
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openglass-faces", 9);
+      const request = indexedDB.open("openglass-faces", 12);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });

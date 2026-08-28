@@ -199,6 +199,11 @@ export async function handleVisionPost(request: Request): Promise<Response> {
         body.action === "test" ? null : body.image,
       ),
       stream: !oneShot,
+      ...(body.maxOutputTokens
+        ? /(?:^|\/)(?:gpt-5|o[134])(?:[.-]|$)/i.test(body.model)
+          ? { max_completion_tokens: body.maxOutputTokens }
+          : { max_tokens: body.maxOutputTokens }
+        : {}),
       ...(body.model.startsWith("openai/gpt-5.6") ? { reasoning_effort: "none" } : {}),
     };
 

@@ -1,6 +1,13 @@
 /** 把人物关系库和事务导出成 Markdown / Word / PDF（浏览器本地生成，不上传） */
 
-import { facesDb, type PersonRecord, type ProjectRecord, type RelationRecord } from "./face-db";
+import { archiveRestorePlan, createArchiveV2 } from "./archive-data";
+import {
+  facesDb,
+  type FaceDbArchiveReplacement,
+  type PersonRecord,
+  type ProjectRecord,
+  type RelationRecord,
+} from "./face-db";
 import { inferMutual } from "./relation-kind";
 
 export type ExportFormat = "json" | "md" | "docx" | "pdf";
@@ -28,8 +35,40 @@ interface Sheet {
 interface ExportPayload {
   title: string;
   sheets: Sheet[];
-  /** Lossless, versioned data for backup/re-import; presentation sheets are intentionally lossy. */
-  machineData: Record<string, unknown>;
+}
+
+/**
+ * Read every durable current-model store. Compatibility relation views are deliberately
+ * absent: assertions are facts, derived relations are diagnostic cache only.
+ */
+export async function buildMachineArchive() {
+  return createArchiveV2(await facesDb.readArchiveSnapshot());
+}
+
+export function previewMachineArchiveRestore(input: string | unknown) {
+  const plan = archiveRestorePlan(input);
+  return {
+    sourceSchema: plan.sourceSchema,
+    warnings: plan.warnings,
+    discardedProjectionCount: plan.discardedProjectionCount,
+    recordCount: Object.values(plan.records).reduce((sum, rows) => sum + rows.length, 0),
+  };
+}
+
+/** Validate and atomically replace the complete durable archive. */
+export async function restoreMachineArchive(input: string | unknown) {
+  const plan = archiveRestorePlan(input);
+  const records = plan.records;
+  const replacement: FaceDbArchiveReplacement = {
+    ...records,
+    persons: records.persons.map((person) => ({
+      ...person,
+      descriptors: [],
+      thumb: "",
+    })),
+  };
+  await facesDb.replaceArchiveSnapshot(replacement);
+  return previewMachineArchiveRestore(input);
 }
 
 function nameMap(persons: PersonRecord[]) {
@@ -113,14 +152,6 @@ async function buildPeople(): Promise<ExportPayload> {
 
   return {
     title: "知脉 Connect · 人物关系库",
-    machineData: {
-      schema: "zhimai-connect/archive@1",
-      exportedAt: new Date().toISOString(),
-      persons,
-      relations,
-      lifeEvents: events,
-      reminders,
-    },
     sheets: [
       {
         name: "人物档案",
@@ -197,12 +228,6 @@ async function buildProjects(): Promise<ExportPayload> {
 
   return {
     title: "知脉 Connect · 事务清单",
-    machineData: {
-      schema: "zhimai-connect/projects@1",
-      exportedAt: new Date().toISOString(),
-      persons,
-      projects,
-    },
     sheets: [
       {
         name: "事务",
@@ -382,18 +407,26 @@ function exportPdf(payload: ExportPayload) {
 
 /** 导出指定模块的数据；pdf 走浏览器打印（可选「另存为 PDF」），中文不会乱码 */
 export async function exportData(scope: ExportScope, format: ExportFormat) {
+  const base = `${
+    format === "json" ? "知脉-完整备份" : scope === "people" ? "知脉-人物关系库" : "知脉-事务清单"
+  }-${stamp()}`;
+
+  if (format === "json") {
+    // “完整备份”始终覆盖全库，不受当前页面的展示 scope 限制。
+    // This prevents a projects-page backup from silently omitting relations.
+    const archive = await buildMachineArchive();
+    download(
+      new Blob([JSON.stringify(archive, null, 2)], {
+        type: "application/json;charset=utf-8",
+      }),
+      `${base}.json`,
+    );
+    return Object.values(archive.records).reduce((sum, rows) => sum + rows.length, 0);
+  }
+
   const payload = await buildPayload(scope);
-  const base = `${scope === "people" ? "知脉-人物关系库" : "知脉-事务清单"}-${stamp()}`;
 
   switch (format) {
-    case "json":
-      download(
-        new Blob([JSON.stringify(payload.machineData, null, 2)], {
-          type: "application/json;charset=utf-8",
-        }),
-        `${base}.json`,
-      );
-      break;
     case "md":
       download(
         new Blob([toMarkdown(payload)], { type: "text/markdown;charset=utf-8" }),

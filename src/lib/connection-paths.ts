@@ -23,6 +23,8 @@ export interface ConnectionPathOptions {
   now?: Date;
 }
 
+export type TargetSideEntryOptions = ConnectionPathOptions;
+
 interface AccessEdge {
   person: PersonRecord;
   strength: number;
@@ -50,6 +52,62 @@ interface FoundPath {
   cost: number;
 }
 
+interface PathState {
+  currentId: string;
+  personIds: string[];
+  edges: TraversalEdge[];
+  cost: number;
+}
+
+class MinPathQueue {
+  private rows: PathState[] = [];
+
+  private compare(left: PathState, right: PathState) {
+    return (
+      left.cost - right.cost ||
+      left.personIds.length - right.personIds.length ||
+      left.personIds.join("\u0000").localeCompare(right.personIds.join("\u0000"), "zh-CN")
+    );
+  }
+
+  push(value: PathState) {
+    this.rows.push(value);
+    let index = this.rows.length - 1;
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if (this.compare(this.rows[parent]!, value) <= 0) break;
+      this.rows[index] = this.rows[parent]!;
+      index = parent;
+    }
+    this.rows[index] = value;
+  }
+
+  pop() {
+    const head = this.rows[0];
+    const tail = this.rows.pop();
+    if (!head || !tail || !this.rows.length) return head;
+    let index = 0;
+    while (true) {
+      const left = index * 2 + 1;
+      const right = left + 1;
+      if (left >= this.rows.length) break;
+      const child =
+        right < this.rows.length && this.compare(this.rows[right]!, this.rows[left]!) < 0
+          ? right
+          : left;
+      if (this.compare(tail, this.rows[child]!) <= 0) break;
+      this.rows[index] = this.rows[child]!;
+      index = child;
+    }
+    this.rows[index] = tail;
+    return head;
+  }
+
+  get size() {
+    return this.rows.length;
+  }
+}
+
 function normalized(value: string) {
   return value.toLowerCase().replace(/[\s·•._-]+/g, "");
 }
@@ -67,8 +125,11 @@ function aliases(person: PersonRecord) {
 /** 只把档案中真实出现的人名当目标；多人同时命中时交给用户选择。 */
 export function detectTargetIntent(task: string, persons: PersonRecord[]): TargetIntent {
   const compactTask = normalized(task);
-  const matches = persons.filter((person) =>
-    aliases(person).some((alias) => compactTask.includes(normalized(alias))),
+  const matches = persons.filter(
+    (person) =>
+      person.entityRole !== "ego" &&
+      !["我", "me"].includes(person.name.trim().toLowerCase()) &&
+      aliases(person).some((alias) => compactTask.includes(normalized(alias))),
   );
   if (!matches.length) return { mode: "open", matches: [] };
 
@@ -206,6 +267,14 @@ export function rankConnectionPaths(options: ConnectionPathOptions): CandidateRe
   if (!target) return [];
   const names = new Map(options.persons.map((person) => [person.id, person.name]));
   const personsById = new Map(options.persons.map((person) => [person.id, person]));
+  const egoIds = new Set(
+    options.persons
+      .filter(
+        (person) =>
+          person.entityRole === "ego" || ["我", "me"].includes(person.name.trim().toLowerCase()),
+      )
+      .map((person) => person.id),
+  );
   const eligible = options.relations.filter((relation) => {
     if (!personsById.has(relation.fromId) || !personsById.has(relation.toId)) return false;
     if (relation.recommendationPolicy === "block") return false;
@@ -216,6 +285,7 @@ export function rankConnectionPaths(options: ConnectionPathOptions): CandidateRe
   });
   const graph = new Map<string, TraversalEdge[]>();
   for (const relation of eligible) {
+    if (egoIds.has(relation.fromId) || egoIds.has(relation.toId)) continue;
     const forward = traversalEdge(relation, relation.fromId, relation.toId, options.events, now);
     const backward = traversalEdge(relation, relation.toId, relation.fromId, options.events, now);
     graph.set(relation.fromId, [...(graph.get(relation.fromId) ?? []), forward]);
@@ -223,70 +293,97 @@ export function rankConnectionPaths(options: ConnectionPathOptions): CandidateRe
   }
 
   const access = options.persons
-    .map((person) => accessEdge(person, options.events, now))
-    .filter((item): item is AccessEdge => Boolean(item));
-  const found: FoundPath[] = [];
-  // Dense graphs grow exponentially under simple-path enumeration. Keep one global,
-  // deterministic expansion budget so an adversarial archive cannot freeze the UI.
-  const maxExpansions = 50_000;
-  let expansions = 0;
-
-  const walk = (
-    accessStart: AccessEdge,
-    currentId: string,
-    personIds: string[],
-    edges: TraversalEdge[],
-    visited: Set<string>,
-    cost: number,
-  ) => {
-    if (currentId === options.targetId) {
-      found.push({
-        connector: accessStart.person,
-        personIds,
-        edges,
-        access: accessStart,
-        cost,
-      });
-      return;
-    }
-    // 加上虚拟“我”到首位联系人的边，总跳数不能超过 maxHops。
-    if (edges.length + 1 >= maxHops) return;
-    const nextEdges = [...(graph.get(currentId) ?? [])].sort(
-      (a, b) => Number(b.toId === options.targetId) - Number(a.toId === options.targetId),
-    );
-    for (const edge of nextEdges) {
-      if (expansions >= maxExpansions) return;
-      if (visited.has(edge.toId)) continue;
-      expansions += 1;
-      visited.add(edge.toId);
-      walk(
-        accessStart,
-        edge.toId,
-        [...personIds, edge.toId],
-        [...edges, edge],
-        visited,
-        cost + edge.cost + 0.12,
+    .filter((person) => !egoIds.has(person.id))
+    .map((person) => {
+      const egoRelations = eligible.filter(
+        (relation) =>
+          (egoIds.has(relation.fromId) && relation.toId === person.id) ||
+          (egoIds.has(relation.toId) && relation.fromId === person.id),
       );
-      visited.delete(edge.toId);
-    }
-  };
-
+      const base = accessEdge(person, options.events, now);
+      if (!egoRelations.length) return base;
+      const explicit = egoRelations.some(
+        (relation) => relationEvidenceMode(relation) !== "inferred",
+      );
+      const relationStrength = explicit ? 0.76 : 0.5;
+      return {
+        person,
+        strength: Math.max(base?.strength ?? 0, relationStrength),
+        cost: -Math.log(Math.max(base?.strength ?? 0, relationStrength)),
+        evidence: [
+          ...(base?.evidence ?? []),
+          ...egoRelations.map((relation) => `与我的已记录关系：${relation.label}`),
+        ],
+        risks: [...(base?.risks ?? []), ...(explicit ? [] : ["与我的入口关系来自已确认推导"])],
+        updatedAt: Math.max(
+          base?.updatedAt ?? person.updatedAt ?? person.createdAt,
+          ...egoRelations.map((relation) => relation.updatedAt ?? relation.createdAt),
+        ),
+      } satisfies AccessEdge;
+    })
+    .filter((item): item is AccessEdge => Boolean(item));
+  // Each contact gets an exact bounded-hop Dijkstra search. Unlike simple-path
+  // enumeration this has polynomial state growth and no insertion-order cutoff.
+  const bestByConnector: FoundPath[] = [];
   for (const start of access) {
-    if (expansions >= maxExpansions) break;
-    walk(start, start.person.id, [start.person.id], [], new Set([start.person.id]), start.cost);
+    const queue = new MinPathQueue();
+    queue.push({
+      currentId: start.person.id,
+      personIds: [start.person.id],
+      edges: [],
+      cost: start.cost,
+    });
+    const bestStateCost = new Map<string, number>();
+    let best: FoundPath | undefined;
+    while (queue.size) {
+      const state = queue.pop()!;
+      const stateKey = `${state.currentId}\u0000${state.edges.length}`;
+      const previousCost = bestStateCost.get(stateKey);
+      if (previousCost !== undefined && previousCost < state.cost - 1e-12) continue;
+      bestStateCost.set(stateKey, state.cost);
+      if (state.currentId === options.targetId) {
+        best = {
+          connector: start.person,
+          personIds: state.personIds,
+          edges: state.edges,
+          access: start,
+          cost: state.cost,
+        };
+        break;
+      }
+      // The virtual “me → first contact” edge counts as one hop.
+      if (state.edges.length + 1 >= maxHops) continue;
+      const nextEdges = [...(graph.get(state.currentId) ?? [])].sort(
+        (left, right) =>
+          left.cost - right.cost ||
+          left.toId.localeCompare(right.toId, "zh-CN") ||
+          left.relation.id.localeCompare(right.relation.id, "zh-CN"),
+      );
+      for (const edge of nextEdges) {
+        const nextCost = state.cost + edge.cost + 0.12;
+        const nextKey = `${edge.toId}\u0000${state.edges.length + 1}`;
+        const known = bestStateCost.get(nextKey);
+        if (known !== undefined && known <= nextCost + 1e-12) continue;
+        queue.push({
+          currentId: edge.toId,
+          personIds: [...state.personIds, edge.toId],
+          edges: [...state.edges, edge],
+          cost: nextCost,
+        });
+      }
+    }
+    if (best) bestByConnector.push(best);
   }
 
-  found.sort(
-    (a, b) =>
-      a.cost - b.cost ||
-      a.personIds.length - b.personIds.length ||
-      a.connector.name.localeCompare(b.connector.name, "zh-CN"),
+  bestByConnector.sort(
+    (left, right) =>
+      left.cost - right.cost ||
+      left.personIds.length - right.personIds.length ||
+      left.connector.name.localeCompare(right.connector.name, "zh-CN") ||
+      left.connector.id.localeCompare(right.connector.id),
   );
-  const bestByConnector = new Map<string, FoundPath>();
-  for (const path of found)
-    if (!bestByConnector.has(path.connector.id)) bestByConnector.set(path.connector.id, path);
 
-  return [...bestByConnector.values()].slice(0, limit).map((path) => {
+  return bestByConnector.slice(0, limit).map((path) => {
     const summary = displayPath(path, names);
     const relationEvidence = path.edges.map((edge) => edge.evidence);
     const risks = [...new Set([...path.access.risks, ...path.edges.flatMap((edge) => edge.risks)])];
@@ -318,4 +415,94 @@ export function rankConnectionPaths(options: ConnectionPathOptions): CandidateRe
       },
     };
   });
+}
+
+/**
+ * When no verified path from the user exists, rank people directly connected
+ * to the target. These are leads on the target side, never claims of access.
+ */
+export function rankTargetSideEntries(options: TargetSideEntryOptions): CandidateRecommendation[] {
+  const now = options.now ?? new Date();
+  const target = options.persons.find((person) => person.id === options.targetId);
+  if (!target) return [];
+  const peopleById = new Map(options.persons.map((person) => [person.id, person]));
+  const eligible = options.relations.filter(
+    (relation) =>
+      relation.recommendationPolicy !== "block" &&
+      relation.confirmationStatus !== "rejected" &&
+      (options.includePending || relation.confirmationStatus !== "pending") &&
+      (options.includeInferred || relationEvidenceMode(relation) !== "inferred") &&
+      (relation.fromId === target.id || relation.toId === target.id),
+  );
+  const byPerson = new Map<string, RelationRecord[]>();
+  for (const relation of eligible) {
+    const candidateId = relation.fromId === target.id ? relation.toId : relation.fromId;
+    const candidate = peopleById.get(candidateId);
+    if (
+      !candidate ||
+      candidate.entityRole === "ego" ||
+      ["我", "me"].includes(candidate.name.trim().toLowerCase())
+    ) {
+      continue;
+    }
+    byPerson.set(candidateId, [...(byPerson.get(candidateId) ?? []), relation]);
+  }
+  const graphDegree = new Map<string, number>();
+  for (const relation of options.relations) {
+    if (relation.confirmationStatus === "rejected" || relation.recommendationPolicy === "block")
+      continue;
+    graphDegree.set(relation.fromId, (graphDegree.get(relation.fromId) ?? 0) + 1);
+    graphDegree.set(relation.toId, (graphDegree.get(relation.toId) ?? 0) + 1);
+  }
+  return [...byPerson.entries()]
+    .map(([personId, relationRows]) => {
+      const person = peopleById.get(personId)!;
+      const strengths = relationRows.map((relation) =>
+        traversalEdge(relation, personId, target.id, options.events, now),
+      );
+      const bestStrength = Math.max(...strengths.map((edge) => edge.strength));
+      const explicitCount = relationRows.filter(
+        (relation) => relationEvidenceMode(relation) !== "inferred",
+      ).length;
+      const score = Math.min(
+        85,
+        Math.round(
+          bestStrength * 68 +
+            Math.min(10, (graphDegree.get(personId) ?? 0) * 2) +
+            Math.min(7, (relationRows.length - 1) * 3),
+        ),
+      );
+      return {
+        person,
+        score,
+        confidence: explicitCount ? ("中" as const) : ("低" as const),
+        mode: "target_side" as const,
+        reasons: [
+          `与目标 ${target.name} 有 ${relationRows.length} 条已记录关系`,
+          `目标侧关系：${relationRows.map((relation) => relation.label).join("、")}`,
+        ],
+        evidence: strengths.map((edge) => edge.evidence),
+        risks: [
+          "这只是目标侧潜在入口；档案尚未证明你能联系此人",
+          ...strengths.flatMap((edge) => edge.risks),
+        ],
+        updatedAt: Math.max(
+          person.updatedAt ?? person.createdAt,
+          ...relationRows.map((relation) => relation.updatedAt ?? relation.createdAt),
+        ),
+        source: person.source,
+        targetEntry: {
+          targetId: target.id,
+          relationIds: relationRows.map((relation) => relation.id),
+          labels: relationRows.map((relation) => relation.label),
+        },
+      } satisfies CandidateRecommendation;
+    })
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.person.name.localeCompare(right.person.name, "zh-CN") ||
+        left.person.id.localeCompare(right.person.id),
+    )
+    .slice(0, Math.max(1, Math.min(20, Math.floor(options.limit ?? 5))));
 }
