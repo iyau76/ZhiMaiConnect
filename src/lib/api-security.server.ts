@@ -642,29 +642,79 @@ export async function readResponseTextLimited(
 }
 
 export async function consumeUpstreamError(response: Response, service: string): Promise<Response> {
+  let raw = "";
   try {
-    await readResponseTextLimited(response, API_LIMITS.upstreamErrorBytes);
+    raw = await readResponseTextLimited(response, API_LIMITS.upstreamErrorBytes);
   } catch {
     await response.body?.cancel().catch(() => undefined);
   }
-  console.warn(`[${service}] upstream rejected request (status=${response.status})`);
+  const safeToken = (value: unknown) => {
+    if (typeof value !== "string" && typeof value !== "number") return undefined;
+    const token = String(value).trim();
+    return token && token.length <= 160 && /^[A-Za-z0-9._:/ -]+$/.test(token) ? token : undefined;
+  };
+  let providerCode: string | undefined;
+  let providerType: string | undefined;
+  try {
+    const body = JSON.parse(raw) as Record<string, unknown>;
+    const error =
+      body.error && typeof body.error === "object" && !Array.isArray(body.error)
+        ? (body.error as Record<string, unknown>)
+        : body;
+    providerCode = safeToken(error.code);
+    providerType = safeToken(error.type);
+  } catch {
+    // Plain-text and HTML error pages intentionally contribute no body details.
+  }
+  const upstreamRequestId =
+    safeToken(response.headers.get("x-request-id")) ??
+    safeToken(response.headers.get("request-id")) ??
+    safeToken(response.headers.get("cf-ray"));
+  console.warn(
+    `[${service}] upstream rejected request (status=${response.status}${providerCode ? `, code=${providerCode}` : ""}${upstreamRequestId ? `, request=${upstreamRequestId}` : ""})`,
+  );
+
+  const diagnostic = {
+    upstreamStatus: response.status,
+    ...(providerCode ? { providerCode } : {}),
+    ...(providerType ? { providerType } : {}),
+    ...(upstreamRequestId ? { upstreamRequestId } : {}),
+  };
 
   if (response.status === 429) {
-    return apiErrorResponse(
-      new SafeApiError(429, "UPSTREAM_REJECTED", "上游 AI 服务请求过于频繁，请稍后再试"),
+    return apiJson(
+      {
+        error: "上游 AI 服务请求过于频繁，请稍后再试",
+        code: "UPSTREAM_REJECTED",
+        ...diagnostic,
+      },
+      { status: 429 },
     );
   }
   if (response.status === 401 || response.status === 403) {
-    return apiErrorResponse(
-      new SafeApiError(502, "UPSTREAM_REJECTED", "上游 AI 服务拒绝了凭据，请检查 API Key"),
+    return apiJson(
+      {
+        error: "上游 AI 服务拒绝了凭据，请检查 API Key",
+        code: "UPSTREAM_REJECTED",
+        ...diagnostic,
+      },
+      { status: 502 },
     );
   }
   if (response.status === 402) {
-    return apiErrorResponse(
-      new SafeApiError(502, "UPSTREAM_REJECTED", "上游 AI 服务额度不足，请检查账户余额"),
+    return apiJson(
+      {
+        error: "上游 AI 服务额度不足，请检查账户余额",
+        code: "UPSTREAM_REJECTED",
+        ...diagnostic,
+      },
+      { status: 502 },
     );
   }
-  return apiErrorResponse(new SafeApiError(502, "UPSTREAM_REJECTED", "上游 AI 服务拒绝了请求"));
+  return apiJson(
+    { error: "上游 AI 服务拒绝了请求", code: "UPSTREAM_REJECTED", ...diagnostic },
+    { status: 502 },
+  );
 }
 
 export function decodeBase64(value: string): Uint8Array {

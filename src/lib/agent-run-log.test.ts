@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { MemoryAgentRunRecorder, projectAgentRun, redactAgentPayload } from "./agent-run-log";
+import { ModelTransportError } from "./model-transport-resilience";
 
 describe("agent run log", () => {
   it("redacts credentials and direct identifiers in bounded payloads", () => {
@@ -21,6 +22,28 @@ describe("agent run log", () => {
     expect(serialized).not.toContain("me@example.com");
     expect(serialized).not.toContain("13800138000");
     expect(serialized).toContain("[CIRCULAR]");
+  });
+
+  it("keeps transport diagnostics while redacting the error message", () => {
+    const error = new ModelTransportError("请求失败（503）", 503, "UPSTREAM_REJECTED", {
+      clientRequestId: "client-42",
+      edgeRequestId: "edge-42",
+      upstreamStatus: 503,
+      providerCode: "overloaded",
+    });
+
+    expect(redactAgentPayload(error)).toEqual({
+      name: "ModelTransportError",
+      message: "请求失败（503）",
+      status: 503,
+      code: "UPSTREAM_REJECTED",
+      diagnostics: {
+        clientRequestId: "client-42",
+        edgeRequestId: "edge-42",
+        upstreamStatus: 503,
+        providerCode: "overloaded",
+      },
+    });
   });
 
   it("records ordered events with explicit actual and estimated token totals", () => {

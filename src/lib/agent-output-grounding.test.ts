@@ -170,6 +170,75 @@ describe("assistant archive grounding", () => {
     expect(result.evidenceText).toContain("苏晚：猫");
   });
 
+  it("treats an explicitly selected empty field as an auditable missing state", () => {
+    const result = validateAssistantArchiveGrounding({
+      question: "当前人物档案还缺哪些信息？",
+      answer: "建议先补齐联系方式与相识时间。",
+      archiveClaims: [
+        { sourceRef: "person:doctor", field: "age" },
+        { sourceRef: "person:doctor", field: "hasContact" },
+        { sourceRef: "person:doctor", field: "aliases" },
+      ],
+      archive: {
+        persons: [
+          {
+            id: "doctor",
+            name: "何澜",
+            profile: { age: "", contact: "", identities: [] },
+            note: "心内科医生",
+            descriptors: [],
+            thumb: "",
+            createdAt: 1,
+          },
+        ],
+        relations: [],
+        events: [],
+      },
+      includeArchive: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.citations).toEqual([
+      expect.objectContaining({ field: "age", state: "missing", claim: "何澜：年龄未记录" }),
+      expect.objectContaining({
+        field: "hasContact",
+        state: "missing",
+        claim: "何澜：联系方式未记录",
+      }),
+      expect.objectContaining({
+        field: "aliases",
+        state: "missing",
+        claim: "何澜：别名或账号未记录",
+      }),
+    ]);
+  });
+
+  it("still rejects a field path that does not exist in the canonical source", () => {
+    const result = validateAssistantArchiveGrounding({
+      question: "当前人物档案还缺哪些信息？",
+      answer: "",
+      archiveClaims: [{ sourceRef: "person:doctor", field: "inventedField" }],
+      archive,
+      includeArchive: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("没有可展示的本地事实");
+  });
+
+  it("marks an uncited archive-completeness conclusion as unverified", () => {
+    const result = validateAssistantArchiveGrounding({
+      question: "当前人物档案库还缺哪些信息？",
+      answer: "当前人物档案主要缺少联系方式与生日。",
+      archiveClaims: [],
+      archive,
+      includeArchive: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("档案事实");
+  });
+
   it("keeps verified citations and discards facts smuggled into model commentary", () => {
     const result = validateAssistantArchiveGrounding({
       question: "何澜是做什么的？",

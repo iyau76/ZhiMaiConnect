@@ -1,8 +1,18 @@
+export interface ModelTransportDiagnostics {
+  clientRequestId?: string;
+  edgeRequestId?: string;
+  upstreamRequestId?: string;
+  upstreamStatus?: number;
+  providerCode?: string;
+  providerType?: string;
+}
+
 export class ModelTransportError extends Error {
   constructor(
     message: string,
     readonly status?: number,
     readonly code?: string,
+    readonly diagnostics?: ModelTransportDiagnostics,
   ) {
     super(message);
     this.name = "ModelTransportError";

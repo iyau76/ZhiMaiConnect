@@ -52,37 +52,17 @@ describe("assistant agent", () => {
     expect(askModelMock).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects query-time pseudo clarification and continues with an archive read", async () => {
-    askModelMock
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "final",
-            answer: "苏晚档案里没有喜好，请用户补充。",
-            archiveClaims: [],
-            clarification: { missing: ["likeInfo"], question: "请补充苏晚的喜好。" },
-          }),
-        );
-      })
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        expect(String(args[1])).toContain("invalid_clarification");
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "tool",
-            tool: "get_profiles",
-            args: { personIds: ["first-love"] },
-          }),
-        );
-      })
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "final",
-            answer: "苏晚喜欢猫。",
-            archiveClaims: [{ sourceRef: "person:first-love", quote: "猫" }],
-          }),
-        );
-      });
+  it("shows query-time pseudo clarification with a warning instead of a repair loop", async () => {
+    askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[4] as (chunk: string) => void)(
+        JSON.stringify({
+          type: "final",
+          answer: "苏晚档案里没有喜好，请用户补充。",
+          archiveClaims: [],
+          clarification: { missing: ["likeInfo"], question: "请补充苏晚的喜好。" },
+        }),
+      );
+    });
 
     const result = await runAssistantAgent({
       preset,
@@ -104,10 +84,11 @@ describe("assistant agent", () => {
     });
 
     expect(result.status).toBe("completed");
-    expect(result.rounds).toBe(3);
-    expect(result.toolCalls).toBe(1);
-    expect(result.answer).toContain("苏晚：猫");
-    expect(result.answer).not.toContain("档案里没有喜好");
+    expect(result.rounds).toBe(1);
+    expect(result.toolCalls).toBe(0);
+    expect(result.answer).toContain("请补充苏晚的喜好");
+    expect(result.answer).toContain("AI 生成");
+    expect(askModelMock).toHaveBeenCalledTimes(1);
   });
 
   it("reuses an identical local read instead of executing the tool twice", async () => {
@@ -472,7 +453,7 @@ describe("assistant agent", () => {
     );
   });
 
-  it("does not treat one empty keyword search as proof that the archive has no record", async () => {
+  it("turns one empty keyword search into a visible soft warning without another model round", async () => {
     askModelMock
       .mockImplementationOnce(async (...args: unknown[]) => {
         (args[4] as (chunk: string) => void)(
@@ -488,21 +469,6 @@ describe("assistant agent", () => {
           JSON.stringify({
             type: "final",
             answer: "当前本地人物档案中没有与拍照直接关联的记录。",
-          }),
-        );
-      })
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        expect(String(args[1])).toContain("一次关键词检索为空不能证明");
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({ type: "tool", tool: "list_profiles", args: { limit: 12 } }),
-        );
-      })
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "final",
-            answer: "建议再查看详细经历，并由你确认是否适合具体任务。",
-            archiveClaims: [{ sourceRef: "person:p1", quote: "喜欢摄影" }],
           }),
         );
       });
@@ -525,11 +491,13 @@ describe("assistant agent", () => {
       includeArchive: true,
     });
 
-    expect(result.rounds).toBe(4);
-    expect(result.answer).toContain("小雨");
+    expect(result.rounds).toBe(2);
+    expect(result.answer).toContain("未找到”不等于档案中一定不存在");
+    expect(result.answer).toContain("AI 生成");
+    expect(askModelMock).toHaveBeenCalledTimes(2);
   });
 
-  it("uses sourceRef to render canonical evidence and discards prompt-injected prose", async () => {
+  it("keeps canonical evidence separate and soft-warns about unverified model prose", async () => {
     askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
       (args[4] as (chunk: string) => void)(
         JSON.stringify({
@@ -566,34 +534,16 @@ describe("assistant agent", () => {
     expect(result.rounds).toBe(1);
     expect(result.answer).toContain("喜欢摄影");
     expect(result.answer).toContain("[person:p1]");
-    expect(result.answer).not.toContain("首席执行官");
+    expect(result.answer).toContain("首席执行官");
+    expect(result.answer).toContain("AI 生成");
   });
 
-  it("moves a name pronunciation out of free analysis into a bound language block", async () => {
-    askModelMock
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({ type: "final", answer: "何澜读作 hé lán。", archiveClaims: [] }),
-        );
-      })
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        expect(String(args[1])).toContain("invalid_language_answer");
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "final",
-            answer: "",
-            archiveClaims: [],
-            languageAnswers: [
-              {
-                subject: "何澜",
-                targetRef: "person:doctor",
-                kind: "pronunciation",
-                value: "hé lán",
-              },
-            ],
-          }),
-        );
-      });
+  it("shows an unbound language answer with a warning instead of starting a repair loop", async () => {
+    askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[4] as (chunk: string) => void)(
+        JSON.stringify({ type: "final", answer: "何澜读作 hé lán。", archiveClaims: [] }),
+      );
+    });
 
     const result = await runAssistantAgent({
       preset,
@@ -613,10 +563,10 @@ describe("assistant agent", () => {
       includeArchive: true,
     });
 
-    expect(result.rounds).toBe(2);
-    expect(result.answer).toContain("AI 语言说明（模型生成，未写入档案）");
-    expect(result.answer).toContain("何澜（person:doctor）");
-    expect(result.answer).not.toContain("档案依据");
+    expect(result.rounds).toBe(1);
+    expect(result.answer).toContain("何澜读作 hé lán");
+    expect(result.answer).toContain("AI 生成");
+    expect(askModelMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps unverified language values in their explicit model-authored namespace", async () => {
@@ -650,7 +600,7 @@ describe("assistant agent", () => {
     expect(result.answer).not.toContain("档案依据");
   });
 
-  it("does not let a language block satisfy the archive part of a mixed question", async () => {
+  it("soft-warns when a language block does not cover the archive part of a mixed question", async () => {
     askModelMock.mockImplementation(async (...args: unknown[]) => {
       (args[4] as (chunk: string) => void)(
         JSON.stringify({
@@ -669,25 +619,27 @@ describe("assistant agent", () => {
       );
     });
 
-    await expect(
-      runAssistantAgent({
-        preset,
-        question: "何澜怎么读，她是做什么的？",
-        persons: [
-          {
-            id: "doctor",
-            name: "何澜",
-            note: "心内科医生",
-            descriptors: [],
-            thumb: "",
-            createdAt: 1,
-          },
-        ],
-        relations: [],
-        events: [],
-        includeArchive: true,
-      }),
-    ).rejects.toThrow("档案回答缺少可核验证据");
+    const result = await runAssistantAgent({
+      preset,
+      question: "何澜怎么读，她是做什么的？",
+      persons: [
+        {
+          id: "doctor",
+          name: "何澜",
+          note: "心内科医生",
+          descriptors: [],
+          thumb: "",
+          createdAt: 1,
+        },
+      ],
+      relations: [],
+      events: [],
+      includeArchive: true,
+    });
+
+    expect(result.rounds).toBe(1);
+    expect(result.answer).toContain("AI 语言说明");
+    expect(result.answer).toContain("AI 生成");
   });
 
   it("renders archive evidence and a language notice as separate local sections", async () => {
@@ -758,6 +710,68 @@ describe("assistant agent", () => {
     expect(result.answer).not.toContain("何澜");
     expect(result.answer).not.toMatch(/(?:片|粒|毫克|mg|毫升|ml)/iu);
     expect(askModelMock).not.toHaveBeenCalled();
+  });
+
+  it("finishes a completeness audit on empty-field citations without a validation loop", async () => {
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "tool",
+            tool: "get_profiles",
+            args: { personIds: ["p1"] },
+          }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "final",
+            summary: "已完成缺失字段盘点",
+            answer: "建议先补充联系方式、年龄与相识时间。",
+            archiveClaims: [
+              { sourceRef: "person:p1", field: "age" },
+              { sourceRef: "person:p1", field: "metAt" },
+              { sourceRef: "person:p1", field: "hasContact" },
+              { sourceRef: "person:p1", field: "aliases" },
+            ],
+            languageAnswers: [],
+          }),
+        );
+      });
+
+    const result = await runAssistantAgent({
+      preset,
+      question: "当前人物档案库还缺哪些信息需要我补充？",
+      persons: [
+        {
+          id: "p1",
+          name: "陆怀安",
+          profile: { age: "", metAt: "", contact: "", identities: [] },
+          note: "投资人",
+          descriptors: [],
+          thumb: "",
+          createdAt: 1,
+        },
+      ],
+      relations: [],
+      events: [],
+      includeArchive: true,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.rounds).toBe(2);
+    expect(result.answer).toContain("年龄未记录");
+    expect(result.answer).toContain("联系方式未记录");
+    expect(result.run.steps).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "validation",
+          output: expect.objectContaining({ status: "invalid_archive_grounding" }),
+        }),
+      ]),
+    );
+    expect(askModelMock).toHaveBeenCalledTimes(2);
   });
 
   it("retries a transient failure in the same logical round, then resumes with prior tools", async () => {
@@ -918,7 +932,8 @@ describe("assistant agent", () => {
     expect(result.status).toBe("completed");
     expect(result.rounds).toBe(1);
     expect(result.answer).toContain("苏晚：青梅竹马/初恋");
-    expect(result.answer).not.toContain("已定位到");
+    expect(result.answer).toContain("已定位到");
+    expect(result.answer).toContain("AI 生成");
     expect(result.citations).toHaveLength(1);
     expect(askModelMock).toHaveBeenCalledTimes(1);
   });

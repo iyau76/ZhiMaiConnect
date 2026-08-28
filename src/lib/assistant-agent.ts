@@ -52,7 +52,6 @@ import {
 
 const PREFERRED_TOOL_HISTORY_CHARACTERS = 5_000;
 const NO_ARCHIVE_CONTEXT = "用户未启用本机资料访问；只回答一般问题或使用联网工具。";
-const MAX_GROUNDING_REPAIRS = 2;
 
 interface AssistantToolCall {
   type: "tool";
@@ -597,7 +596,7 @@ export async function runAssistantAgent(options: {
   const repeatedCalls = new Map<string, number>(resume?.repeatedCalls ?? []);
   let emptyProfileSearchNeedsFallback = resume?.emptyProfileSearchNeedsFallback ?? false;
   let formatCorrection = resume?.formatCorrection ?? false;
-  let groundingRepairs = resume?.groundingRepairs ?? 0;
+  const groundingRepairs = resume?.groundingRepairs ?? 0;
   const firstRound = resume?.nextRound ?? 1;
   const priorToolCalls = resume?.consumedBudget.toolCalls ?? 0;
   const completionMetadata = () => ({
@@ -607,6 +606,38 @@ export async function runAssistantAgent(options: {
     historyCompression,
     reusedToolResults,
   });
+  const completeWithSoftWarning = (options: {
+    round: number;
+    answer: string;
+    reason: string;
+    citations?: ArchiveCitation[];
+    extraText?: string;
+  }): AssistantAgentResult => {
+    const citations = options.citations ?? [];
+    const visibleAnswer = [
+      options.extraText,
+      options.answer || "AI 已返回结论，但未提供可完整核验的正文。",
+      "⚠ AI 生成，未通过完整的本地档案核验，请注意辨别。",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    runtime.recordLifecycle("validation", {
+      status: "soft_warning",
+      reason: options.reason,
+      citationCount: citations.length,
+      additionalModelRound: false,
+    });
+    trace({ kind: "status", text: "档案核验未完全通过，已改为软提醒，不再追加模型轮次" });
+    trace({ kind: "done", text: `回答完成 · ${options.round} 轮 · 核验软提醒` });
+    return {
+      ...completionMetadata(),
+      answer: visibleAnswer,
+      citations,
+      rounds: options.round,
+      toolCalls: priorToolCalls + runtime.contextBudget.snapshot().toolCalls,
+      run: finishRun(),
+    };
+  };
   if (resume) {
     runtime.recordLifecycle("validation", {
       status: "resumed",
@@ -820,16 +851,14 @@ export async function runAssistantAgent(options: {
           continue;
         }
         if (response.clarification != null && !clarification) {
-          toolHistory.push({
-            call: { type: "invalid_clarification" },
-            result: {
-              error:
-                "clarification 只能用于档案变更计划缺少源圈层、目标圈层或待移动人物；普通资料查询必须调用读取工具或提交可核验 archiveClaims",
-              allowedMissing: [...MUTATION_CLARIFICATION_FIELDS],
-            },
+          return completeWithSoftWarning({
+            round,
+            answer:
+              clipped((response.clarification as { question?: unknown }).question, 500) ||
+              answer ||
+              clipped(response.summary, 100),
+            reason: "模型返回了非变更场景的澄清请求",
           });
-          trace({ kind: "status", text: "澄清请求不属于变更缺口，正在继续核对档案" });
-          continue;
         }
         if (options.includeArchive && clarification) {
           runtime.recordLifecycle("validation", {
@@ -850,14 +879,12 @@ export async function runAssistantAgent(options: {
           emptyProfileSearchNeedsFallback &&
           /(没有|未找到|不存在).{0,18}(档案|记录|关联|人物)/u.test(answer)
         ) {
-          toolHistory.push({
-            call: { type: "premature_empty_search_conclusion" },
-            result: {
-              error: "一次关键词检索为空不能证明人物库没有记录；请改词检索或浏览人物索引后再回答",
-            },
+          return completeWithSoftWarning({
+            round,
+            answer,
+            reason: "模型把单次关键词未命中解读为全库无记录",
+            extraText: "本轮只完成了有限检索，“未找到”不等于档案中一定不存在。",
           });
-          trace({ kind: "status", text: "首次关键词未命中，正在改用人物索引继续核对" });
-          continue;
         }
         const language = validateNameLanguageAnswers({
           question: options.question,
@@ -874,28 +901,11 @@ export async function runAssistantAgent(options: {
           ) &&
             !hasLanguageAnswers)
         ) {
-          if (groundingRepairs >= MAX_GROUNDING_REPAIRS || round === maxRounds) {
-            throw new Error(
-              `AI 的语言说明没有遵守结构化契约：${language.error ?? "缺少 languageAnswers"}`,
-            );
-          }
-          groundingRepairs += 1;
-          toolHistory.push({
-            call: { type: "invalid_language_answer" },
-            result: {
-              error: language.error ?? "语言问题必须使用 languageAnswers",
-              requiredAction:
-                "把读音、写法、含义或翻译从 answer 移入 languageAnswers，并把 answer 置空；subject 与 kind 必须对应同一条明确语言请求。若 subject 与档案人物同名，targetRef 必须使用该人物的 person:id。",
-              targetCandidates: options.includeArchive
-                ? archive.persons
-                    .filter((person) => options.question.includes(person.name))
-                    .slice(0, 8)
-                    .map((person) => ({ subject: person.name, targetRef: `person:${person.id}` }))
-                : [],
-            },
+          return completeWithSoftWarning({
+            round,
+            answer: answer || clipped(response.summary, 100),
+            reason: language.error ?? "语言说明未按结构化字段绑定",
           });
-          trace({ kind: "status", text: "语言说明格式未绑定问题目标，正在要求模型修正" });
-          continue;
         }
         const grounding = validateAssistantArchiveGrounding({
           question: options.question,
@@ -907,59 +917,27 @@ export async function runAssistantAgent(options: {
             language.pureLanguageRequest && language.answers.length > 0,
         });
         if (!grounding.ok) {
-          if (groundingRepairs >= MAX_GROUNDING_REPAIRS || round === maxRounds) {
-            if (grounding.citations.length && grounding.evidenceText) {
-              const groundedOnlyAnswer = [
-                grounding.evidenceText,
-                language.rendered,
-                "AI 的附加说明未通过档案校验，已隐藏；上方事实由本机原记录生成。",
-              ]
-                .filter(Boolean)
-                .join("\n\n");
-              runtime.recordLifecycle("validation", {
-                status: "grounded_fallback",
-                discardedModelCommentary: true,
-                citationCount: grounding.citations.length,
-                reason: grounding.error,
-              });
-              trace({ kind: "done", text: "附加说明未通过校验，已仅展示本地可核验依据" });
-              return {
-                ...completionMetadata(),
-                answer: groundedOnlyAnswer,
-                citations: grounding.citations,
-                rounds: round,
-                toolCalls: priorToolCalls + runtime.contextBudget.snapshot().toolCalls,
-                run: finishRun(),
-              };
-            }
-            throw new Error(`AI 的档案回答缺少可核验证据：${grounding.error ?? "引用无效"}`);
-          }
-          groundingRepairs += 1;
-          toolHistory.push({
-            call: { type: "invalid_archive_grounding" },
-            result: {
-              error: grounding.error ?? "档案引用无效",
-              requiredAction:
-                "档案事实只能放入 archiveClaims：从下面候选中复制 sourceRef 与 field；不要复制 quote/claim，也不要在 answer 中出现档案人物姓名、代词指代或人物事实。语言说明只能放入 languageAnswers。answer 只保留核验建议；没有建议可留空。",
-              citationCandidates: grounding.repairCitations ?? [],
-            },
+          return completeWithSoftWarning({
+            round,
+            answer: answer || clipped(response.summary, 100),
+            reason: grounding.error ?? "档案引用未完全核验",
+            citations: grounding.citations,
+            extraText: [grounding.evidenceText, language.rendered].filter(Boolean).join("\n\n"),
           });
-          trace({ kind: "status", text: "档案结论缺少可核验引用，正在要求模型修正" });
-          continue;
         }
         if (grounding.includeModelAnswer === false) {
-          runtime.recordLifecycle("validation", {
-            status: "canonical_facts_rendered",
-            discardedModelCommentary: true,
-            citationCount: grounding.citations.length,
-            reason: grounding.discardedCommentaryReason,
+          return completeWithSoftWarning({
+            round,
+            answer: answer || clipped(response.summary, 100),
+            reason: grounding.discardedCommentaryReason ?? "AI 自由文本中包含未完全核验的档案断言",
+            citations: grounding.citations,
+            extraText: [grounding.evidenceText, language.rendered].filter(Boolean).join("\n\n"),
           });
-          trace({ kind: "status", text: "档案事实已由本地原记录生成" });
         }
         const groundedAnswer = [
           grounding.evidenceText,
           language.rendered,
-          grounding.includeModelAnswer !== false && answer
+          answer
             ? grounding.citations.length
               ? `AI 分析（不作为档案事实）\n${answer}`
               : answer

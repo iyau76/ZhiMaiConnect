@@ -22,6 +22,8 @@ export interface ArchiveCitation {
   quote: string;
   /** Canonical archive fact rendered locally; models cannot author this field. */
   claim: string;
+  /** Missingness is a locally resolved archive state, never a model-authored assertion. */
+  state?: "present" | "missing";
 }
 
 export type ArchiveCitationCandidate = ArchiveCitation;
@@ -259,7 +261,7 @@ function isInstructionLikeQuote(quote: string) {
 }
 
 function claimsArchiveEvidence(value: string) {
-  return /(?:根据|查阅|本机|当前|人物)?(?:档案|人物库|资料库|记录).{0,24}(?:显示|记载|写有|包含|存在|没有|未找到|不存在|相关|关联)/u.test(
+  return /(?:根据|查阅|本机|当前|人物)?(?:档案|人物库|资料库|记录).{0,24}(?:显示|记载|写有|包含|存在|没有|未找到|不存在|缺少|缺失|空缺|未记录|相关|关联)/u.test(
     value,
   );
 }
@@ -357,37 +359,105 @@ function canonicalClaim(source: ArchiveGroundingSource, quote: string) {
   return source.canonicalClaim ?? `${source.claimPrefix}：${quote}`;
 }
 
+const ARCHIVE_FIELD_LABELS: Record<string, string> = {
+  relation: "关系身份",
+  title: "职位",
+  org: "单位",
+  department: "部门",
+  tags: "标签",
+  projects: "项目记录",
+  closeness: "亲密度",
+  hasContact: "联系方式",
+  age: "年龄",
+  birthday: "生日",
+  gender: "性别",
+  address: "地址",
+  reportsTo: "汇报对象",
+  likes: "喜好",
+  dislikes: "反感事项",
+  gifts: "礼物记录",
+  metAt: "相识时间",
+  aliases: "别名或账号",
+  note: "备注",
+  date: "日期",
+  dateEnd: "结束日期",
+  place: "地点",
+  detail: "详情",
+};
+
+function archiveFieldLabel(field: string) {
+  return ARCHIVE_FIELD_LABELS[field] ?? ARCHIVE_FIELD_LABELS[field.split(".")[0] ?? ""] ?? field;
+}
+
+function readFieldPath(value: unknown, field: string) {
+  let current = value;
+  for (const segment of field.split(".")) {
+    if (
+      !current ||
+      typeof current !== "object" ||
+      Array.isArray(current) ||
+      !Object.prototype.hasOwnProperty.call(current, segment)
+    ) {
+      return { exists: false, value: undefined };
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return { exists: true, value: current };
+}
+
+function isMissingArchiveValue(field: string, value: unknown) {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  if (field === "hasContact" && value === false) return true;
+  if (typeof value === "object") return Object.keys(value as Record<string, unknown>).length === 0;
+  return false;
+}
+
 function renderEvidenceText(citations: ArchiveCitation[]) {
   return citations.length
     ? `档案依据（可回查）\n${citations.map((citation) => `- [${citation.sourceRef}] ${citation.claim}\n  原记录：“${citation.quote}”`).join("\n")}`
     : undefined;
 }
 
-function locallySelectedQuote(
+function locallySelectedCitation(
   source: ArchiveGroundingSource,
   requestedQuote: string,
   requestedField?: string,
 ) {
   if (source.preferredQuote && (!requestedField || requestedField === "label")) {
-    return source.preferredQuote;
+    return { quote: source.preferredQuote, state: "present" as const };
+  }
+  if (requestedField) {
+    const selected = readFieldPath(source.structured, requestedField);
+    if (!selected.exists) return undefined;
+    if (isMissingArchiveValue(requestedField, selected.value)) {
+      return {
+        quote: "（未记录）",
+        state: "missing" as const,
+        claim: `${source.claimPrefix}：${archiveFieldLabel(requestedField)}未记录`,
+      };
+    }
   }
   const facts = structuredFactFragments(source.structured).filter((item) =>
     quoteIsSubstantive(item.value, source),
   );
   if (requestedField) {
     const fieldMatches = facts.filter((item) => item.field === requestedField);
-    return (
+    const quote =
       fieldMatches.find((item) => /\p{Script=Han}/u.test(item.value))?.value ??
       fieldMatches[0]?.value ??
-      ""
-    );
+      "";
+    return quote ? { quote, state: "present" as const } : undefined;
   }
   const canonical = facts.map((item) => item.value);
   const requested = normalized(requestedQuote);
   const matches = canonical.filter(
     (item) => normalized(item) === requested || requested.includes(normalized(item)),
   );
-  return matches.find((item) => /\p{Script=Han}/u.test(item)) ?? matches[0] ?? canonical[0] ?? "";
+  const quote =
+    matches.find((item) => /\p{Script=Han}/u.test(item)) ?? matches[0] ?? canonical[0] ?? "";
+  return quote ? { quote, state: "present" as const } : undefined;
 }
 
 function repairCitationCandidates(
@@ -478,8 +548,8 @@ export function validateAssistantArchiveGrounding(options: {
         repairCitations,
       };
     }
-    const quote = locallySelectedQuote(source, requestedQuote, requestedField);
-    if (!quote) {
+    const selection = locallySelectedCitation(source, requestedQuote, requestedField);
+    if (!selection) {
       return {
         ok: false,
         error: `档案引用 ${sourceRef} 没有可展示的本地事实`,
@@ -500,14 +570,15 @@ export function validateAssistantArchiveGrounding(options: {
         repairCitations,
       };
     }
-    const citationKey = `${sourceRef}\u0000${quote}`;
+    const citationKey = `${sourceRef}\u0000${requestedField ?? ""}\u0000${selection.quote}`;
     if (!citationKeys.has(citationKey)) {
       citationKeys.add(citationKey);
       citations.push({
         sourceRef,
         ...(requestedField ? { field: requestedField } : {}),
-        quote,
-        claim: canonicalClaim(source, quote),
+        quote: selection.quote,
+        claim: selection.claim ?? canonicalClaim(source, selection.quote),
+        state: selection.state,
       });
     }
   }

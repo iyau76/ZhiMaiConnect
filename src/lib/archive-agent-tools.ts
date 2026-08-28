@@ -76,6 +76,7 @@ export function detailedArchivePerson(person: PersonRecord) {
   return {
     ...compactArchivePerson(person),
     age: cleanArchiveText(profile.age, 30),
+    birthday: cleanArchiveText(profile.birthday, 30),
     gender: cleanArchiveText(profile.gender, 30),
     address: cleanArchiveText(profile.address, 160),
     reportsTo: cleanArchiveText(profile.reportsTo, 100),

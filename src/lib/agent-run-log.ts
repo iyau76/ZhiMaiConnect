@@ -122,7 +122,20 @@ export function redactAgentPayload(value: unknown, extraKeys: readonly string[] 
     }
     if (current instanceof Date) return current.toISOString();
     if (current instanceof Error) {
-      return { name: current.name, message: redactString(current.message) };
+      const extended = current as Error & {
+        status?: unknown;
+        code?: unknown;
+        diagnostics?: unknown;
+      };
+      return {
+        name: current.name,
+        message: redactString(current.message),
+        ...(typeof extended.status === "number" ? { status: extended.status } : {}),
+        ...(typeof extended.code === "string" ? { code: redactString(extended.code) } : {}),
+        ...(extended.diagnostics !== undefined
+          ? { diagnostics: visit(extended.diagnostics, depth + 1) }
+          : {}),
+      };
     }
     if (typeof current !== "object") return String(current);
     if (seen.has(current)) return "[CIRCULAR]";

@@ -227,6 +227,30 @@ test("upstream errors never echo sensitive response bodies and disable caching",
   assert.equal(body.includes("private prompt"), false);
 });
 
+test("upstream errors retain only bounded diagnostic identifiers", async () => {
+  const response = await consumeUpstreamError(
+    new Response(
+      JSON.stringify({
+        error: {
+          message: "private prompt must never be returned",
+          type: "server_error",
+          code: "upstream_overloaded",
+        },
+      }),
+      { status: 503, headers: { "X-Request-Id": "req-safe-42" } },
+    ),
+    "test",
+  );
+  const body = (await response.json()) as Record<string, unknown>;
+
+  assert.equal(response.status, 502);
+  assert.equal(body.upstreamStatus, 503);
+  assert.equal(body.providerType, "server_error");
+  assert.equal(body.providerCode, "upstream_overloaded");
+  assert.equal(body.upstreamRequestId, "req-safe-42");
+  assert.equal(JSON.stringify(body).includes("private prompt"), false);
+});
+
 test("rate limiter returns a safe 429 with Retry-After", async () => {
   const request = jsonRequest("{}", { "CF-Connecting-IP": `test-${crypto.randomUUID()}` });
   await enforceRateLimit(request, "test", 1);

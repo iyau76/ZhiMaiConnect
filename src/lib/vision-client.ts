@@ -79,9 +79,13 @@ async function streamServer(
   signal: AbortSignal,
   maxOutputTokens?: number,
 ) {
+  const clientRequestId = crypto.randomUUID();
   const response = await fetch("/api/vision", {
     method: "POST",
-    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
+    headers: await apiSessionHeaders({
+      "Content-Type": "application/json",
+      "X-Zhimai-Client-Request": clientRequestId,
+    }),
     signal,
     body: JSON.stringify({
       action: "chat",
@@ -99,14 +103,46 @@ async function streamServer(
   if (!response.ok) {
     let message = `请求失败（${response.status}）`;
     let code: string | undefined;
+    let upstreamStatus: number | undefined;
+    let providerCode: string | undefined;
+    let providerType: string | undefined;
+    let upstreamRequestId: string | undefined;
     try {
-      const json = (await response.json()) as { error?: string; code?: string };
+      const json = (await response.json()) as {
+        error?: string;
+        code?: string;
+        upstreamStatus?: number;
+        providerCode?: string;
+        providerType?: string;
+        upstreamRequestId?: string;
+      };
       if (json.error) message = json.error;
       code = json.code;
+      upstreamStatus = json.upstreamStatus;
+      providerCode = json.providerCode;
+      providerType = json.providerType;
+      upstreamRequestId = json.upstreamRequestId;
     } catch {
       /* 保留默认信息 */
     }
-    throw new ModelTransportError(message, response.status, code);
+    const edgeRequestId = response.headers.get("cf-ray") ?? undefined;
+    const diagnosticText = [
+      `client=${clientRequestId}`,
+      edgeRequestId ? `edge=${edgeRequestId}` : "",
+      upstreamStatus ? `upstream=${upstreamStatus}` : "",
+      providerCode ? `provider=${providerCode}` : "",
+      upstreamRequestId ? `upstream-request=${upstreamRequestId}` : "",
+    ]
+      .filter(Boolean)
+      .join("；");
+    throw new ModelTransportError(`${message}（${diagnosticText}）`, response.status, code, {
+      clientRequestId,
+      edgeRequestId,
+      upstreamRequestId,
+      upstreamStatus,
+      providerCode,
+      providerType,
+    });
   }
   if (!response.body) throw new Error("接口没有返回内容");
 
