@@ -168,6 +168,7 @@ export const visionBodySchema = z
     model: z.string().trim().min(1).max(200),
     action: z.enum(["chat", "test", "audit"]).default("chat"),
     maxOutputTokens: z.number().int().min(1).max(32_768).optional(),
+    temperature: z.number().min(0).max(2).optional(),
     prompt: optionalTrimmedString(API_LIMITS.promptCharacters),
     image: imageSchema.nullish(),
     history: z

@@ -118,6 +118,63 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
     if (ago) year = thisYear - num(ago[1]);
   }
 
+  const iso = s.match(/((?:19|20)\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?/);
+  if (iso) {
+    const y = Number(iso[1]);
+    const m = Number(iso[2]);
+    const d = Number(iso[3]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= new Date(y, m, 0).getDate()) {
+      return { date: `${y}-${pad(m)}-${pad(d)}`, precision: "day" };
+    }
+  }
+
+  const relativeDays: Array<[RegExp, number]> = [
+    [/今天|今日/, 0],
+    [/明天|明日/, 1],
+    [/后天/, 2],
+    [/昨天|昨日/, -1],
+    [/前天/, -2],
+  ];
+  for (const [pattern, offset] of relativeDays) {
+    if (!pattern.test(s)) continue;
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+    return {
+      date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+      precision: "day",
+    };
+  }
+
+  const weekdayIndex: Record<string, number> = {
+    一: 1,
+    二: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    日: 7,
+    天: 7,
+  };
+  const nextWeek = s.match(/下(?:个)?周([一二三四五六日天])?/);
+  if (nextWeek) {
+    const current = now.getDay() === 0 ? 7 : now.getDay();
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + (8 - current));
+    if (nextWeek[1]) {
+      const date = new Date(monday);
+      date.setDate(monday.getDate() + weekdayIndex[nextWeek[1]] - 1);
+      return {
+        date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+        precision: "day",
+      };
+    }
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return {
+      date: `${monday.getFullYear()}-${pad(monday.getMonth() + 1)}-${pad(monday.getDate())}`,
+      dateEnd: `${sunday.getFullYear()}-${pad(sunday.getMonth() + 1)}-${pad(sunday.getDate())}`,
+      precision: "range",
+    };
+  }
+
   /** 一段时间：2019 到 2021 */
   const span = s.match(/((?:19|20)\d{2})\s*年?\s*(?:到|至|-|—|~)\s*((?:19|20)\d{2})/);
   if (span) {
@@ -142,6 +199,17 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
   }
 
   /** 月份 */
+  const monthDayMatch = s.match(
+    /([一二三四五六七八九十]{1,2}|\d{1,2})月([一二三四五六七八九十]{1,2}|\d{1,2})日?/,
+  );
+  if (monthDayMatch) {
+    const m = num(monthDayMatch[1]);
+    const d = num(monthDayMatch[2]);
+    const y = year ?? thisYear;
+    if (m >= 1 && m <= 12 && d >= 1 && d <= new Date(y, m, 0).getDate()) {
+      return { date: `${y}-${pad(m)}-${pad(d)}`, precision: "day" };
+    }
+  }
   const monthMatch = s.match(/([一二三四五六七八九十]{1,2}|\d{1,2})\s*月/);
   if (monthMatch) {
     const m = num(monthMatch[1]);

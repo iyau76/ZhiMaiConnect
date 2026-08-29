@@ -833,9 +833,7 @@ export async function runAssistantAgent(options: {
 
       if (response.type === "final") {
         const typedClaims = resolveTypedAssistantClaims(response.claims);
-        const answer = [clipped(response.answer, 8_000), ...typedClaims.advice]
-          .filter(Boolean)
-          .join("\n");
+        const modelAnswer = clipped(response.answer, 8_000);
         const archiveClaims = [
           ...typedClaims.archiveClaims,
           ...(Array.isArray(response.archiveClaims) ? response.archiveClaims : []),
@@ -846,7 +844,8 @@ export async function runAssistantAgent(options: {
         ];
         const clarification = mutationClarification(response.clarification);
         if (
-          !answer &&
+          !modelAnswer &&
+          !typedClaims.advice.length &&
           !archiveClaims.length &&
           !languageAnswers.length &&
           !typedClaims.uncertain.length &&
@@ -882,6 +881,7 @@ export async function runAssistantAgent(options: {
           archive,
           includeArchive: options.includeArchive,
         });
+        const answer = [modelAnswer, ...typedClaims.advice].filter(Boolean).join("\n");
         const groundedAnswer = [
           grounding.evidenceText,
           language.ok ? language.rendered : "",

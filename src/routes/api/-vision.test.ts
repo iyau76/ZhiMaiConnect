@@ -91,7 +91,7 @@ describe("POST /api/vision", () => {
     assertSafeResponse(response);
   });
 
-  test("finishes a streaming response at the SSE DONE marker without waiting for disconnect", async () => {
+  test("forwards an authenticated SSE response as raw bytes", async () => {
     const encoder = new TextEncoder();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -102,7 +102,7 @@ describe("POST /api/vision", () => {
                 'data: {"choices":[{"delta":{"content":"整理完成"}}]}\n\ndata: [DONE]\n\n',
               ),
             );
-            // Deliberately keep the mocked network stream open. [DONE] must be sufficient.
+            controller.close();
           },
         }),
         { headers: { "Content-Type": "text/event-stream" } },
@@ -125,7 +125,11 @@ describe("POST /api/vision", () => {
 
     const response = await handleVisionPost(request);
     assert.equal(response.status, 200);
-    assert.equal(await response.text(), "整理完成");
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+    assert.equal(
+      await response.text(),
+      'data: {"choices":[{"delta":{"content":"整理完成"}}]}\n\ndata: [DONE]\n\n',
+    );
   });
 
   test("rejects a 200 HTML error page instead of returning an empty successful stream", async () => {
@@ -146,7 +150,7 @@ describe("POST /api/vision", () => {
     assert.equal((await responseBody(response)).code, "UPSTREAM_INVALID_RESPONSE");
   });
 
-  test("rejects an SSE response that completes without any content delta", async () => {
+  test("leaves empty-delta validation to the browser-side SSE decoder", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("data: [DONE]\n\n", {
         status: 200,
@@ -160,7 +164,7 @@ describe("POST /api/vision", () => {
         { authenticated: true },
       ),
     );
-    assert.equal(response.status, 502);
-    assert.equal((await responseBody(response)).code, "UPSTREAM_INVALID_RESPONSE");
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "data: [DONE]\n\n");
   });
 });

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { parseLooseJson } from "./ai-text";
 import { IMPORT_LIMITS } from "./doc-import";
 import { normalizeRelationConfidence } from "./kinship-rules";
+import { parseFuzzyLocal } from "./fuzzy-date";
 import type { PersonRecord } from "./face-db";
 
 const SUPPORTED_EXTENSIONS = [
@@ -125,6 +126,8 @@ export interface IngestRelation extends IngestAuditFields {
   basis?: string;
   /** Client-side update decision; never accepted directly from the model schema. */
   targetRelationId?: string;
+  /** Stable identity inside the uncommitted intake workspace. */
+  _draftId?: string;
   _relationChecked?: boolean;
   _relationReason?: string;
   /** Stable client-side endpoint references used when multiple people share a name. */
@@ -145,6 +148,8 @@ export interface IngestFact extends IngestAuditFields {
   personDraftId?: string;
   /** Existing archive person selected by the typed intake compiler. */
   personId?: string;
+  /** Stable identity inside the uncommitted intake workspace. */
+  _draftId?: string;
 }
 
 export interface IngestEvidence extends IngestAuditFields {
@@ -152,12 +157,16 @@ export interface IngestEvidence extends IngestAuditFields {
   title?: string;
   text?: string;
   origin?: string;
+  /** Stable identity inside the uncommitted intake workspace. */
+  _draftId?: string;
 }
 
 export interface IngestEvent extends IngestAuditFields {
   title: string;
   detail?: string;
   date?: string;
+  /** Exact temporal phrase copied from the source for deterministic local normalization. */
+  timeText?: string;
   dateEnd?: string;
   precision?: "day" | "month" | "year" | "range";
   place?: string;
@@ -185,6 +194,8 @@ export interface IngestReminder extends IngestAuditFields {
   /** Existing archive people selected by the typed intake compiler. */
   peoplePersonIds?: Array<string | undefined>;
   kind?: "birthday" | "festival" | "gift" | "custom";
+  /** Stable identity inside the uncommitted intake workspace. */
+  _draftId?: string;
 }
 
 /** One reviewable contract shared by text, file, image and voice intake. */
@@ -196,6 +207,8 @@ export interface IngestCandidate {
   reminders?: IngestReminder[];
   evidence?: IngestEvidence[];
   summary?: string;
+  /** Monotonic revision of the uncommitted intake workspace. */
+  _revision?: number;
   /** AI-provided values that could not be matched to the current source material. */
   _groundingWarnings?: GroundingWarning[];
 }
@@ -292,6 +305,7 @@ const ingestEventSchema = z
     title: z.string().max(500),
     detail: z.string().max(2_000).optional(),
     date: shortText,
+    timeText: shortText,
     dateEnd: shortText,
     precision: z.enum(["day", "month", "year", "range"]).optional(),
     place: shortText,
@@ -336,7 +350,13 @@ export const ingestCandidateSchema = z
 
 /** Parse the model's loose wrapper, then enforce the runtime intake contract. */
 export function parseIngestCandidate(text: string): IngestCandidate {
-  return ingestCandidateSchema.parse(parseLooseJson<unknown>(text));
+  const candidate = ingestCandidateSchema.parse(parseLooseJson<unknown>(text));
+  candidate.events = candidate.events?.map((event) => {
+    if (isValidIsoDate(event.date)) return event;
+    const parsed = parseFuzzyLocal(event.timeText ?? event.date ?? "");
+    return parsed ? { ...event, ...parsed } : event;
+  });
+  return candidate;
 }
 
 export interface IngestFieldDiff {

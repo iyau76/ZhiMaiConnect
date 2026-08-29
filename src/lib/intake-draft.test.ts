@@ -114,6 +114,20 @@ describe("intake runtime schema", () => {
     });
   });
 
+  test("normalizes a natural-language event time into the timeline contract", () => {
+    const parsed = parseIngestCandidate(
+      JSON.stringify({
+        events: [{ title: "复诊", timeText: "2026年9月3日", people: ["我"] }],
+      }),
+    );
+    expect(parsed.events?.[0]).toMatchObject({
+      title: "复诊",
+      timeText: "2026年9月3日",
+      date: "2026-09-03",
+      precision: "day",
+    });
+  });
+
   test("rejects unknown fields and invalid confidence before a draft is shown", () => {
     expect(() => parseIngestCandidate('{"people":[{"name":"唐悦","invented":true}]}')).toThrow();
     expect(() => parseIngestCandidate('{"people":[{"name":"唐悦","confidence":2}]}')).toThrow();

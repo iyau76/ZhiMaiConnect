@@ -17,6 +17,7 @@ async function streamOllama(
   onChunk: (text: string) => void,
   signal: AbortSignal,
   maxOutputTokens?: number,
+  temperature?: number,
 ) {
   const base = preset.baseUrl.replace(/\/+$/, "");
   const messages = [
@@ -35,7 +36,14 @@ async function streamOllama(
       model: preset.model,
       messages,
       stream: true,
-      ...(maxOutputTokens ? { options: { num_predict: maxOutputTokens } } : {}),
+      ...(maxOutputTokens || temperature !== undefined
+        ? {
+            options: {
+              ...(maxOutputTokens ? { num_predict: maxOutputTokens } : {}),
+              ...(temperature !== undefined ? { temperature } : {}),
+            },
+          }
+        : {}),
     }),
     signal,
   });
@@ -78,6 +86,7 @@ async function streamServer(
   onChunk: (text: string) => void,
   signal: AbortSignal,
   maxOutputTokens?: number,
+  temperature?: number,
 ) {
   const clientRequestId = crypto.randomUUID();
   const response = await fetch("/api/vision", {
@@ -97,6 +106,7 @@ async function streamServer(
       image,
       history,
       maxOutputTokens,
+      temperature,
     }),
   });
 
@@ -148,14 +158,66 @@ async function streamServer(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  const isSse = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream");
+  let buffer = "";
+  let emitted = false;
+  const emit = (value: string) => {
+    if (!value) return;
+    emitted = true;
+    onChunk(value);
+  };
+  const consumeSseLines = (text: string, flush = false) => {
+    buffer += text;
+    const lines = buffer.split(/\r?\n/);
+    buffer = flush ? "" : (lines.pop() ?? "");
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      try {
+        const payload = JSON.parse(data) as {
+          error?: { message?: unknown; code?: unknown };
+          choices?: Array<{ delta?: { content?: unknown } }>;
+        };
+        if (payload.error) {
+          throw new ModelTransportError(
+            typeof payload.error.message === "string"
+              ? payload.error.message
+              : "上游 AI 返回流式错误",
+            502,
+            typeof payload.error.code === "string" ? payload.error.code : "UPSTREAM_STREAM_ERROR",
+          );
+        }
+        const delta = payload.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta) emit(delta);
+      } catch (error) {
+        if (error instanceof ModelTransportError) throw error;
+        // SSE comments, heartbeats and provider metadata do not contain answer text.
+      }
+    }
+  };
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      onChunk(decoder.decode(value, { stream: true }));
+      const text = decoder.decode(value, { stream: true });
+      if (isSse) consumeSseLines(text);
+      else emit(text);
+    }
+    const tail = decoder.decode();
+    if (isSse) consumeSseLines(tail, true);
+    else if (tail) emit(tail);
+    if (!emitted) {
+      throw new ModelTransportError(
+        "上游 AI 未返回可用的流式内容",
+        502,
+        "UPSTREAM_INVALID_RESPONSE",
+      );
     }
   } catch (error) {
     if (signal.aborted) throw error;
+    if (error instanceof ModelTransportError) throw error;
     throw new ModelTransportError("上游 AI 流式响应中断", 502, "STREAM_INTERRUPTED");
   }
 }
@@ -180,7 +242,7 @@ export async function askModel(
   history: ChatTurn[],
   onChunk: (text: string) => void,
   signal: AbortSignal,
-  options: { maxOutputTokens?: number } = {},
+  options: { maxOutputTokens?: number; temperature?: number } = {},
 ) {
   assertConfigured(preset);
   const fittedHistory = fitVisionHistory(history);
@@ -200,6 +262,7 @@ export async function askModel(
       onChunk,
       signal,
       options.maxOutputTokens,
+      options.temperature,
     );
   }
   const dataTypes: CloudDataType[] = ["文字内容"];
@@ -214,6 +277,7 @@ export async function askModel(
     onChunk,
     signal,
     options.maxOutputTokens,
+    options.temperature,
   );
 }
 

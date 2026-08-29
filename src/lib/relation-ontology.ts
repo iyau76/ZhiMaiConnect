@@ -211,6 +211,12 @@ export function inferRelationSemantics(label: string): InferredRelationSemantics
     return result("great_grandparent_of", { lineage: "blood" });
   if (/(外祖|祖孙|祖父|祖母|爷爷|奶奶|外公|外婆|grandparent)/i.test(value))
     return result("grandparent_of", { lineage: "blood" });
+  if (
+    /(?:继父|继母)(?:的)?(?:儿子|女儿|孩子)|step(?:father|mother)(?:'s)?(?:son|daughter|child)/i.test(
+      value,
+    )
+  )
+    return result("step_sibling_of", { lineage: "step" });
   if (/(继兄|继弟|继姐|继妹|stepsibling)/i.test(value))
     return result("step_sibling_of", { lineage: "step" });
   if (/(继父|继母|stepfather|stepmother|stepparent)/i.test(value))
@@ -279,7 +285,11 @@ export function inferRelationSemantics(label: string): InferredRelationSemantics
     });
   if (/(兄弟|兄妹|姐弟|姐妹|哥哥|弟弟|姐姐|妹妹|同胞|sibling|brother|sister)/i.test(value))
     return result("sibling_of", { lineage: "blood" });
-  if (/(叔侄|伯侄|姑侄|舅甥|姨甥|叔伯侄|uncle|aunt|nephew|niece)/i.test(value))
+  if (
+    /(叔侄|伯侄|姑侄|舅甥|姨甥|叔伯侄|叔父|叔叔|伯父|伯伯|姑母|姑妈|舅父|舅舅|姨母|姨妈|内侄|uncle|aunt|nephew|niece)/i.test(
+      value,
+    )
+  )
     return result("uncle_aunt_of", { lineage: "blood" });
   if (/(同宗|宗亲|族亲|族兄|族弟|clan)/i.test(value)) return result("clan_of", { lineage: "clan" });
   if (/(汇报|直属上级|reports?to)/i.test(value)) return result("reports_to");
@@ -310,6 +320,57 @@ export function resolveRelationSemantics(input: {
     qualifiers: {
       ...(predicate === inferred.predicate ? inferred.qualifiers : {}),
       ...input.qualifiers,
+    },
+  };
+}
+
+function genderRole(value: string | undefined) {
+  const normalized = value?.trim().toLocaleLowerCase("zh-CN") ?? "";
+  if (/^(?:女|女性|女生|woman|female|girl)$/.test(normalized)) return "female" as const;
+  if (/^(?:男|男性|男生|man|male|boy)$/.test(normalized)) return "male" as const;
+  return undefined;
+}
+
+/**
+ * Compile a source relation against already extracted entity facts. Display
+ * wording never gets to overrule an explicit endpoint gender: this keeps the
+ * durable parent/child roles stable even when a model varies “母子/母女”.
+ */
+export function resolveRelationSemanticsForPeople(input: {
+  label: string;
+  predicate?: RelationPredicate;
+  qualifiers?: RelationQualifiers;
+  fromGender?: string;
+  toGender?: string;
+}): InferredRelationSemantics {
+  const semantics = resolveRelationSemantics(input);
+  if (semantics.predicate === "spouse_of") {
+    return {
+      ...semantics,
+      qualifiers: {
+        ...semantics.qualifiers,
+        // “丈夫/妻子” often names the opposite endpoint, so it cannot be a
+        // direction-free relationship identity. Gender lives on the people;
+        // only concubinage remains a relationship-level distinction here.
+        partnerRole: semantics.qualifiers.partnerRole === "concubine" ? "concubine" : "partner",
+      },
+    };
+  }
+  if (semantics.predicate !== "parent_of" && semantics.predicate !== "step_parent_of") {
+    return semantics;
+  }
+  const parentGender = genderRole(input.fromGender);
+  const childGender = genderRole(input.toGender);
+  return {
+    ...semantics,
+    qualifiers: {
+      ...semantics.qualifiers,
+      ...(parentGender
+        ? { parentRole: parentGender === "female" ? ("mother" as const) : ("father" as const) }
+        : {}),
+      ...(childGender
+        ? { childRole: childGender === "female" ? ("daughter" as const) : ("son" as const) }
+        : {}),
     },
   };
 }

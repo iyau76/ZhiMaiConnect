@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import type { AgentRun } from "@/lib/agent-run-log";
 import { LocalAgentRunStore, type StoredAgentRunSummary } from "@/lib/agent-run-store";
 import type { AgentBudget } from "@/lib/agent-runtime";
+import { getLang, t } from "@/lib/i18n";
 import {
   LocalAgentSettingsStore,
   resolveAgentSettingsBudget,
@@ -61,7 +62,11 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
       const store = new LocalAgentSettingsStore();
       setSettings(store.selectPreset(profile));
       setBudgetSaveStatus("已保存");
-      toast.success(`Agent 预算已切换为 ${profile}`);
+      toast.success(
+        getLang() === "en"
+          ? `Agent budget switched to ${profile}`
+          : `Agent 预算已切换为 ${profile}`,
+      );
     } catch {
       toast.error("浏览器设置存储不可用；本轮仍可使用默认预算");
     }
@@ -138,16 +143,16 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
     <details className="rounded-xl border border-border bg-card/45">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-sm font-medium">
         <Gauge className="size-4 text-primary" aria-hidden />
-        Agent 控制中心
+        {t("Agent 控制中心")}
         <span className="ml-auto text-[11px] font-normal text-muted-foreground">
-          {settings.profile} · 最多 {budget.maxRounds} 轮
+          {settings.profile} · {t("最多")} {budget.maxRounds} {t("轮")}
         </span>
       </summary>
 
       <div className="space-y-4 border-t border-border px-3 py-3">
         <section className="space-y-2" aria-labelledby="agent-authorization-heading">
           <h3 id="agent-authorization-heading" className="text-xs font-semibold">
-            档案写入授权
+            {t("档案写入授权")}
           </h3>
           <div className="grid gap-2 sm:grid-cols-3">
             <Button
@@ -156,7 +161,7 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
               size="sm"
               onClick={() => chooseAuthorization("cautious")}
             >
-              谨慎 · 每份签字
+              {t("谨慎 · 每份签字")}
             </Button>
             <Button
               type="button"
@@ -164,7 +169,7 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
               size="sm"
               onClick={() => chooseAuthorization("standard")}
             >
-              标准 · 汇总签字
+              {t("标准 · 汇总签字")}
             </Button>
             <Button
               type="button"
@@ -172,22 +177,24 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
               size="sm"
               onClick={() => chooseAuthorization("full")}
             >
-              全权 · 自动提交
+              {t("全权 · 自动提交")}
             </Button>
           </div>
           <p className="text-[11px] text-muted-foreground">
-            授权只改变签字时机；全权模式会自动提交非删除提案。校验、原子事务、收据和撤销始终生效，删除人物始终单独确认。
+            {t(
+              "授权只改变签字时机；全权模式会自动提交非删除提案。校验、原子事务、收据和撤销始终生效，删除人物始终单独确认。",
+            )}
           </p>
         </section>
 
         <section className="space-y-2" aria-labelledby="agent-budget-heading">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 id="agent-budget-heading" className="text-xs font-semibold">
-              预算上限
+              {t("预算上限")}
             </h3>
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-muted-foreground" role="status">
-                {budgetSaveStatus}
+                {t(budgetSaveStatus)}
               </span>
               <div className="flex gap-1">
                 {(["quick", "standard", "deep"] as const).map((profile) => (
@@ -206,14 +213,14 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            {numberField("maxRounds", "轮次")}
-            {numberField("maxToolCalls", "工具调用", 1, 0)}
-            {numberField("maxInputTokens", "输入 token", 1_000)}
-            {numberField("maxOutputTokens", "输出 token", 500)}
-            {numberField("maxWallTimeMs", "总时限 ms", 1_000)}
+            {numberField("maxRounds", t("轮次"))}
+            {numberField("maxToolCalls", t("工具调用"), 1, 0)}
+            {numberField("maxInputTokens", t("输入 token"), 1_000)}
+            {numberField("maxOutputTokens", t("输出 token"), 500)}
+            {numberField("maxWallTimeMs", t("总时限 ms"), 1_000)}
           </div>
           <p className="text-[11px] text-muted-foreground">
-            修改任一字段会切换为 custom 并立即保存。
+            {t("修改任一字段会切换为 custom 并立即保存。")}
           </p>
         </section>
 
@@ -224,7 +231,7 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 id="agent-log-heading" className="flex items-center gap-1.5 text-xs font-semibold">
               <History className="size-3.5" aria-hidden />
-              最近运行（最多 50 次 / 30 天）
+              {t("最近运行（最多 50 次 / 30 天）")}
             </h3>
             <Button
               type="button"
@@ -234,7 +241,7 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
               onClick={clearLogs}
             >
               <Trash2 className="mr-1 size-3.5" aria-hidden />
-              清除日志
+              {t("清除日志")}
             </Button>
           </div>
 
@@ -248,9 +255,11 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
             <span>
               <span className="flex items-center gap-1 font-medium text-amber-700 dark:text-amber-300">
                 <ShieldAlert className="size-3.5" aria-hidden />
-                保存档案正文（敏感）
+                {t("保存档案正文（敏感）")}
               </span>
-              默认只保存轮次、工具名、耗时和 token；启用后才保存已脱敏的提示词与工具输入输出。
+              {t(
+                "默认只保存轮次、工具名、耗时和 token；启用后才保存已脱敏的提示词与工具输入输出。",
+              )}
             </span>
           </label>
 
@@ -262,11 +271,11 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
                 className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
                 onClick={() => openStoredRun(summary.id)}
               >
-                {summary.status} · {summary.rounds ?? 0} 轮
+                {summary.status} · {summary.rounds ?? 0} {t("轮")}
               </button>
             ))}
             {!summaries.length && (
-              <span className="text-[11px] text-muted-foreground">还没有持久化运行日志</span>
+              <span className="text-[11px] text-muted-foreground">{t("还没有持久化运行日志")}</span>
             )}
           </div>
           {selectedRun && <AgentRunInspector run={selectedRun} />}

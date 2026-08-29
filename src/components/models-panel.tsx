@@ -88,7 +88,8 @@ function assistantAdviceWithoutEvidence(answer: string, citations: ArchiveCitati
     .filter((section) => !section.startsWith("档案依据（可回查）"))
     .join("\n\n")
     .trim();
-  return withoutEvidence || "已找到以下可核验档案依据。";
+  const canonical = citations.map((citation) => `- ${citation.claim}`).join("\n");
+  return [canonical, withoutEvidence].filter(Boolean).join("\n\n");
 }
 
 const MUTATION_FIELD_LABELS: Record<string, string> = {

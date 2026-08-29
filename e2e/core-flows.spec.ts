@@ -37,10 +37,6 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
   await page.getByRole("combobox", { name: "亲密度", exact: true }).selectOption("4");
   await expect(page.getByText("AI 推断值待核验 · 1")).toBeVisible();
 
-  await page.getByRole("button", { name: "确认入库" }).click();
-  await expect(page.getByText("仍有待确认条目：3")).toBeVisible();
-  await expect(await readIndexedDbStore(page, "persons")).toEqual([]);
-
   const batch = page.getByRole("button", { name: /批量接受低风险高置信事件/ });
   await batch.click();
   await expect(page.getByText("待确认 2", { exact: true })).toBeVisible();
@@ -115,18 +111,45 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
   expect(String(mockNetwork.visionRequests[0].prompt)).toContain("唐悦");
 });
 
-test("待确认条目会阻止入库，并可经二次确认一键全部接受", async ({ page }) => {
+test("待确认条目是软提醒，直接入库后关系仍保留 pending 状态", async ({ page }) => {
   await openApp(page);
   await page.getByRole("button", { name: "离线演示草稿" }).click();
   await expect(page.getByText(/待确认 \d+/, { exact: true })).toBeVisible();
+  await expect(page.getByText(/待确认是软提醒/)).toBeVisible();
 
   await page.getByRole("button", { name: "确认入库" }).click();
-  await expect(page.getByText(/仍有待确认条目：\d+/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
+  const assertions = await readIndexedDbStore<{ confirmationStatus?: string }>(
+    page,
+    "relationAssertions",
+  );
+  expect(assertions.length).toBeGreaterThan(0);
+  expect(assertions.every((relation) => relation.confirmationStatus === "pending")).toBe(true);
+});
 
-  const acceptAll = page.getByRole("button", { name: /一键接受全部待确认/ });
-  await acceptAll.click();
-  await expect(page.getByText("待确认 0", { exact: true })).toBeVisible();
-  await expect(acceptAll).toHaveCount(0);
+test("事件草稿按月或年录入时不要求选择具体日期，并能解析原始时间表述", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "离线演示草稿" }).click();
+  const eventDraft = page.locator('[data-draft-kind="event"]').first();
+  const precision = eventDraft.getByRole("combobox", { name: "日期精度" });
+
+  await precision.selectOption("month");
+  const month = eventDraft.getByRole("textbox", { name: "事件月份" });
+  await expect(month).toHaveAttribute("type", "month");
+  await month.fill("2024-07");
+
+  await precision.selectOption("year");
+  const year = eventDraft.getByRole("spinbutton", { name: "事件年份" });
+  await expect(year).toHaveValue("2024");
+  await year.fill("2023");
+
+  const phrase = eventDraft.getByRole("textbox", { name: "原始时间表述" });
+  await phrase.fill("去年夏天");
+  await phrase.blur();
+  await expect(precision).toHaveValue("range");
+  await expect(eventDraft.getByRole("textbox", { name: "事件日期" })).toHaveValue(
+    `${new Date().getFullYear() - 1}-06-01`,
+  );
 });
 
 test("人物改名会传播到 Fact、关系、事件和提醒的持久化引用", async ({ page }) => {
@@ -750,6 +773,7 @@ test("AI 录入可检索并更新已有事件，确认前不覆盖原记录", as
 
   await eventDraft.getByRole("button", { name: "接受此项" }).click();
   await page.getByRole("button", { name: "确认入库" }).click();
+  await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
   events = await readIndexedDbStore<{ id: string; date: string }>(page, "lifeEvents");
   expect(events).toEqual([
     expect.objectContaining({ id: "event-update-agent", date: "2026-09-02" }),

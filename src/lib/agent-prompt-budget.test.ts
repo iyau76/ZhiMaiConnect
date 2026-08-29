@@ -104,6 +104,31 @@ describe("shared Agent prompt contract", () => {
     expect(JSON.stringify(projected).length).toBeLessThanOrEqual(3_800);
   });
 
+  it("keeps projection semantics before large search rows", () => {
+    const projected = projectToolResultForHistory(
+      {
+        projection: "profile_index",
+        returnedFields: ["id", "name", "title"],
+        omittedFields: ["likes", "dislikes", "gifts", "note"],
+        omissionMeaning: "not_loaded",
+        detailTool: "get_profiles",
+        rows: Array.from({ length: 20 }, (_, index) => ({
+          id: `person-${index}`,
+          name: `人物${index}`,
+          note: "详细资料".repeat(200),
+        })),
+      },
+      1_200,
+    ) as Record<string, unknown>;
+
+    expect(projected).toMatchObject({
+      projection: "profile_index",
+      omissionMeaning: "not_loaded",
+      detailTool: "get_profiles",
+    });
+    expect(projected.omittedFields).toContain("likes");
+  });
+
   it("normalizes complete chat turns before request accounting", () => {
     const history = Array.from({ length: 12 }, (_, index) => ({
       role: index % 2 ? ("assistant" as const) : ("user" as const),

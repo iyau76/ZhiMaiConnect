@@ -7,6 +7,7 @@ import {
   relationCategoryFor,
   relationIsSymmetric,
   resolveRelationSemantics,
+  resolveRelationSemanticsForPeople,
 } from "./relation-ontology";
 
 describe("canonical relation ontology", () => {
@@ -24,6 +25,7 @@ describe("canonical relation ontology", () => {
     ["外婆", "grandparent_of"],
     ["姻亲（配偶兄弟姐妹）", "in_law_of"],
     ["赵姨娘是贾政的妾", "spouse_of"],
+    ["继母的女儿", "step_sibling_of"],
     ["嫁给了", "spouse_of"],
     ["大儿子", "parent_of"],
     ["母亲", "parent_of"],
@@ -65,6 +67,41 @@ describe("canonical relation ontology", () => {
         qualifiers: { temporalStatus: "former" },
       }),
     ).toEqual({ predicate: "colleague_of", qualifiers: { temporalStatus: "former" } });
+  });
+
+  it("uses endpoint gender to make parent and child roles deterministic", () => {
+    expect(
+      resolveRelationSemanticsForPeople({
+        label: "母子",
+        fromGender: "女",
+        toGender: "女",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        predicate: "parent_of",
+        qualifiers: expect.objectContaining({ parentRole: "mother", childRole: "daughter" }),
+      }),
+    );
+  });
+
+  it("does not encode husband/wife wording as a direction-free spouse identity", () => {
+    expect(
+      resolveRelationSemanticsForPeople({
+        label: "丈夫",
+        fromGender: "女",
+        toGender: "男",
+      }).qualifiers.partnerRole,
+    ).toBe("partner");
+    expect(
+      resolveRelationSemanticsForPeople({
+        label: "妻子",
+        fromGender: "男",
+        toGender: "女",
+      }).qualifiers.partnerRole,
+    ).toBe("partner");
+    expect(resolveRelationSemanticsForPeople({ label: "妾" }).qualifiers.partnerRole).toBe(
+      "concubine",
+    );
   });
 
   it("deduplicates symmetric predicates independent of endpoint order", () => {

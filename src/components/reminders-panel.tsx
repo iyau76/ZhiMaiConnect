@@ -116,7 +116,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
         getLang() === "en"
           ? item.kind === "birthday"
             ? `Send birthday wishes to ${item.person?.name}`
-            : `Send greetings for ${item.title}`
+            : `Send greetings for ${t(item.title)}`
           : item.kind === "birthday"
             ? `给 ${item.person?.name} 送生日祝福`
             : `${item.title}问候`,
@@ -361,7 +361,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
                     ) : (
                       <PartyPopper className="size-3.5 text-primary" aria-hidden="true" />
                     )}
-                    {item.title}
+                    {t(item.title)}
                     <span className="text-[11px] text-muted-foreground">
                       {item.md} ·{" "}
                       {item.days === 0 ? t("就是今天") : `${t("还有")} ${item.days} ${t("天")}`}

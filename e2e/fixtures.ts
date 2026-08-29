@@ -63,6 +63,22 @@ function intakePlanReply(prompt: string) {
       ],
     });
   }
+  const workspacePersonRef = prompt.match(/"recordRef":"(draft:person:[^"]+)"/u)?.[1];
+  if (workspacePersonRef && prompt.includes("愿意帮校园记忆展拍摄")) {
+    return JSON.stringify({
+      type: "plan",
+      summary: "已把补充说明合并到唐悦的未提交档案",
+      tasks: [
+        {
+          id: "person-tangyue-supplement",
+          domain: "person",
+          intent: "update",
+          target: { name: "唐悦", personId: workspacePersonRef },
+          changes: { note: "愿意帮校园记忆展拍摄" },
+        },
+      ],
+    });
+  }
   const existing = prompt.includes('"id":"existing-tangyue"');
   return JSON.stringify({
     type: "plan",

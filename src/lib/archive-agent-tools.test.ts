@@ -94,6 +94,26 @@ describe("archiveAgentToolRegistry", () => {
     expect(result.rows.map((row) => row.id)).toEqual(["jia"]);
   });
 
+  it("marks search results as projections and points field questions to profile details", async () => {
+    const result = (await executeArchiveAgentTool(
+      "search_profiles",
+      { query: "贾", limit: 1 },
+      archive,
+      { permissions: ["private_read"] },
+    )) as {
+      projection: string;
+      omittedFields: string[];
+      omissionMeaning: string;
+      detailTool: string;
+    };
+    expect(result).toMatchObject({
+      projection: "profile_index",
+      omissionMeaning: "not_loaded",
+      detailTool: "get_profiles",
+    });
+    expect(result.omittedFields).toContain("likes");
+  });
+
   it("does not let private tools run under public-only permission", async () => {
     const runtime = new AgentRuntime({
       registry: archiveAgentToolRegistry,

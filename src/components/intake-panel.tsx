@@ -43,9 +43,10 @@ import {
   type ReminderRecord,
 } from "@/lib/face-db";
 import { matchIdentity } from "@/lib/identity-match";
+import { parseFuzzyLocal } from "@/lib/fuzzy-date";
 import { getLang, t } from "@/lib/i18n";
 import { isSelfReference, SELF_PERSON_ID } from "@/lib/person-identity";
-import { carryManualState } from "@/lib/intake-manual-state";
+import { ensureIntakeWorkspace, intakeWorkspaceView } from "@/lib/intake-workspace";
 import {
   enforceSensitiveFieldGrounding,
   isSensitivePersonField,
@@ -79,7 +80,7 @@ import {
   undoLatestIntakeBatch,
   type IntakeUndoBatch,
 } from "@/lib/intake-undo";
-import { inferRelationSemantics } from "@/lib/relation-ontology";
+import { resolveRelationSemanticsForPeople } from "@/lib/relation-ontology";
 import {
   isInferredRelationBasis,
   KINSHIP_RULES_EN,
@@ -108,7 +109,7 @@ function missingOf(person: DraftPerson) {
   });
 }
 
-const SCHEMA = `{"people":[{"name":"","note":"","age":"","gender":"","relation":"","birthday":"","circle":"","closeness":null,"likes":[],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[{"platform":"","account":"","alias":"","validFrom":"","validTo":""}],"confidence":null}],"facts":[{"person":"","key":"","value":"","validFrom":"","validTo":"","confidence":null}],"relations":[{"from":"","to":"","label":"","note":"","basis":"","confidence":null}],"events":[{"title":"","detail":"","date":"","dateEnd":"","precision":"day|month|year|range","place":"","people":[],"kind":"","confidence":null}],"reminders":[{"title":"","detail":"","due":"","people":[],"kind":"birthday|festival|gift|custom","confidence":null}],"evidence":[{"kind":"note|audio|exhibit|frame","title":"","text":"","origin":"","confidence":null}],"summary":""}`;
+const SCHEMA = `{"people":[{"name":"","note":"","age":"","gender":"","relation":"","birthday":"","circle":"","closeness":null,"likes":[],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[{"platform":"","account":"","alias":"","validFrom":"","validTo":""}],"confidence":null}],"facts":[{"person":"","key":"","value":"","validFrom":"","validTo":"","confidence":null}],"relations":[{"from":"","to":"","label":"","note":"","basis":"","confidence":null}],"events":[{"title":"","detail":"","timeText":"原文时间短语","date":"","dateEnd":"","precision":"day|month|year|range","place":"","people":[],"kind":"","confidence":null}],"reminders":[{"title":"","detail":"","due":"","people":[],"kind":"birthday|festival|gift|custom","confidence":null}],"evidence":[{"kind":"note|audio|exhibit|frame","title":"","text":"","origin":"","confidence":null}],"summary":""}`;
 
 const CREATE_NEW_PERSON = "__create_new_person__";
 const CREATE_NEW_EVENT = "__create_new_event__";
@@ -153,25 +154,26 @@ function prepareIdentityDecisions(
   persons: PersonRecord[],
   events: LifeEventRecord[] = [],
 ): Draft {
-  const people = (draft.people ?? []).map((person) => ({
+  const workspace = ensureIntakeWorkspace(draft);
+  const people = (workspace.people ?? []).map((person) => ({
     ...withIdentityDecision(person, persons),
-    _draftId: person._draftId ?? crypto.randomUUID(),
+    _draftId: person._draftId,
   }));
   const uniqueDraftId = (name: string) => {
     const matches = people.filter((person) => person.name.trim() === name.trim());
     return matches.length === 1 ? matches[0]._draftId : undefined;
   };
   return {
-    ...draft,
+    ...workspace,
     people,
-    facts: (draft.facts ?? []).map((fact) => ({
+    facts: (workspace.facts ?? []).map((fact) => ({
       ...fact,
       personDraftId:
         fact.personDraftId && people.some((person) => person._draftId === fact.personDraftId)
           ? fact.personDraftId
           : uniqueDraftId(fact.person),
     })),
-    relations: (draft.relations ?? []).map((relation) => ({
+    relations: (workspace.relations ?? []).map((relation) => ({
       ...relation,
       fromDraftId:
         relation.fromDraftId && people.some((person) => person._draftId === relation.fromDraftId)
@@ -182,7 +184,7 @@ function prepareIdentityDecisions(
           ? relation.toDraftId
           : uniqueDraftId(relation.to),
     })),
-    events: (draft.events ?? []).map((event) => ({
+    events: (workspace.events ?? []).map((event) => ({
       ...event,
       peopleDraftIds: (event.people ?? []).map(
         (name, index) => event.peopleDraftIds?.[index] ?? uniqueDraftId(name),
@@ -193,7 +195,7 @@ function prepareIdentityDecisions(
           : CREATE_NEW_EVENT,
       _eventChecked: true,
     })),
-    reminders: (draft.reminders ?? []).map((reminder) => ({
+    reminders: (workspace.reminders ?? []).map((reminder) => ({
       ...reminder,
       peopleDraftIds: (reminder.people ?? []).map(
         (name, index) => reminder.peopleDraftIds?.[index] ?? uniqueDraftId(name),
@@ -203,18 +205,7 @@ function prepareIdentityDecisions(
 }
 
 function serializeDraftForPrompt(draft: Draft) {
-  return JSON.stringify(draft, (key, value: unknown) => {
-    if (
-      key === "targetPersonId" ||
-      key === "targetEventId" ||
-      key === "targetRelationId" ||
-      key.includes("DraftId") ||
-      key.startsWith("_")
-    ) {
-      return undefined;
-    }
-    return value;
-  });
+  return JSON.stringify(intakeWorkspaceView(draft));
 }
 
 function decorateDraft(result: Draft, sourceSummary: string, material: string): Draft {
@@ -228,7 +219,7 @@ function decorateDraft(result: Draft, sourceSummary: string, material: string): 
           confidence: undefined,
           humanEdited: true,
         }
-      : makeExtractionAudit(sourceSummary, item.confidence, extractedAt),
+      : (item._audit ?? makeExtractionAudit(sourceSummary, item.confidence, extractedAt)),
   });
   const grounded = enforceSensitiveFieldGrounding(result, material);
   return {
@@ -244,6 +235,7 @@ function decorateDraft(result: Draft, sourceSummary: string, material: string): 
 
 function buildPrompt(text: string, known: string[], previous: Draft | null) {
   const zh = getLang() !== "en";
+  const today = new Date().toISOString().slice(0, 10);
   const base = zh
     ? `你是个人人脉整理助手。把下面这段自然语言材料整理成结构化 JSON，只输出 JSON，不要解释、不要 markdown。
 严格使用这个结构：${SCHEMA}
@@ -257,7 +249,7 @@ function buildPrompt(text: string, known: string[], previous: Draft | null) {
 - facts 只放材料明确表达、但不属于固定人物字段的事实；person 指人物姓名，key 是短字段名，value 是原文可支持的值。validFrom/validTo 仅在材料给出有效期时填写。
 - evidence 只保留能核对抽取结果的短摘要或必要原文片段，不要复制整份聊天、文档或转写稿，text 最多 500 字。
  - relations 写人和人之间原文明说的关系。每条 basis 都写“原文：最短支持片段”，不要输出推导关系。
-- events 放已经发生或计划发生、值得进入日历/时间线的事情；date 用 yyyy-mm-dd。只知道月份或年份时分别补为当月 01 日或当年 01-01，并把 precision 标为 month 或 year；一段时间用 range 和 dateEnd。people 写相关人物姓名。
+- 今天是 ${today}。events 放已经发生或计划发生、值得进入日历/时间线的事情；timeText 逐字复制原文时间短语，date 用 yyyy-mm-dd。相对时间依据今天换算；只知道月份或年份时分别补为当月 01 日或当年 01-01，并把 precision 标为 month 或 year；一段时间用 range 和 dateEnd。people 写相关人物姓名。
 - reminders 放需要用户采取行动的待办，如「给小雨回电话」；due 仅在材料明确给出日期时使用 yyyy-mm-dd，people 写相关人物姓名。不要把同一件事同时放进 events 和 reminders，除非材料同时明确表达日历事件和后续行动。
 - confidence 是你对每一条抽取准确性的自评（0 到 1），无法判断时留空；它只是提示，不能代替用户确认。
 - summary 用一两句话说明这份材料讲了什么。
@@ -274,7 +266,7 @@ Rules:
 - facts contains only explicit facts that do not fit a fixed person field; person is the person's name and validity dates are included only when stated.
 - evidence is a short source summary or the minimum excerpt needed for review (at most 500 characters), never a copy of the complete chat, document, or transcript.
  - relations = explicitly stated ties between people. Every basis starts with “Original:” and quotes the shortest supporting text. Do not output inferred ties.
-- events are past or planned moments worth putting on a calendar/timeline. Use yyyy-mm-dd, with precision month/year/range when needed; people contains related names.
+- Today is ${today}. Events are past or planned moments worth putting on a calendar/timeline. Copy the exact source phrase into timeText and normalize relative time to yyyy-mm-dd; use precision month/year/range when needed. people contains related names.
 - reminders are actions the user still needs to take. Set due only when the material gives a date. Do not duplicate one fact across events and reminders unless both a calendar moment and a follow-up action are explicit.
 - confidence is the model's 0-1 self-assessment for each extracted item and never replaces user confirmation.
 - summary = one or two sentences about the material.
@@ -647,14 +639,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
 
   useEffect(() => {
     if (!peopleLoaded) return;
-    setDraft((previous) => {
-      if (
-        !previous?.people?.some((person) => !person._identityChecked) &&
-        !previous?.events?.some((event) => !event._eventChecked)
-      )
-        return previous;
-      return prepareIdentityDecisions(previous, existingPeople, existingEvents);
-    });
+    setDraft((previous) =>
+      previous ? prepareIdentityDecisions(previous, existingPeople, existingEvents) : previous,
+    );
   }, [existingEvents, existingPeople, peopleLoaded]);
 
   useEffect(() => {
@@ -832,10 +819,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       toast.error(t("先把知道的情况写下来，怎么写都行"));
       return;
     }
-    const previousJson = extra && draft ? serializeDraftForPrompt(draft) : "";
-    const canMergeDraft = previousJson.length <= 2_500;
-    const base = extra && canMergeDraft ? draft : null;
-    const materialSource = extra && canMergeDraft ? extra : fullText;
+    const base = extra && draft ? ensureIntakeWorkspace(draft) : null;
+    const materialSource = base ? (extra ?? "") : fullText;
     const builtPrompt = buildPrompt(materialSource, allowArchiveTools ? known : [], base);
     if (materialSource.length > builtPrompt.materialCharacters) {
       toast.warning(
@@ -863,6 +848,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           persons: allowArchiveTools ? existingPeople : [],
           events: allowArchiveTools ? existingEvents : [],
           relations: allowArchiveTools ? existingRelations : [],
+          workspace: base ?? undefined,
           includeArchive: allowArchiveTools,
           sourceMaterial: materialSource,
           onTrace: (event) =>
@@ -874,11 +860,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         });
         report(t("模型输出完成，正在解析结构化草稿"), "check");
         report(t("正在核对人物字段与原文证据"), "check");
-        const result = decorateDraft(
-          base ? carryManualState(parsed, base) : parsed,
-          sourceSummary,
-          fullText,
-        );
+        const result = decorateDraft(parsed, sourceSummary, fullText);
         report(
           `${t("整理完成")} · ${result.people?.length ?? 0} ${t("人")} · ${result.relations?.length ?? 0} ${t("条关系")} · ${result.events?.length ?? 0} ${t("个事件")}`,
           "done",
@@ -1121,6 +1103,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           person: "",
           key: "",
           value: "",
+          _draftId: `draft:fact:${crypto.randomUUID()}`,
           _audit: makeManualAudit(t("草稿中手动添加")),
         },
       ],
@@ -1150,6 +1133,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         ...(prev?.events ?? []),
         {
           title: "",
+          _draftId: `draft:event:${crypto.randomUUID()}`,
           date: new Date().toLocaleDateString("sv-SE"),
           precision: "day",
           targetEventId: CREATE_NEW_EVENT,
@@ -1184,6 +1168,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         {
           title: "",
           kind: "custom",
+          _draftId: `draft:reminder:${crypto.randomUUID()}`,
           _audit: makeManualAudit(t("草稿中手动添加")),
         },
       ],
@@ -1279,10 +1264,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     const pendingAtCommit = reviewItemsOf(commitDraft).filter(
       (item) => item._audit?.confirmationStatus !== "accepted",
     ).length;
-    if (pendingAtCommit > 0) {
-      toast.error(`${t("仍有待确认条目")}：${pendingAtCommit}`);
-      return;
-    }
     const unresolvedPerson = (commitDraft.people ?? []).find(
       (item) => item.name?.trim() && !item.targetPersonId,
     );
@@ -1290,14 +1271,17 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       toast.error(`${t("请先确认人物是新建还是更新已有档案")}：${unresolvedPerson.name}`);
       return;
     }
-    const aiRelationWithoutBasis = (commitDraft.relations ?? []).find(
+    const aiRelationsWithoutBasis = (commitDraft.relations ?? []).filter(
       (item) => !item._audit?.humanEdited && !item.basis?.trim(),
     );
-    if (aiRelationWithoutBasis) {
-      toast.error(
-        `${t("AI 关系缺少原文或推断依据")}：${aiRelationWithoutBasis.from} → ${aiRelationWithoutBasis.to}`,
+    if (pendingAtCommit > 0 || aiRelationsWithoutBasis.length > 0) {
+      toast.warning(
+        `${pendingAtCommit} ${t("条 AI 内容已带待核验标记")}${
+          aiRelationsWithoutBasis.length
+            ? `；${aiRelationsWithoutBasis.length} ${t("条关系缺少依据并保持待确认")}`
+            : ""
+        }`,
       );
-      return;
     }
     const invalidEvent = (commitDraft.events ?? []).find(
       (item) =>
@@ -1749,7 +1733,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         if (a.id === b.id) throw new Error(`关系不能连接同一人物：${item.from}`);
         const now = Date.now();
         const label = (item.label ?? "").trim() || t("认识");
-        const semantics = inferRelationSemantics(label);
+        const semantics = resolveRelationSemanticsForPeople({
+          label,
+          fromGender: a.profile?.gender,
+          toGender: b.profile?.gender,
+        });
         const target = item.targetRelationId
           ? currentAssertionById.get(item.targetRelationId)
           : undefined;
@@ -1782,7 +1770,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           },
           createdAt: now,
           updatedAt: now,
-          confirmationStatus: "confirmed",
+          confirmationStatus:
+            item._audit?.humanEdited ||
+            (item._audit?.confirmationStatus === "accepted" && Boolean(item.basis?.trim()))
+              ? "confirmed"
+              : "pending",
           confidence: item._audit?.confidence,
           supersedesAssertionId: target?.id,
           source: makeSource(
@@ -1957,10 +1949,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     }
   };
 
-  const gaps = (draft?.people ?? []).flatMap((person) =>
-    missingOf(person).map(
-      (field) => `${person.name || t("未命名")} · ${getLang() === "en" ? field.en : field.zh}`,
-    ),
+  const gaps = (draft?.people ?? []).flatMap((person, personIndex) =>
+    missingOf(person).map((field) => ({
+      key: `${person._draftId ?? `person-${personIndex}`}:${String(field.key)}`,
+      text: `${person.name || t("未命名")} · ${getLang() === "en" ? field.en : field.zh}`,
+    })),
   );
   const reviewItems = reviewItemsOf(draft);
   const pendingReviewCount = reviewItems.filter(
@@ -2315,7 +2308,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               </div>
             )}
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
-              <span>{t("每个顶层草稿条目都要接受或拒绝；编辑已接受条目后会重新变为待确认。")}</span>
+              <span>
+                {t("待确认是软提醒；可逐条接受，也可直接入库，AI 内容会保留待核验标记。")}
+              </span>
               <span className="rounded-full border border-border px-2 py-0.5">
                 {t("待确认")} {pendingReviewCount}
               </span>
@@ -2357,10 +2352,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {gaps.map((gap) => (
                   <span
-                    key={gap}
+                    key={gap.key}
                     className="rounded-full border border-border px-2 py-0.5 text-[10px]"
                   >
-                    {gap}
+                    {gap.text}
                   </span>
                 ))}
               </div>
@@ -2695,7 +2690,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             )}
             {(draft.facts ?? []).map((item, index) => (
               <div
-                key={index}
+                key={item._draftId ?? `fact-${index}`}
                 className="space-y-2 rounded-xl border border-border p-3"
                 data-draft-kind="fact"
                 data-draft-index={index}
@@ -2769,7 +2764,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                 const person = withIdentityDecision(
                   {
                     name,
-                    _draftId: crypto.randomUUID(),
+                    _draftId: `draft:person:${crypto.randomUUID()}`,
                     _fieldGrounding: { name: { status: "manual" } },
                     _audit: makeManualAudit(t("草稿关系图中手动添加")),
                   },
@@ -2787,6 +2782,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     from,
                     to,
                     label,
+                    _draftId: `draft:relation:${crypto.randomUUID()}`,
                     _audit: makeManualAudit(t("草稿关系图中手动添加")),
                   },
                 ],
@@ -2800,7 +2796,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             <div className="space-y-2">
               {(draft.relations ?? []).map((relation, index) => (
                 <div
-                  key={index}
+                  key={relation._draftId ?? `relation-${index}`}
                   className="flex flex-wrap items-center gap-2 rounded-xl border border-border p-2"
                   data-draft-kind="relation"
                   data-draft-index={index}
@@ -2924,7 +2920,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             )}
             {(draft.events ?? []).map((item, index) => (
               <div
-                key={index}
+                key={item._draftId ?? `event-${index}`}
                 className="space-y-2 rounded-xl border border-border p-3"
                 data-draft-kind="event"
                 data-draft-index={index}
@@ -2980,20 +2976,59 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                   </button>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <Input
-                    type="date"
-                    value={item.date ?? ""}
-                    onChange={(event) => patchEvent(index, { date: event.target.value })}
-                    className="h-8 text-xs"
-                    aria-label={t("事件日期")}
-                  />
+                  {item.precision === "year" ? (
+                    <Input
+                      type="number"
+                      min={1900}
+                      max={2200}
+                      value={item.date?.slice(0, 4) ?? ""}
+                      onChange={(event) =>
+                        patchEvent(index, {
+                          date: /^\d{4}$/.test(event.target.value)
+                            ? `${event.target.value}-01-01`
+                            : "",
+                        })
+                      }
+                      className="h-8 text-xs"
+                      placeholder={t("年份")}
+                      aria-label={t("事件年份")}
+                    />
+                  ) : (
+                    <Input
+                      type={item.precision === "month" ? "month" : "date"}
+                      value={
+                        item.precision === "month"
+                          ? (item.date?.slice(0, 7) ?? "")
+                          : (item.date ?? "")
+                      }
+                      onChange={(event) =>
+                        patchEvent(index, {
+                          date:
+                            item.precision === "month" && event.target.value
+                              ? `${event.target.value}-01`
+                              : event.target.value,
+                        })
+                      }
+                      className="h-8 text-xs"
+                      aria-label={item.precision === "month" ? t("事件月份") : t("事件日期")}
+                    />
+                  )}
                   <select
                     value={item.precision ?? "day"}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const precision = event.target.value as DraftEvent["precision"];
+                      const current = item.date ?? "";
                       patchEvent(index, {
-                        precision: event.target.value as DraftEvent["precision"],
-                      })
-                    }
+                        precision,
+                        date:
+                          precision === "year" && current
+                            ? `${current.slice(0, 4)}-01-01`
+                            : precision === "month" && current
+                              ? `${current.slice(0, 7)}-01`
+                              : current,
+                        dateEnd: precision === "range" ? item.dateEnd : undefined,
+                      });
+                    }}
                     className="h-8 rounded-md border border-input bg-background px-3 text-xs"
                     aria-label={t("日期精度")}
                   >
@@ -3011,6 +3046,17 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                       aria-label={t("事件结束日期")}
                     />
                   )}
+                  <Input
+                    value={item.timeText ?? ""}
+                    onChange={(event) => patchEvent(index, { timeText: event.target.value })}
+                    onBlur={(event) => {
+                      const parsed = parseFuzzyLocal(event.target.value);
+                      if (parsed) patchEvent(index, parsed);
+                    }}
+                    className="h-8 text-xs"
+                    placeholder={t("原始时间表述，如：去年夏天")}
+                    aria-label={t("原始时间表述")}
+                  />
                   <Input
                     value={item.place ?? ""}
                     onChange={(event) => patchEvent(index, { place: event.target.value })}
@@ -3083,7 +3129,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             )}
             {(draft.reminders ?? []).map((item, index) => (
               <div
-                key={index}
+                key={item._draftId ?? `reminder-${index}`}
                 className="space-y-2 rounded-xl border border-border p-3"
                 data-draft-kind="reminder"
                 data-draft-index={index}
@@ -3170,7 +3216,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             <div className="space-y-2">
               {(draft.evidence ?? []).map((item, index) => (
                 <div
-                  key={index}
+                  key={item._draftId ?? `evidence-${index}`}
                   className="space-y-2 rounded-xl border border-dashed border-border p-3"
                   data-draft-kind="evidence"
                   data-draft-index={index}

@@ -644,7 +644,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
           <p className="mt-2 text-xs text-primary">
             {dayMarks.birthdays.map((person) => `${person.name} ${t("生日")}`).join("、")}
             {dayMarks.birthdays.length > 0 && dayMarks.festival ? " · " : ""}
-            {dayMarks.festival?.name ?? ""}
+            {dayMarks.festival ? t(dayMarks.festival.name) : ""}
           </p>
         )}
 

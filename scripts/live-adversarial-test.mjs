@@ -12,6 +12,21 @@ if (!API_KEY) throw new Error("DEEPSEEK_API_KEY is not available to the test pro
 
 const report = { startedAt: new Date().toISOString(), baseUrl: BASE_URL, scenarios: [] };
 const now = Date.now();
+const todayParts = Object.fromEntries(
+  new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  })
+    .formatToParts(new Date())
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value]),
+);
+const todayIso = `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(
+  todayParts.day,
+).padStart(2, "0")}`;
+const todayChinese = `${todayParts.year}年${todayParts.month}月${todayParts.day}日`;
 
 const COMPLEX_KINSHIP_EXPECTED_NAMES = [
   "贾母",
@@ -104,6 +119,100 @@ async function readStore(page, storeName) {
       request.onerror = () => reject(request.error);
     });
   }, storeName);
+}
+
+async function readRelationshipArchive(page) {
+  return page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("openglass-faces");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const readAll = (storeName) =>
+      new Promise((resolve, reject) => {
+        const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    const [persons, assertions, derived] = await Promise.all([
+      readAll("persons"),
+      readAll("relationAssertions"),
+      readAll("derivedRelations"),
+    ]);
+    const names = new Map(persons.map((person) => [person.id, person.name]));
+    const symmetricPredicates = new Set(["spouse_of", "sibling_of", "cousin_of"]);
+    const normalizedQualifiers = (qualifiers) =>
+      Object.fromEntries(
+        Object.entries(qualifiers ?? {})
+          .filter(([, value]) => value !== undefined && value !== null && value !== "")
+          .sort(([left], [right]) => left.localeCompare(right)),
+      );
+    const canonical = (relation) => {
+      const from = names.get(relation.fromId) ?? relation.fromId;
+      const to = names.get(relation.toId) ?? relation.toId;
+      const symmetric =
+        symmetricPredicates.has(relation.predicate) ||
+        (relation.predicate === "custom" && relation.direction === "symmetric");
+      const endpoints = symmetric ? [from, to].sort().join("\u0000") : `${from}\u0000${to}`;
+      const qualifiers = normalizedQualifiers(relation.qualifiers);
+      const qualifierKey = [
+        qualifiers.parentRole,
+        qualifiers.childRole,
+        qualifiers.sharedParentRole,
+        qualifiers.cousinBranch,
+        qualifiers.inverseCousinBranch,
+        qualifiers.inLawRole,
+        qualifiers.partnerRole,
+        qualifiers.lineage,
+        qualifiers.temporalStatus,
+        qualifiers.validFrom,
+        qualifiers.validTo,
+      ]
+        .filter(Boolean)
+        .join("|");
+      const customLabel =
+        relation.predicate === "custom"
+          ? String(relation.label ?? "")
+              .trim()
+              .replace(/\s+/g, " ")
+          : "";
+      return `${endpoints}\u0000${relation.predicate}\u0000${customLabel}\u0000${qualifierKey}`;
+    };
+    const assertionIds = new Set(assertions.map((relation) => relation.id));
+    const assertionKeys = assertions.map(canonical).sort();
+    const derivedKeys = derived.map(canonical).sort();
+    return {
+      personNames: persons.map((person) => person.name).sort(),
+      assertions: assertions.map((relation) => ({
+        id: relation.id,
+        from: names.get(relation.fromId) ?? relation.fromId,
+        to: names.get(relation.toId) ?? relation.toId,
+        predicate: relation.predicate,
+        qualifiers: normalizedQualifiers(relation.qualifiers),
+        label: relation.label,
+        evidence: relation.evidence,
+      })),
+      derived: derived.map((relation) => ({
+        id: relation.id,
+        from: names.get(relation.fromId) ?? relation.fromId,
+        to: names.get(relation.toId) ?? relation.toId,
+        predicate: relation.predicate,
+        qualifiers: normalizedQualifiers(relation.qualifiers),
+        label: relation.label,
+        supportingRelationIds: relation.supportingRelationIds,
+      })),
+      assertionKeys,
+      derivedKeys,
+      uniqueAssertions: new Set(assertionKeys).size === assertionKeys.length,
+      uniqueDerived: new Set(derivedKeys).size === derivedKeys.length,
+      everyDerivedTraceable: derived.every(
+        (relation) =>
+          relation.supportingRelationIds.length > 0 &&
+          relation.supportingRelationIds.every((id) => assertionIds.has(id)),
+      ),
+      derivedBound: persons.length * Math.max(0, persons.length - 1) * 4,
+    };
+  });
 }
 
 async function seed(page, records) {
@@ -201,12 +310,28 @@ async function newPage(browser) {
             .clone()
             .text()
             .then((text) => {
+              const contentType = response.headers.get("content-type") ?? "";
+              const compactText = contentType.includes("text/event-stream")
+                ? text
+                    .split(/\r?\n/)
+                    .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+                    .map((line) => {
+                      try {
+                        return JSON.parse(line.slice(6)).choices?.[0]?.delta?.content ?? "";
+                      } catch {
+                        return "";
+                      }
+                    })
+                    .join("")
+                : text;
               window.__zhimaiLiveModelOutputs.push({
                 at: Date.now(),
                 request,
                 status: response.status,
-                contentType: response.headers.get("content-type"),
-                text,
+                contentType,
+                text: compactText.slice(0, 100_000),
+                responseCharacters: compactText.length,
+                transportCharacters: text.length,
               });
             })
             .catch((error) => {
@@ -440,67 +565,7 @@ async function scenarioComplexSingle(browser) {
       const peopleDrafts = cards.filter((item) => item.kind === "person");
       const relationDrafts = cards.filter((item) => item.kind === "relation");
       const commit = await acceptAndCommit(page);
-      const archive = await page.evaluate(async () => {
-        const [{ facesDb }, { relationshipProjectionKey }] = await Promise.all([
-          import("/src/lib/face-db.ts"),
-          import("/src/lib/relation-ontology.ts"),
-        ]);
-        const [persons, assertions, derived] = await Promise.all([
-          facesDb.listPersons(),
-          facesDb.listCurrentRelationAssertions(),
-          facesDb.listDerivedRelations(),
-        ]);
-        const names = new Map(persons.map((person) => [person.id, person.name]));
-        const normalizedQualifiers = (qualifiers) =>
-          Object.fromEntries(
-            Object.entries(qualifiers ?? {})
-              .filter(([, value]) => value !== undefined && value !== null && value !== "")
-              .sort(([left], [right]) => left.localeCompare(right)),
-          );
-        const canonical = (relation) =>
-          relationshipProjectionKey({
-            fromId: names.get(relation.fromId) ?? relation.fromId,
-            toId: names.get(relation.toId) ?? relation.toId,
-            predicate: relation.predicate,
-            customMutual: relation.direction === "mutual",
-            customLabel: relation.label,
-            qualifiers: normalizedQualifiers(relation.qualifiers),
-          });
-        const assertionIds = new Set(assertions.map((relation) => relation.id));
-        const assertionKeys = assertions.map(canonical).sort();
-        const derivedKeys = derived.map(canonical).sort();
-        return {
-          personNames: persons.map((person) => person.name).sort(),
-          assertions: assertions.map((relation) => ({
-            id: relation.id,
-            from: names.get(relation.fromId) ?? relation.fromId,
-            to: names.get(relation.toId) ?? relation.toId,
-            predicate: relation.predicate,
-            qualifiers: normalizedQualifiers(relation.qualifiers),
-            label: relation.label,
-            evidence: relation.evidence,
-          })),
-          derived: derived.map((relation) => ({
-            id: relation.id,
-            from: names.get(relation.fromId) ?? relation.fromId,
-            to: names.get(relation.toId) ?? relation.toId,
-            predicate: relation.predicate,
-            qualifiers: normalizedQualifiers(relation.qualifiers),
-            label: relation.label,
-            supportingRelationIds: relation.supportingRelationIds,
-          })),
-          assertionKeys,
-          derivedKeys,
-          uniqueAssertions: new Set(assertionKeys).size === assertionKeys.length,
-          uniqueDerived: new Set(derivedKeys).size === derivedKeys.length,
-          everyDerivedTraceable: derived.every(
-            (relation) =>
-              relation.supportingRelationIds.length > 0 &&
-              relation.supportingRelationIds.every((id) => assertionIds.has(id)),
-          ),
-          derivedBound: persons.length * Math.max(0, persons.length - 1) * 4,
-        };
-      });
+      const archive = await readRelationshipArchive(page);
       attempts.push({
         attempt,
         draftPeopleCount: peopleDrafts.length,
@@ -614,6 +679,7 @@ async function scenarioComplexSingle(browser) {
     checks.criticalExplicitRelations &&
     checks.criticalExplicitEvidence &&
     checks.criticalKinshipProjection &&
+    checks.stableExplicitAssertions &&
     checks.stablePersonIdentities &&
     checks.projectionInvariant;
   record(
@@ -747,6 +813,145 @@ async function scenarioSequential(browser) {
     );
   } catch (error) {
     record("sequential intake uses existing archive", "fail", await failureDetail(page, error));
+  } finally {
+    await context.close();
+  }
+}
+
+async function scenarioSameNameDisambiguation(browser) {
+  const { page, context } = await newPage(browser);
+  try {
+    await seed(page, {
+      persons: [
+        {
+          id: "zhang-monitor",
+          name: "张伟",
+          note: "高中班长，负责组织同学会",
+          profile: { relation: "高中同学", title: "教师", org: "春晖中学" },
+          descriptors: [],
+          thumb: "",
+          createdAt: now,
+        },
+        {
+          id: "zhang-roommate",
+          name: "张伟",
+          note: "大学室友，原来住在杭州",
+          profile: { relation: "大学室友", title: "软件工程师", org: "云舟科技" },
+          descriptors: [],
+          thumb: "",
+          createdAt: now - 1,
+        },
+      ],
+    });
+    await reloadApp(page);
+    const cards = await runIntake(
+      page,
+      "补充两位张伟的信息：高中班长张伟现在是春晖中学的年级主任；大学室友张伟已经搬到上海，在云舟科技做后端工程师。",
+    );
+    const personCards = cards.filter((card) => card.kind === "person");
+    const targetIds = personCards
+      .flatMap((card) => card.values)
+      .filter((field) => field.name === "选择新建人物或更新已有档案")
+      .map((field) => field.value)
+      .sort();
+    const checks = {
+      personCardCount: personCards.length,
+      targetIds,
+      noGhostCreate: !targetIds.includes("__create_new_person__"),
+      bothStableTargetsSelected:
+        targetIds.includes("zhang-monitor") && targetIds.includes("zhang-roommate"),
+      cards,
+      trace: await captureTrace(page),
+    };
+    record(
+      "same-name intake binds updates to stable identities",
+      checks.personCardCount === 2 && checks.noGhostCreate && checks.bothStableTargetsSelected
+        ? "pass"
+        : "fail",
+      checks,
+    );
+  } catch (error) {
+    record(
+      "same-name intake binds updates to stable identities",
+      "fail",
+      await failureDetail(page, error),
+    );
+  } finally {
+    await context.close();
+  }
+}
+
+async function scenarioUncommittedDraftCorrection(browser) {
+  const { page, context } = await newPage(browser);
+  try {
+    const initialCards = await runIntake(page, "唐悦和周宁是同事。");
+    const beforeRuns = await readStoredAgentRuns(page, "intake");
+    const supplement = page.getByPlaceholder(/补一句就行/);
+    await supplement.fill("刚才写错了，他们不是现同事，是前同事。");
+    await page.getByRole("button", { name: "补充并重新整理" }).click();
+    await page.waitForFunction(
+      (count) => {
+        const raw = localStorage.getItem("zhimai.agent-runs.v1");
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        return (
+          (parsed.runs ?? []).filter((entry) => entry.run?.agentName === "intake").length > count
+        );
+      },
+      beforeRuns.length,
+      { timeout: 360_000 },
+    );
+    const correctedCards = await page.locator("[data-draft-kind]").evaluateAll((cards) =>
+      cards.map((card) => ({
+        kind: card.getAttribute("data-draft-kind"),
+        text: card.textContent?.replace(/\s+/g, " ").trim().slice(0, 800) ?? "",
+        values: Array.from(card.querySelectorAll("input,textarea,select")).map((element) => ({
+          name:
+            element.getAttribute("aria-label") ||
+            element.getAttribute("placeholder") ||
+            element.getAttribute("name"),
+          value: element.value,
+        })),
+      })),
+    );
+    const relationValues = correctedCards
+      .filter((card) => card.kind === "relation")
+      .flatMap((card) => card.values.map((field) => field.value));
+    const personNames = correctedCards
+      .filter((card) => card.kind === "person")
+      .flatMap((card) =>
+        card.values.filter((field) => field.name === "姓名").map((field) => field.value),
+      )
+      .sort();
+    const latestRun = (await readStoredAgentRuns(page, "intake"))[0] ?? null;
+    const checks = {
+      initialHadColleagueRelation: initialCards
+        .filter((card) => card.kind === "relation")
+        .some((card) => card.values.some((field) => field.value === "同事")),
+      correctionBecameFormerColleague: relationValues.includes("前同事"),
+      onlyIntendedPeople: JSON.stringify(personNames) === JSON.stringify(["周宁", "唐悦"].sort()),
+      latestRunStatus: latestRun?.run?.status ?? null,
+      latestRunRounds: latestRun?.run?.rounds ?? null,
+      initialCards,
+      correctedCards,
+      trace: await captureTrace(page),
+    };
+    record(
+      "supplement corrects an uncommitted draft without stale-record leakage",
+      checks.initialHadColleagueRelation &&
+        checks.correctionBecameFormerColleague &&
+        checks.onlyIntendedPeople &&
+        checks.latestRunStatus === "completed"
+        ? "pass"
+        : "fail",
+      checks,
+    );
+  } catch (error) {
+    record(
+      "supplement corrects an uncommitted draft without stale-record leakage",
+      "fail",
+      await failureDetail(page, error),
+    );
   } finally {
     await context.close();
   }
@@ -939,6 +1144,96 @@ async function scenarioAssistantGroundingMemory(browser) {
   } catch (error) {
     record(
       "assistant ego grounding citation feedback and cross-turn tool memory",
+      "fail",
+      await failureDetail(page, error),
+    );
+  } finally {
+    await context.close();
+  }
+}
+
+async function scenarioAssistantLongConversation(browser) {
+  const { page, context } = await newPage(browser);
+  try {
+    await seed(page, {
+      persons: [
+        {
+          id: "long-memory-person",
+          name: "苏晚",
+          note: "我的青梅竹马",
+          profile: { relation: "青梅竹马", likes: ["猫", "手冲咖啡"] },
+          descriptors: [],
+          thumb: "",
+          createdAt: now,
+        },
+        ...Array.from({ length: 13 }, (_, index) => ({
+          id: `long-memory-filler-${index}`,
+          name: `长对话占位人物${index + 1}`,
+          note: "普通联系人",
+          profile: {},
+          descriptors: [],
+          thumb: "",
+          createdAt: now - index - 1,
+        })),
+      ],
+    });
+    await reloadApp(page);
+
+    const questions = [
+      "苏晚喜欢什么？请查档案后回答。",
+      "她和我是什么关系？请复用刚才的档案结果。",
+      "为了测试对话连续性，请只回答：第三轮已收到。",
+      "为了测试对话连续性，请只回答：第四轮已收到。",
+      "为了测试对话连续性，请只回答：第五轮已收到。",
+      "为了测试对话连续性，请只回答：第六轮已收到。",
+      "回到第一问：我问的是谁，她喜欢什么？不要重新查档案，根据会话与工具记忆回答。",
+    ];
+    let finalCard = null;
+    const answers = [];
+    for (const question of questions) {
+      finalCard = await askAssistant(page, question);
+      answers.push((await finalCard.locator(".whitespace-pre-wrap").last().textContent()) ?? "");
+    }
+    const runs = await readStoredAgentRuns(page, "assistant");
+    const finalRun = runs[0] ?? null;
+    const finalTools = (finalRun?.events ?? [])
+      .filter((event) => event.kind === "tool_call")
+      .map((event) => event.toolName);
+    const contextNotice = await finalCard
+      .getByRole("status")
+      .filter({ hasText: /工具记忆|已复用|压缩/ })
+      .textContent()
+      .catch(() => "");
+    const finalAnswer = answers.at(-1) ?? "";
+    const checks = {
+      turnCount: questions.length,
+      finalAnswer,
+      finalAnswerRemembersPerson: /苏晚/.test(finalAnswer),
+      finalAnswerRemembersLikes: /猫|手冲咖啡/.test(finalAnswer),
+      compressionNoticeVisible: /较早\s*[1-9]\d*\s*条对话已压缩/.test(contextNotice ?? ""),
+      toolMemoryNoticeVisible: /已复用\s*[1-9]|已保留\s*[1-9]/.test(contextNotice ?? ""),
+      finalDidNotRepeatArchiveRead: !finalTools.includes("get_profiles"),
+      finalTools,
+      contextNotice,
+      runStatuses: runs.slice(0, questions.length).map((entry) => entry.run?.status),
+      answers,
+      trace: await captureTrace(page),
+    };
+    record(
+      "assistant long conversation exposes compression and preserves early tool memory",
+      checks.finalAnswerRemembersPerson &&
+        checks.finalAnswerRemembersLikes &&
+        checks.compressionNoticeVisible &&
+        checks.toolMemoryNoticeVisible &&
+        checks.finalDidNotRepeatArchiveRead &&
+        checks.runStatuses.every((status) => status === "completed")
+        ? "pass"
+        : "fail",
+      checks,
+    );
+  } catch (error) {
+    record(
+      "assistant long conversation exposes compression and preserves early tool memory",
       "fail",
       await failureDetail(page, error),
     );
@@ -1953,7 +2248,10 @@ async function scenarioAssistantExtremes(browser) {
       injectionRounds: injectionRun?.run?.rounds ?? null,
       injectionToolNames,
       weatherToolVisible: /(天气|weather)/i.test(weatherTrace ?? ""),
-      weatherHasDate: /2026.{0,4}8.{0,4}28|8月28/.test(weatherAnswer ?? ""),
+      weatherHasDate:
+        (weatherAnswer ?? "").includes(todayIso) ||
+        (weatherAnswer ?? "").includes(todayChinese) ||
+        (weatherAnswer ?? "").includes(`${todayParts.month}月${todayParts.day}日`),
       allModelCallsSucceeded: trace.modelOutputs.every((entry) => entry.status === 200),
       allPromptsWithinLimit: trace.modelOutputs.every(
         (entry) => entry.request?.promptCharacters <= 11_800,
@@ -2147,9 +2445,12 @@ try {
   if (selected.has("connection")) await scenarioConnection(browser);
   if (selected.has("complex")) await scenarioComplexSingle(browser);
   if (selected.has("sequential")) await scenarioSequential(browser);
+  if (selected.has("same-name")) await scenarioSameNameDisambiguation(browser);
+  if (selected.has("draft-correction")) await scenarioUncommittedDraftCorrection(browser);
   if (selected.has("updates")) await scenarioIntakeUpdates(browser);
   if (selected.has("assistant")) await scenarioAssistantRelation(browser);
   if (selected.has("assistant-grounding")) await scenarioAssistantGroundingMemory(browser);
+  if (selected.has("assistant-long")) await scenarioAssistantLongConversation(browser);
   if (selected.has("circle")) await scenarioCircleBatch(browser);
   if (selected.has("delete")) await scenarioDeleteCascade(browser);
   if (selected.has("recommendation")) await scenarioRecommendationExtremes(browser);

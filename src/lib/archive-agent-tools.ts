@@ -71,6 +71,54 @@ export function compactArchivePerson(person: PersonRecord) {
   };
 }
 
+const PROFILE_INDEX_FIELDS = [
+  "id",
+  "name",
+  "entityRole",
+  "relation",
+  "title",
+  "org",
+  "department",
+  "tags",
+  "projects",
+  "closeness",
+  "hasContact",
+  "updatedAt",
+] as const;
+
+const PROFILE_DETAIL_ONLY_FIELDS = [
+  "age",
+  "birthday",
+  "gender",
+  "address",
+  "reportsTo",
+  "likes",
+  "dislikes",
+  "gifts",
+  "metAt",
+  "aliases",
+  "extra",
+  "note",
+  "sourceKind",
+] as const;
+
+function profileProjection(kind: "profile_index" | "profile_detail") {
+  return kind === "profile_index"
+    ? {
+        projection: kind,
+        returnedFields: PROFILE_INDEX_FIELDS,
+        omittedFields: PROFILE_DETAIL_ONLY_FIELDS,
+        omissionMeaning: "not_loaded" as const,
+        detailTool: "get_profiles" as const,
+      }
+    : {
+        projection: kind,
+        returnedFields: [...PROFILE_INDEX_FIELDS, ...PROFILE_DETAIL_ONLY_FIELDS],
+        omittedFields: [] as string[],
+        omissionMeaning: "field_absence_is_visible" as const,
+      };
+}
+
 export function detailedArchivePerson(person: PersonRecord) {
   const profile = person.profile ?? {};
   return {
@@ -263,6 +311,7 @@ archiveAgentToolRegistry
           .slice(cursor, cursor + limit)
           .map(compactArchivePerson);
         return {
+          ...profileProjection("profile_index"),
           rows,
           nextCursor:
             cursor + rows.length < services.archive.persons.length ? cursor + rows.length : null,
@@ -289,6 +338,7 @@ archiveAgentToolRegistry
               left.person.name.localeCompare(right.person.name, "zh-CN"),
           );
         return {
+          ...profileProjection("profile_index"),
           query,
           rows: matches.slice(0, limit).map((item) => ({
             ...compactArchivePerson(item.person),
@@ -308,6 +358,7 @@ archiveAgentToolRegistry
       input: idsSchema,
       permission: "private_read",
       handler: ({ personIds }, { services }) => ({
+        ...profileProjection("profile_detail"),
         rows: services.archive.persons
           .filter((person) => personIds.includes(person.id))
           .map(detailedArchivePerson),

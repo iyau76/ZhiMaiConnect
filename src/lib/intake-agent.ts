@@ -31,6 +31,8 @@ import {
   type IntakeTaskSnapshot,
 } from "./intake-task-state";
 import { isSelfReference, SELF_PERSON_ID } from "./person-identity";
+import { ensureIntakeWorkspace, intakeWorkspaceView } from "./intake-workspace";
+import { inferRelationSemantics, type RelationPredicate } from "./relation-ontology";
 
 const MAX_HISTORY = 8_000;
 const MAX_VALIDATION_REPAIRS = 2;
@@ -79,6 +81,19 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function modelDraftValue<T>(value: T): T {
+  return JSON.parse(
+    JSON.stringify(value, (key, item: unknown) =>
+      key.startsWith("_") ||
+      key.startsWith("target") ||
+      key.includes("DraftId") ||
+      key.includes("PersonId")
+        ? undefined
+        : item,
+    ),
+  ) as T;
+}
+
 function personDraftFromChanges(person: PersonRecord, changes: unknown): IngestPerson {
   const input = record(changes);
   const allowed = [
@@ -117,6 +132,7 @@ function eventDraftFromChanges(event: LifeEventRecord, changes: unknown): Ingest
     title: "title" in input ? input.title : event.title,
     detail: "detail" in input ? input.detail : event.detail,
     date: "date" in input ? input.date : event.date,
+    timeText: "timeText" in input ? input.timeText : undefined,
     dateEnd: "dateEnd" in input ? input.dateEnd : event.dateEnd,
     precision: "precision" in input ? input.precision : (event.precision ?? "day"),
     place: "place" in input ? input.place : event.place,
@@ -157,6 +173,7 @@ function compactIntakeArchiveIndex(
   persons: readonly PersonRecord[],
   relations: readonly RelationRecord[],
   events: readonly LifeEventRecord[],
+  workspace?: IngestCandidate,
 ) {
   const names = new Map(persons.map((person) => [person.id, person.name]));
   const fitRows = (rows: unknown[]) => {
@@ -194,6 +211,7 @@ function compactIntakeArchiveIndex(
     events: fitRows(
       events.map((event) => ({ id: event.id, title: event.title, date: event.date })),
     ),
+    ...(workspace ? { workspace: intakeWorkspaceView(workspace) } : {}),
   });
 }
 
@@ -209,24 +227,33 @@ export function compileIntakePlan(options: {
   persons: readonly PersonRecord[];
   relations: readonly RelationRecord[];
   events: readonly LifeEventRecord[];
+  workspace?: IngestCandidate;
+  sourceMaterial?: string;
 }): CompiledIntakePlan {
   const parser = new IntakeTaskStateMachine({ planRequired: true });
   parser.acceptPlan(options.candidate);
   const input = record(options.candidate);
   const tasks = parser.plannedTasks();
-  const staged: IngestCandidate = {
-    people: [],
-    facts: [],
-    relations: [],
-    events: [],
-    reminders: [],
-    evidence: [],
-  };
+  const staged: IngestCandidate = ensureIntakeWorkspace(options.workspace ?? {});
   const completionIds = new Map<string, string>();
   const createdPeopleByName = new Map<string, IngestPerson[]>();
   const createdPeopleByRef = new Map<string, IngestPerson>();
 
   const personKey = (name: string) => normalized(name).replace(/\s+/g, "");
+
+  for (const person of staged.people ?? []) {
+    if (person._draftId) createdPeopleByRef.set(person._draftId, person);
+    createdPeopleByName.set(personKey(person.name), [
+      ...(createdPeopleByName.get(personKey(person.name)) ?? []),
+      person,
+    ]);
+  }
+
+  const replaceWorkspaceRow = <T extends { _draftId?: string }>(rows: T[], row: T, ref: string) => {
+    const index = rows.findIndex((candidate) => candidate._draftId === ref);
+    if (index < 0) throw new Error(`工作区记录不存在：${ref}`);
+    rows[index] = row;
+  };
 
   const existingPersonMatches = (name: string) => {
     const key = personKey(name);
@@ -234,7 +261,7 @@ export function compileIntakePlan(options: {
       personNames(person).some((candidate) => personKey(candidate) === key),
     );
   };
-  const assertPersonIdMatches = (personId: string, name: string, taskId: string) => {
+  const assertArchivePersonIdMatches = (personId: string, name: string, taskId: string) => {
     const person = options.persons.find((candidate) => candidate.id === personId);
     if (!person) throw new Error(`任务 ${taskId} 引用了不存在的人物 ID：${personId}`);
     if (
@@ -248,7 +275,7 @@ export function compileIntakePlan(options: {
     return person;
   };
   const resolveExistingPerson = (name: string, taskId: string, personId?: string) => {
-    if (personId) return assertPersonIdMatches(personId, name, taskId);
+    if (personId) return assertArchivePersonIdMatches(personId, name, taskId);
     if (isSelfReference(name)) {
       const self = options.persons.find(
         (person) => person.id === SELF_PERSON_ID || person.entityRole === "ego",
@@ -272,7 +299,7 @@ export function compileIntakePlan(options: {
       }
       return { personId: SELF_PERSON_ID };
     }
-    if (personRef?.startsWith("plan:")) {
+    if (personRef && createdPeopleByRef.has(personRef)) {
       const created = createdPeopleByRef.get(personRef);
       if (!created) throw new Error(`任务 ${taskId} 引用了尚未声明的新人物：${personRef}`);
       if (personKey(created.name) !== personKey(name)) {
@@ -282,19 +309,25 @@ export function compileIntakePlan(options: {
       }
       return { draftId: created._draftId };
     }
-    if (personRef) return { personId: assertPersonIdMatches(personRef, name, taskId).id };
+    if (personRef) return { personId: assertArchivePersonIdMatches(personRef, name, taskId).id };
     const existing = existingPersonMatches(name);
     const created = createdPeopleByName.get(personKey(name)) ?? [];
-    if (existing.length + created.length !== 1) {
+    const shadowedArchiveIds = new Set(
+      created.map((person) => person.targetPersonId).filter((id): id is string => Boolean(id)),
+    );
+    const unshadowedExisting = existing.filter((person) => !shadowedArchiveIds.has(person.id));
+    if (unshadowedExisting.length + created.length !== 1) {
       const candidates = [
-        ...existing.map((person) => `${person.name}(${person.id})`),
+        ...unshadowedExisting.map((person) => `${person.name}(${person.id})`),
         ...created.map((person) => `${person.name}(${person._draftId})`),
       ];
       throw new Error(
         `任务 ${taskId} 的人物端点“${name}”必须唯一定位${candidates.length ? `；候选为 ${candidates.join("、")}，请填写 fromPersonId/toPersonId` : ""}`,
       );
     }
-    return created.length ? { draftId: created[0]._draftId } : { personId: existing[0].id };
+    return created.length
+      ? { draftId: created[0]._draftId }
+      : { personId: unshadowedExisting[0].id };
   };
 
   const normalizedTasks: IntakeMutationTask[] = [];
@@ -317,6 +350,42 @@ export function compileIntakePlan(options: {
       normalizedTasks.push(task);
       continue;
     }
+    const workspacePerson = task.target.personId
+      ? createdPeopleByRef.get(task.target.personId)
+      : (createdPeopleByName.get(personKey(task.target.name)) ?? []).length === 1
+        ? createdPeopleByName.get(personKey(task.target.name))?.[0]
+        : undefined;
+    if (workspacePerson?._draftId) {
+      const internal = {
+        _draftId: workspacePerson._draftId,
+        targetPersonId: workspacePerson.targetPersonId,
+        _identityCandidateIds: workspacePerson._identityCandidateIds,
+        _identityReason: workspacePerson._identityReason,
+        _identityChecked: workspacePerson._identityChecked,
+        _fieldGrounding: workspacePerson._fieldGrounding,
+        _audit: workspacePerson._audit?.humanEdited ? workspacePerson._audit : undefined,
+      };
+      const item = parseIngestCandidate(
+        JSON.stringify({
+          people: [
+            { ...modelDraftValue(workspacePerson), ...task.changes, name: task.target.name },
+          ],
+        }),
+      ).people![0];
+      Object.assign(item, internal);
+      replaceWorkspaceRow(staged.people!, item, workspacePerson._draftId);
+      createdPeopleByRef.set(workspacePerson._draftId, item);
+      const byName = createdPeopleByName.get(personKey(workspacePerson.name)) ?? [];
+      createdPeopleByName.set(
+        personKey(workspacePerson.name),
+        byName.map((candidate) =>
+          candidate._draftId === workspacePerson._draftId ? item : candidate,
+        ),
+      );
+      completionIds.set(task.id, workspacePerson._draftId);
+      normalizedTasks.push(task);
+      continue;
+    }
     const person = resolveExistingPerson(task.target.name, task.id, task.target.personId);
     const item = personDraftFromChanges(person, task.changes);
     item.targetPersonId = person.id;
@@ -329,27 +398,47 @@ export function compileIntakePlan(options: {
 
   for (const task of tasks.filter((candidate) => candidate.domain === "fact")) {
     const person = resolveEndpoint(task.target.person, task.id, task.target.personId);
+    const workspaceFact = task.target.factId
+      ? staged.facts?.find((item) => item._draftId === task.target.factId)
+      : undefined;
+    if (task.intent === "update" && !workspaceFact) {
+      throw new Error(`任务 ${task.id} 无法定位要更新的工作区事实`);
+    }
     const item = parseIngestCandidate(
       JSON.stringify({
         facts: [
           {
+            ...(workspaceFact ? modelDraftValue(workspaceFact) : {}),
             person: task.target.person,
             key: task.target.key,
-            value: task.changes.value,
-            validFrom: task.changes.validFrom,
-            validTo: task.changes.validTo,
-            confidence: task.changes.confidence,
+            value: "value" in task.changes ? task.changes.value : workspaceFact?.value,
+            validFrom:
+              "validFrom" in task.changes ? task.changes.validFrom : workspaceFact?.validFrom,
+            validTo: "validTo" in task.changes ? task.changes.validTo : workspaceFact?.validTo,
+            confidence:
+              "confidence" in task.changes ? task.changes.confidence : workspaceFact?.confidence,
           },
         ],
       }),
     ).facts![0];
+    item._draftId = workspaceFact?._draftId ?? `plan:${task.id}`;
+    item._audit = workspaceFact?._audit?.humanEdited ? workspaceFact._audit : undefined;
     if (person.draftId) item.personDraftId = person.draftId;
     if (person.personId) item.personId = person.personId;
-    staged.facts!.push(item);
+    if (workspaceFact?._draftId) replaceWorkspaceRow(staged.facts!, item, workspaceFact._draftId);
+    else staged.facts!.push(item);
     completionIds.set(task.id, person.personId ?? person.draftId ?? `plan:${task.id}`);
     normalizedTasks.push(task);
   }
 
+  const modelRelationsThisPlan: IngestRelation[] = [];
+  const relationClaimContext = () => ({
+    sourceMaterial: options.sourceMaterial,
+    personNames: [
+      ...options.persons.flatMap(personNames),
+      ...(staged.people ?? []).map((person) => person.name),
+    ],
+  });
   for (const task of tasks.filter((candidate) => candidate.domain === "relation")) {
     const from = resolveEndpoint(task.target.from, task.id, task.target.fromPersonId);
     const to = resolveEndpoint(task.target.to, task.id, task.target.toPersonId);
@@ -369,13 +458,56 @@ export function compileIntakePlan(options: {
           ],
         }),
       ).relations![0];
-      validateModelRelations({ relations: [item] });
       if (from.draftId) item.fromDraftId = from.draftId;
       if (to.draftId) item.toDraftId = to.draftId;
       if (from.personId) item.fromPersonId = from.personId;
       if (to.personId) item.toPersonId = to.personId;
+      item._draftId = `plan:${task.id}`;
       staged.relations!.push(item);
-      completionIds.set(task.id, `plan:${task.id}`);
+      modelRelationsThisPlan.push(item);
+      completionIds.set(task.id, item._draftId);
+      normalizedTasks.push(task);
+      continue;
+    }
+    const workspaceRelationMatches = task.target.relationId
+      ? (staged.relations?.filter((relation) => relation._draftId === task.target.relationId) ?? [])
+      : (staged.relations?.filter(
+          (relation) =>
+            ((relation.fromDraftId && relation.fromDraftId === from.draftId) ||
+              (relation.fromPersonId && relation.fromPersonId === from.personId) ||
+              personKey(relation.from) === personKey(task.target.from)) &&
+            ((relation.toDraftId && relation.toDraftId === to.draftId) ||
+              (relation.toPersonId && relation.toPersonId === to.personId) ||
+              personKey(relation.to) === personKey(task.target.to)) &&
+            (!task.target.label || normalized(relation.label) === normalized(task.target.label)),
+        ) ?? []);
+    const workspaceRelation =
+      workspaceRelationMatches.length === 1 ? workspaceRelationMatches[0] : undefined;
+    if (workspaceRelation?._draftId) {
+      const item = parseIngestCandidate(
+        JSON.stringify({
+          relations: [
+            {
+              ...modelDraftValue(workspaceRelation),
+              ...task.changes,
+              from: task.target.from,
+              to: task.target.to,
+              label: task.changes.label ?? task.target.label ?? workspaceRelation.label,
+            },
+          ],
+        }),
+      ).relations![0];
+      item._draftId = workspaceRelation._draftId;
+      item.fromDraftId = from.draftId;
+      item.toDraftId = to.draftId;
+      item.fromPersonId = from.personId;
+      item.toPersonId = to.personId;
+      item._relationChecked = workspaceRelation._relationChecked;
+      item._relationReason = workspaceRelation._relationReason;
+      item._audit = workspaceRelation._audit?.humanEdited ? workspaceRelation._audit : undefined;
+      replaceWorkspaceRow(staged.relations!, item, workspaceRelation._draftId);
+      modelRelationsThisPlan.push(item);
+      completionIds.set(task.id, workspaceRelation._draftId);
       normalizedTasks.push(task);
       continue;
     }
@@ -400,16 +532,17 @@ export function compileIntakePlan(options: {
     }
     const relation = matches[0];
     const item = relationDraftFromChanges(relation, [...options.persons], task.changes);
-    validateModelRelations({ relations: [item] });
     item.targetRelationId = relation.id;
     item.fromPersonId = from.personId;
     item.toPersonId = to.personId;
     item._relationChecked = true;
     item._relationReason = "typed plan 已由本地唯一锁定现有关系；等待用户核对差异";
     staged.relations!.push(item);
+    modelRelationsThisPlan.push(item);
     completionIds.set(task.id, relation.id);
     normalizedTasks.push(task);
   }
+  auditModelRelations({ relations: modelRelationsThisPlan }, relationClaimContext());
 
   for (const originalTask of tasks.filter((candidate) => candidate.domain === "event")) {
     if (originalTask.intent === "create" && originalTask.target.eventId) {
@@ -418,8 +551,15 @@ export function compileIntakePlan(options: {
     const titleMatches = options.events.filter(
       (event) => normalized(event.title) === normalized(originalTask.target.title),
     );
+    const workspaceTitleMatches = (staged.events ?? []).filter(
+      (event) => normalized(event.title) === normalized(originalTask.target.title),
+    );
     let task = originalTask;
-    if (task.intent === "create" && task.target.date === undefined && titleMatches.length === 1) {
+    if (
+      task.intent === "create" &&
+      task.target.date === undefined &&
+      titleMatches.length + workspaceTitleMatches.length === 1
+    ) {
       task = { ...task, intent: "update" };
     } else if (
       task.intent === "create" &&
@@ -429,6 +569,36 @@ export function compileIntakePlan(options: {
       throw new Error(`任务 ${task.id} 的事件“${task.target.title}”存在多个同名目标，必须消歧`);
     }
     if (task.intent === "update") {
+      const workspaceEvent = task.target.eventId
+        ? staged.events?.find((event) => event._draftId === task.target.eventId)
+        : workspaceTitleMatches.length === 1
+          ? workspaceTitleMatches[0]
+          : undefined;
+      if (workspaceEvent?._draftId) {
+        const item = parseIngestCandidate(
+          JSON.stringify({
+            events: [
+              {
+                ...modelDraftValue(workspaceEvent),
+                ...task.changes,
+                title: task.target.title,
+              },
+            ],
+          }),
+        ).events![0];
+        item._draftId = workspaceEvent._draftId;
+        item.targetEventId = workspaceEvent.targetEventId;
+        item._eventChecked = workspaceEvent._eventChecked;
+        item._eventReason = workspaceEvent._eventReason;
+        const people = item.people?.map((name) => resolveEndpoint(name, task.id));
+        item.peopleDraftIds = people?.map((person) => person.draftId);
+        item.peoplePersonIds = people?.map((person) => person.personId);
+        item._audit = workspaceEvent._audit?.humanEdited ? workspaceEvent._audit : undefined;
+        replaceWorkspaceRow(staged.events!, item, workspaceEvent._draftId);
+        completionIds.set(task.id, workspaceEvent._draftId);
+        normalizedTasks.push(task);
+        continue;
+      }
       const matches = options.events.filter(
         (event) =>
           (!task.target.eventId || event.id === task.target.eventId) &&
@@ -468,34 +638,59 @@ export function compileIntakePlan(options: {
   }
 
   for (const task of tasks.filter((candidate) => candidate.domain === "reminder")) {
-    if (task.intent !== "create") throw new Error(`任务 ${task.id} 暂不支持更新已有提醒`);
+    const workspaceReminder = task.target.reminderId
+      ? staged.reminders?.find((item) => item._draftId === task.target.reminderId)
+      : undefined;
+    if (task.intent === "update" && !workspaceReminder) {
+      throw new Error(`任务 ${task.id} 无法定位要更新的工作区提醒`);
+    }
     const item = parseIngestCandidate(
-      JSON.stringify({ reminders: [{ ...task.changes, title: task.target.title }] }),
+      JSON.stringify({
+        reminders: [
+          {
+            ...(workspaceReminder ? modelDraftValue(workspaceReminder) : {}),
+            ...task.changes,
+            title: task.target.title,
+          },
+        ],
+      }),
     ).reminders![0];
+    item._draftId = workspaceReminder?._draftId ?? `plan:${task.id}`;
+    item._audit = workspaceReminder?._audit?.humanEdited ? workspaceReminder._audit : undefined;
     const people = item.people?.map((name) => resolveEndpoint(name, task.id));
     item.peopleDraftIds = people?.map((person) => person.draftId);
     item.peoplePersonIds = people?.map((person) => person.personId);
-    staged.reminders!.push(item);
-    completionIds.set(task.id, `plan:${task.id}`);
+    if (workspaceReminder?._draftId)
+      replaceWorkspaceRow(staged.reminders!, item, workspaceReminder._draftId);
+    else staged.reminders!.push(item);
+    completionIds.set(task.id, item._draftId);
     normalizedTasks.push(task);
   }
 
   for (const task of tasks.filter((candidate) => candidate.domain === "evidence")) {
+    const workspaceEvidence = task.target.evidenceId
+      ? staged.evidence?.find((item) => item._draftId === task.target.evidenceId)
+      : undefined;
+    if (task.intent === "update" && !workspaceEvidence) {
+      throw new Error(`任务 ${task.id} 无法定位要更新的工作区材料`);
+    }
     const item = parseIngestCandidate(
       JSON.stringify({
         evidence: [
           {
-            kind: task.changes.kind,
+            ...(workspaceEvidence ? modelDraftValue(workspaceEvidence) : {}),
+            ...task.changes,
             title: task.target.title,
-            text: task.changes.text,
-            origin: task.changes.origin,
-            confidence: task.changes.confidence,
           },
         ],
       }),
     ).evidence![0];
-    staged.evidence!.push(item);
-    completionIds.set(task.id, `plan:${task.id}`);
+    item._draftId = workspaceEvidence?._draftId ?? `plan:${task.id}`;
+    item._audit = workspaceEvidence?._audit?.humanEdited ? workspaceEvidence._audit : undefined;
+    if (workspaceEvidence?._draftId)
+      replaceWorkspaceRow(staged.evidence!, item, workspaceEvidence._draftId);
+    else staged.evidence!.push(item);
+    completionIds.set(task.id, item._draftId);
     normalizedTasks.push(task);
   }
 
@@ -508,6 +703,10 @@ export function compileIntakePlan(options: {
     completionIds.set(task.id, `plan:${task.id}`);
     normalizedTasks.push(task);
   }
+
+  staged._revision = options.workspace
+    ? Math.max(1, Math.trunc(options.workspace._revision ?? 1)) + 1
+    : 1;
 
   return {
     plan: {
@@ -549,18 +748,173 @@ function mergeDrafts(staged: IngestCandidate, finalDraft: IngestCandidate): Inge
   };
 }
 
-function validateModelRelations(draft: IngestCandidate) {
-  for (const [index, relation] of (draft.relations ?? []).entries()) {
-    const basis = relation.basis?.trim() ?? "";
-    if (!basis) throw new Error(`relations[${index}] 缺少 basis；AI 抽取关系必须提供原文依据`);
+function compactClaimText(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN")
+    .replace(/[\s，。；：、,.!?！？“”'"（）()]/g, "");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const EXPLICIT_RELATION_CUES: Partial<Record<RelationPredicate, RegExp>> = {
+  parent_of: /(父|母|爸|妈|儿子|女儿|孩子|子女|生了|parent|father|mother|son|daughter|child)/i,
+  step_parent_of: /(继父|继母|stepfather|stepmother|stepparent)/i,
+  spouse_of: /(夫妻|配偶|丈夫|妻|爱人|妾|嫁|娶|结婚|成婚|spouse|husband|wife|married)/i,
+  sibling_of: /(兄弟|兄妹|姐弟|姐妹|哥哥|弟弟|姐姐|妹妹|同胞|sibling|brother|sister)/i,
+  half_sibling_of: /(同父异母|同母异父|半血缘|half.?sibling)/i,
+  step_sibling_of: /(继兄|继弟|继姐|继妹|继兄弟|继姐妹|step.?sibling)/i,
+  grandparent_of: /(祖父|祖母|爷爷|奶奶|外公|外婆|祖孙|grandparent)/i,
+  great_grandparent_of: /(曾祖|曾孙|great.?grand)/i,
+  uncle_aunt_of: /(叔|伯|姑|舅|姨|侄|甥|uncle|aunt|nephew|niece)/i,
+  cousin_of: /(堂|表亲|姑表|舅表|姨表|cousin)/i,
+  in_law_of: /(翁媳|婆媳|岳父|岳母|公公|婆婆|叔嫂|姑嫂|姻亲|in.?law)/i,
+};
+
+function claimBodyWithoutEntityNames(basis: string, personNames: string[]) {
+  let body = basis.replace(/^(原文|original)\s*[:：]/i, "");
+  for (const name of [...new Set(personNames)].sort((a, b) => b.length - a.length)) {
+    if (name.trim()) body = body.replace(new RegExp(escapeRegExp(name.trim()), "giu"), "");
+  }
+  return body;
+}
+
+type RelationClaimIssue = {
+  relation: IngestRelation;
+  message: string;
+};
+
+function sourcePassages(sourceMaterial: string) {
+  return (
+    sourceMaterial.match(/[^。！？!?；;\n]+[。！？!?；;]?/gu)?.map((passage) => passage.trim()) ??
+    []
+  ).filter(Boolean);
+}
+
+function passageForRelation(
+  sourceMaterial: string,
+  relation: IngestRelation,
+  personNames: string[],
+) {
+  const from = compactClaimText(relation.from);
+  const to = compactClaimText(relation.to);
+  const predicate = inferRelationSemantics(relation.label).predicate;
+  const cue = EXPLICIT_RELATION_CUES[predicate];
+  return sourcePassages(sourceMaterial)
+    .filter((passage) => {
+      const compact = compactClaimText(passage);
+      if (!compact.includes(from) || !compact.includes(to)) return false;
+      return !cue || cue.test(claimBodyWithoutEntityNames(passage, personNames));
+    })
+    .sort((left, right) => left.length - right.length)[0];
+}
+
+/**
+ * Evidence wording is an audit concern, not a reason to regenerate a complete plan.
+ * The compiler aligns paraphrased quotes to source passages when possible and keeps
+ * unresolved claims visible as pending draft rows with an explicit reason.
+ */
+function auditModelRelations(
+  draft: IngestCandidate,
+  context: { sourceMaterial?: string; personNames?: string[] } = {},
+) {
+  const personNames = [
+    ...(context.personNames ?? []),
+    ...(draft.relations ?? []).flatMap((relation) => [relation.from, relation.to]),
+  ];
+  const issues: RelationClaimIssue[] = [];
+  const addIssue = (relation: IngestRelation, message: string) => {
+    issues.push({ relation, message });
+  };
+  for (const relation of draft.relations ?? []) {
+    let basis = relation.basis?.trim() ?? "";
+    if (!basis) {
+      addIssue(relation, "AI 未提供可回查的原文依据");
+      continue;
+    }
     const explicit = /^(原文|original)\s*[:：]/i.test(basis);
     const inferred = /^(推断依据|inference\s+basis)\s*[:：]/i.test(basis);
-    if (inferred)
-      throw new Error(
-        `relations[${index}] 是模型推导关系；这里只能抽取原文明说的关系，本地规则会在人物 ID 确认后统一推导`,
-      );
-    if (!explicit) throw new Error(`relations[${index}].basis 必须以“原文：”开头`);
+    if (inferred) addIssue(relation, "这是 AI 推导关系，不是原文直接断言");
+    if (!explicit && !inferred) {
+      addIssue(relation, "依据没有标明是原文还是推断");
+    }
+    const basisBody = basis
+      .replace(/^(原文|original|推断依据|inference\s+basis)\s*[:：]/i, "")
+      .trim();
+    const compactBasis = compactClaimText(basisBody);
+    const basisNamesBothEndpoints =
+      compactBasis.includes(compactClaimText(relation.from)) &&
+      compactBasis.includes(compactClaimText(relation.to));
+    if (
+      context.sourceMaterial?.trim() &&
+      (!compactClaimText(context.sourceMaterial).includes(compactBasis) || !basisNamesBothEndpoints)
+    ) {
+      const passage = passageForRelation(context.sourceMaterial, relation, personNames);
+      if (passage) {
+        relation.basis = `原文：${passage}`;
+        basis = relation.basis;
+      } else {
+        addIssue(relation, "依据未能对齐到同时包含关系两端的原文片段");
+      }
+    }
+    const predicate = inferRelationSemantics(relation.label).predicate;
+    const cue = EXPLICIT_RELATION_CUES[predicate];
+    const semanticBody = claimBodyWithoutEntityNames(basis, personNames);
+    if (cue && !cue.test(semanticBody)) {
+      addIssue(relation, "关系标签与所附原文不一致，可能把经第三人关联误写成直接关系");
+    }
+    if (
+      /(?:的|\bof\b).*(?:父|母|儿子|女儿|兄|弟|姐|妹|father|mother|son|daughter|brother|sister)/i.test(
+        relation.label,
+      )
+    ) {
+      addIssue(relation, "关系标签包含多跳称谓，尚未拆成可核对的原子关系");
+    }
   }
+
+  const pluralParentGroups = new Map<string, IngestRelation[]>();
+  for (const relation of draft.relations ?? []) {
+    if (inferRelationSemantics(relation.label).predicate !== "parent_of") continue;
+    const basis = relation.basis?.replace(/^(原文|original)\s*[:：]/i, "").trim() ?? "";
+    if (
+      !/(他们(?:俩)?(?:的|有)|their)\s*(?:一?个)?\s*(?:儿子|女儿|孩子|子女|son|daughter|child)/i.test(
+        basis,
+      )
+    ) {
+      continue;
+    }
+    const key = `${compactClaimText(basis)}\u0000${normalized(relation.to)}`;
+    pluralParentGroups.set(key, [...(pluralParentGroups.get(key) ?? []), relation]);
+  }
+  for (const relations of pluralParentGroups.values()) {
+    if (new Set(relations.map((relation) => normalized(relation.from))).size >= 2) continue;
+    const relation = relations[0];
+    addIssue(
+      relation,
+      `“他们的孩子”只生成了一位父母到 ${relation.to} 的关系，另一位父母关系可能遗漏`,
+    );
+  }
+
+  const messagesByRelation = new Map<IngestRelation, string[]>();
+  for (const issue of issues) {
+    messagesByRelation.set(issue.relation, [
+      ...(messagesByRelation.get(issue.relation) ?? []),
+      issue.message,
+    ]);
+  }
+  for (const relation of draft.relations ?? []) {
+    const messages = [...new Set(messagesByRelation.get(relation) ?? [])];
+    if (messages.length) {
+      relation._relationChecked = false;
+      relation._relationReason = `AI 生成，请注意辨别：${messages.join("；")}`;
+    } else if (!relation._relationReason) {
+      relation._relationChecked = true;
+      relation._relationReason = "关系依据已与本次材料对齐；仍可在入库前编辑";
+    }
+  }
+  return issues;
 }
 
 /** Keep whole history entries so truncation never produces malformed JSON. */
@@ -595,7 +949,7 @@ function promptForRound(
     ? `录入任务账本（由本地状态机维护）：
 ${JSON.stringify(taskState)}
 
-当前档案结构化索引（含可核验稳定 ID；只允许引用索引中的 ID）：
+当前档案与未提交工作区索引（archive id 与 workspace.recordRef 都可稳定寻址）：
 ${archiveIndex}`
     : "";
   const toolResponseGuide = `相互独立的只读查询可在同一轮批量调用，最多 4 个；写入暂存工具按顺序执行。单工具格式：
@@ -607,7 +961,7 @@ ${archiveIndex}`
 已经通过 stage_* 暂存的更新不要在 final.draft 中重复。若无需工具，也可直接输出前述严格结构的草稿 JSON，以兼容简单新增录入。`;
   const responseGuide =
     taskState?.nextAction === "declare_plan"
-      ? `本轮唯一动作是一次性声明所有新增和更新，不调用工具、不写工具名、不输出 final。稳定 ID 只能复制上方结构化索引，不得编造：更新现有记录或遇到同名人物时必须写 personId/relationId/eventId；关系端点用 fromPersonId/toPersonId。新人物没有执行 ID，用 plan:<person task id> 作为后续关系端点引用。“我/me”是保留视角，ID 固定为 ${SELF_PERSON_ID}，不得新建一个名为“我”的普通人物。本地会校验 ID、处理歧义并统一暂存；模型只负责把语义写成 typed plan。每个 changes 必须是可直接进入对应草稿的字段。相同记录同一 domain 的多个字段合并为一项，不得遗漏并列句：
+      ? `本轮唯一动作是一次性声明所有新增和更新，不调用工具、不写工具名、不输出 final。稳定 ID 只能复制上方结构化索引，不得编造：已入库记录使用 archive id；未提交工作区记录使用其 recordRef，并分别填入 personId/relationId/eventId/factId/reminderId/evidenceId。关系端点用 fromPersonId/toPersonId，它们同样可以填写人物 recordRef。补充材料在纠正工作区内容时必须 update 原 recordRef，不能保留旧值再 create 一条新值。新人物没有引用时，用 plan:<person task id> 作为同一计划后续关系端点。“我/me”是保留视角，ID 固定为 ${SELF_PERSON_ID}，不得新建一个名为“我”的普通人物。本地会校验 ID、处理歧义并统一暂存；模型只负责把语义写成 typed plan。每个 changes 必须是可直接进入对应草稿的字段。相同记录同一 domain 的多个字段合并为一项，不得遗漏并列句：
 {"type":"plan","summary":"计划摘要","tasks":[
 {"id":"person-1","domain":"person","intent":"update","target":{"name":"唐悦","personId":"<索引中的人物ID>"},"changes":{"title":"品牌总监"}},
 {"id":"fact-1","domain":"fact","intent":"create","target":{"person":"唐悦","personId":"<索引中的人物ID或 plan:person-1>","key":"毕业院校"},"changes":{"value":"某大学"}},
@@ -617,7 +971,7 @@ ${archiveIndex}`
 {"id":"evidence-1","domain":"evidence","intent":"create","target":{"title":"本次材料摘要"},"changes":{"kind":"note","text":"只保留核对所需的最短原文或摘要","origin":"用户输入"}},
 {"id":"summary-1","domain":"summary","intent":"create","target":{"title":"本次材料概要"},"changes":{"text":"给用户浏览草稿用的一句话概要"}}
 ]}
-人物 target 必须有 name，更新时尽量附 personId；事实 target 必须有 person/key，并用 personId 绑定已有人物或 plan:person-task 绑定同轮新人物；关系 target 必须有 from/to，更新时附端点 ID 与 relationId，create 时 label 可放 target.label 或 changes.label；事件 target 必须有 title，更新时附 eventId；提醒、材料与概要 target 必须有 title，当前只允许 create；概要最多一项。材料已经给出姓名时，禁止再为同一人创建“某人的妹妹（未具名）”之类称谓占位人物。create 与 update 必须按用户语义明确选择。`
+人物 target 必须有 name，更新时附 personId；事实 target 必须有 person/key，更新工作区事实时附 factId；关系 target 必须有 from/to，更新时附端点引用与 relationId，create 时 label 可放 target.label 或 changes.label；事件 target 必须有 title，更新时附 eventId；提醒和材料更新时分别附 reminderId/evidenceId；概要最多一项。材料已经给出姓名时，禁止再为同一人创建“某人的妹妹（未具名）”之类称谓占位人物。create 与 update 必须按用户语义明确选择。`
       : taskState
         ? "typed plan 由本地执行，不再请求模型复述草稿。"
         : `${toolResponseGuide}
@@ -683,6 +1037,8 @@ export async function runIntakeAgent(options: {
   persons: PersonRecord[];
   events: LifeEventRecord[];
   relations?: RelationRecord[];
+  /** Addressable uncommitted draft carried across supplement/correction turns. */
+  workspace?: IngestCandidate;
   includeArchive: boolean;
   /** Raw user material, used only for completion invariants rather than prompting. */
   sourceMaterial?: string;
@@ -694,14 +1050,8 @@ export async function runIntakeAgent(options: {
 }): Promise<IngestCandidate> {
   const trace = options.onTrace ?? (() => undefined);
   const history: Array<{ call: unknown; result: unknown }> = [];
-  const staged: IngestCandidate = {
-    people: [],
-    facts: [],
-    events: [],
-    relations: [],
-    reminders: [],
-    evidence: [],
-  };
+  const workspace = options.workspace ? ensureIntakeWorkspace(options.workspace) : undefined;
+  const staged: IngestCandidate = ensureIntakeWorkspace(workspace ?? {});
   const relations = options.relations ?? [];
   const services: ArchiveAgentServices = {
     archive: { persons: options.persons, relations, events: options.events },
@@ -718,11 +1068,15 @@ export async function runIntakeAgent(options: {
   const maxRounds = runtime.contextBudget.limits.maxRounds;
   let validationRepairs = 0;
   const taskState = new IntakeTaskStateMachine({
-    planRequired: options.includeArchive && Boolean(options.sourceMaterial?.trim()),
+    planRequired:
+      Boolean(options.sourceMaterial?.trim()) && (options.includeArchive || Boolean(workspace)),
   });
-  const archiveIndex = options.includeArchive
-    ? compactIntakeArchiveIndex(options.persons, relations, options.events)
-    : "{}";
+  const archiveIndex = compactIntakeArchiveIndex(
+    options.includeArchive ? options.persons : [],
+    options.includeArchive ? relations : [],
+    options.includeArchive ? options.events : [],
+    workspace,
+  );
 
   const completeRun = () => {
     runtime.finalize("completed");
@@ -739,7 +1093,7 @@ export async function runIntakeAgent(options: {
   const finish = (candidate: unknown) => {
     try {
       const parsed = parseIngestCandidate(JSON.stringify(candidate ?? {}));
-      validateModelRelations(parsed);
+      auditModelRelations(parsed, { sourceMaterial: options.sourceMaterial });
       taskState.assertFinalizable();
       return mergeDrafts(staged, parsed);
     } catch (error) {
@@ -828,7 +1182,7 @@ export async function runIntakeAgent(options: {
       );
     }
     const item = relationDraftFromChanges(relation, options.persons, changes);
-    validateModelRelations({ relations: [item] });
+    auditModelRelations({ relations: [item] });
     item.targetRelationId = relation.id;
     item._relationChecked = true;
     item._relationReason = "typed plan 已由本地锁定现有关系；等待用户核对差异";
@@ -854,18 +1208,12 @@ export async function runIntakeAgent(options: {
 
   const commitCompiledPlan = (compiled: CompiledIntakePlan) => {
     taskState.acceptPlan(compiled.plan);
-    staged.people!.push(...(compiled.staged.people ?? []));
-    staged.facts!.push(...(compiled.staged.facts ?? []));
-    staged.relations!.push(...(compiled.staged.relations ?? []));
-    staged.events!.push(...(compiled.staged.events ?? []));
-    staged.reminders!.push(...(compiled.staged.reminders ?? []));
-    staged.evidence!.push(...(compiled.staged.evidence ?? []));
     for (const task of compiled.plan.tasks) {
       taskState.completeTask(task.id, task.domain, compiled.completionIds.get(task.id)!);
     }
     taskState.assertFinalizable();
-    staged.summary = compiled.plan.summary || "已根据本次材料生成待确认变更";
-    return staged;
+    compiled.staged.summary = compiled.plan.summary || "已根据本次材料生成待确认变更";
+    return compiled.staged;
   };
 
   const executeTool = async (tool: string, args: Record<string, unknown>) => {
@@ -889,7 +1237,9 @@ export async function runIntakeAgent(options: {
         history,
         options.includeArchive,
         maxRounds,
-        options.includeArchive && options.sourceMaterial?.trim() ? taskState.snapshot() : null,
+        options.sourceMaterial?.trim() && (options.includeArchive || workspace)
+          ? taskState.snapshot()
+          : null,
         archiveIndex,
       );
       const modelDecision = await runtime.runModelRound({ payload: { prompt } }, async (signal) => {
@@ -914,6 +1264,7 @@ export async function runIntakeAgent(options: {
               1,
               Math.min(32_768, runtime.contextBudget.snapshot().remaining.outputTokens),
             ),
+            temperature: 0,
           },
         );
         return { value: raw, payload: { response: raw } };
@@ -952,6 +1303,8 @@ export async function runIntakeAgent(options: {
             persons: options.persons,
             relations,
             events: options.events,
+            workspace,
+            sourceMaterial: options.sourceMaterial,
           });
           const draft = commitCompiledPlan(compiled);
           const snapshot = taskState.snapshot();

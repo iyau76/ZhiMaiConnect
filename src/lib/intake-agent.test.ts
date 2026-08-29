@@ -110,7 +110,7 @@ describe("intake agent", () => {
               target: { from: "唐悦", to: "周宁", label: "同事" },
               changes: {
                 label: "前同事",
-                basis: "原文：两人已经不在同一家公司",
+                basis: "原文：唐悦和周宁现在是前同事",
               },
             },
           ],
@@ -388,28 +388,16 @@ describe("intake agent", () => {
     expect(askModelMock).toHaveBeenCalledTimes(2);
   });
 
-  it("asks the model to repair schema-valid JSON that violates relation evidence rules", async () => {
+  it("keeps a schema-valid relation visible when its evidence is missing instead of entering a repair loop", async () => {
     const recorder = new MemoryAgentRunRecorder({ runId: "repair-ledger" });
-    askModelMock
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "final",
-            draft: { relations: [{ from: "甲", to: "乙", label: "同事" }] },
-          }),
-        );
-      })
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        expect(String(args[1])).toContain("缺少 basis");
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "final",
-            draft: {
-              relations: [{ from: "甲", to: "乙", label: "同事", basis: "原文：甲和乙是同事" }],
-            },
-          }),
-        );
-      });
+    askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[4] as (chunk: string) => void)(
+        JSON.stringify({
+          type: "final",
+          draft: { relations: [{ from: "甲", to: "乙", label: "同事" }] },
+        }),
+      );
+    });
     const result = await runIntakeAgent({
       preset,
       extractionPrompt: "甲和乙是同事",
@@ -418,58 +406,37 @@ describe("intake agent", () => {
       includeArchive: false,
       recorder,
     });
-    expect(result.relations?.[0].basis).toBe("原文：甲和乙是同事");
-    expect(recorder.events()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "validation",
-          status: "failed",
-          round: 1,
-          payload: expect.objectContaining({
-            contract: "intake_draft",
-            action: "repair_requested",
-            attempt: 1,
-            error: expect.stringContaining("缺少 basis"),
-          }),
-        }),
-      ]),
-    );
+    expect(result.relations?.[0]).toMatchObject({
+      from: "甲",
+      to: "乙",
+      _relationChecked: false,
+      _relationReason: expect.stringContaining("AI 未提供可回查的原文依据"),
+    });
+    expect(askModelMock).toHaveBeenCalledTimes(1);
+    expect(
+      recorder.events().some((event) => event.kind === "validation" && event.status === "failed"),
+    ).toBe(false);
   });
 
-  it("rejects a model-derived relationship and waits for an explicit-only repair", async () => {
-    askModelMock
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "final",
-            draft: {
-              relations: [
-                {
-                  from: "贾母",
-                  to: "贾宝玉",
-                  label: "祖孙",
-                  basis: "推断依据：贾母是贾政之母，贾政是贾宝玉之父",
-                  confidence: 0.7,
-                },
-              ],
-            },
-          }),
-        );
-      })
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        expect(String(args[1])).toContain("这里只能抽取原文明说");
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "final",
-            draft: {
-              relations: [
-                { from: "贾母", to: "贾政", label: "母子", basis: "原文：贾母是贾政之母" },
-                { from: "贾政", to: "贾宝玉", label: "父子", basis: "原文：贾政是贾宝玉之父" },
-              ],
-            },
-          }),
-        );
-      });
+  it("keeps a model-derived relationship visible with a soft audit warning", async () => {
+    askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[4] as (chunk: string) => void)(
+        JSON.stringify({
+          type: "final",
+          draft: {
+            relations: [
+              {
+                from: "贾母",
+                to: "贾宝玉",
+                label: "祖孙",
+                basis: "推断依据：贾母是贾政之母，贾政是贾宝玉之父",
+                confidence: 0.7,
+              },
+            ],
+          },
+        }),
+      );
+    });
     const result = await runIntakeAgent({
       preset,
       extractionPrompt: "extract",
@@ -477,8 +444,13 @@ describe("intake agent", () => {
       events: [],
       includeArchive: false,
     });
-    expect(result.relations).toHaveLength(2);
-    expect(result.relations?.some((relation) => relation.label === "祖孙")).toBe(false);
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations?.[0]).toMatchObject({
+      label: "祖孙",
+      _relationChecked: false,
+      _relationReason: expect.stringContaining("AI 推导关系"),
+    });
+    expect(askModelMock).toHaveBeenCalledTimes(1);
   });
 
   it("locally stages mixed updates and a new event from one typed plan", async () => {
@@ -503,7 +475,7 @@ describe("intake agent", () => {
               domain: "relation",
               intent: "update",
               target: { from: "唐悦", to: "周宁", label: "同事" },
-              changes: { label: "前同事", basis: "原文：现在是前同事" },
+              changes: { label: "前同事", basis: "原文：她和周宁关系改为前同事" },
             },
             {
               id: "event-meeting",
@@ -626,7 +598,7 @@ describe("intake agent", () => {
               domain: "relation",
               intent: "create",
               target: { from: "唐悦", to: "林岚" },
-              changes: { label: "合作伙伴", basis: "原文：唐悦和林岚是合作伙伴" },
+              changes: { label: "合作伙伴", basis: "原文：她和唐悦是合作伙伴" },
             },
           ],
         }),
@@ -770,6 +742,232 @@ describe("intake agent", () => {
       }),
     ).rejects.toThrow("首轮必须返回 typed plan");
     expect(askModelMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("updates an uncommitted workspace relation by recordRef instead of creating a second edge", () => {
+    const compiled = compileIntakePlan({
+      candidate: {
+        type: "plan",
+        tasks: [
+          {
+            id: "correct-draft-relation",
+            domain: "relation",
+            intent: "update",
+            target: {
+              from: "唐悦",
+              fromPersonId: "draft:person:tang",
+              to: "周宁",
+              toPersonId: "draft:person:zhou",
+              relationId: "draft:relation:colleagues",
+              label: "同事",
+            },
+            changes: {
+              label: "前同事",
+              basis: "原文：刚才写错了，他们不是现同事，是前同事",
+            },
+          },
+        ],
+      },
+      persons: [],
+      relations: [],
+      events: [],
+      workspace: {
+        _revision: 1,
+        people: [
+          { name: "唐悦", _draftId: "draft:person:tang" },
+          { name: "周宁", _draftId: "draft:person:zhou" },
+        ],
+        relations: [
+          {
+            from: "唐悦",
+            to: "周宁",
+            label: "同事",
+            basis: "原文：唐悦和周宁是同事",
+            _draftId: "draft:relation:colleagues",
+            fromDraftId: "draft:person:tang",
+            toDraftId: "draft:person:zhou",
+          },
+        ],
+      },
+    });
+
+    expect(compiled.staged.relations).toHaveLength(1);
+    expect(compiled.staged.relations?.[0]).toMatchObject({
+      _draftId: "draft:relation:colleagues",
+      label: "前同事",
+      fromDraftId: "draft:person:tang",
+      toDraftId: "draft:person:zhou",
+    });
+    expect(compiled.staged._revision).toBe(2);
+  });
+
+  it("preserves manual field provenance while supplementing an uncommitted person", () => {
+    const compiled = compileIntakePlan({
+      candidate: {
+        type: "plan",
+        tasks: [
+          {
+            id: "supplement-alice",
+            domain: "person",
+            intent: "update",
+            target: { name: "Alice", personId: "draft:person:alice" },
+            changes: { birthday: "03-12" },
+          },
+        ],
+      },
+      persons: [],
+      relations: [],
+      events: [],
+      workspace: {
+        _revision: 1,
+        people: [
+          {
+            name: "Alice",
+            closeness: 4,
+            _draftId: "draft:person:alice",
+            _audit: {
+              sourceSummary: "manual draft edit",
+              extractedAt: 1,
+              confirmationStatus: "pending",
+              humanEdited: true,
+            },
+            _fieldGrounding: { closeness: { status: "manual" } },
+          },
+        ],
+      },
+    });
+
+    expect(compiled.staged.people).toHaveLength(1);
+    expect(compiled.staged.people?.[0]).toMatchObject({
+      _draftId: "draft:person:alice",
+      closeness: 4,
+      birthday: "03-12",
+      _audit: { humanEdited: true },
+      _fieldGrounding: { closeness: { status: "manual" } },
+    });
+  });
+
+  it("marks a projected sibling edge whose quoted source only names a shared parent", () => {
+    const compiled = compileIntakePlan({
+      candidate: {
+        type: "plan",
+        tasks: [
+          ...["Alice", "Bob", "Carol"].map((name) => ({
+            id: `person-${name}`,
+            domain: "person" as const,
+            intent: "create" as const,
+            target: { name },
+            changes: {},
+          })),
+          {
+            id: "invented-sibling",
+            domain: "relation",
+            intent: "create",
+            target: {
+              from: "Alice",
+              fromPersonId: "plan:person-Alice",
+              to: "Bob",
+              toPersonId: "plan:person-Bob",
+            },
+            changes: {
+              label: "sisters",
+              basis: "Original: Alice and Bob are Carol's daughters.",
+            },
+          },
+        ],
+      },
+      persons: [],
+      relations: [],
+      events: [],
+      sourceMaterial: "Alice and Bob are Carol's daughters.",
+    });
+    expect(compiled.staged.relations?.[0]).toMatchObject({
+      _relationChecked: false,
+      _relationReason: expect.stringContaining("经第三人关联"),
+    });
+  });
+
+  it("accepts an explicit sibling claim and softly flags an incomplete plural-parent claim", () => {
+    const explicitSibling = compileIntakePlan({
+      candidate: {
+        type: "plan",
+        tasks: [
+          ...["Alice", "Bob"].map((name) => ({
+            id: `person-${name}`,
+            domain: "person" as const,
+            intent: "create" as const,
+            target: { name },
+            changes: {},
+          })),
+          {
+            id: "explicit-sibling",
+            domain: "relation",
+            intent: "create",
+            target: {
+              from: "Alice",
+              fromPersonId: "plan:person-Alice",
+              to: "Bob",
+              toPersonId: "plan:person-Bob",
+            },
+            changes: { label: "sisters", basis: "Original: Alice and Bob are sisters." },
+          },
+        ],
+      },
+      persons: [],
+      relations: [],
+      events: [],
+      sourceMaterial: "Alice and Bob are sisters.",
+    });
+    expect(explicitSibling.staged.relations).toHaveLength(1);
+
+    const incompleteParents = compileIntakePlan({
+      candidate: {
+        type: "plan",
+        tasks: [
+          ...["Alex", "Sam", "Chris"].map((name) => ({
+            id: `person-${name}`,
+            domain: "person" as const,
+            intent: "create" as const,
+            target: { name },
+            changes: {},
+          })),
+          {
+            id: "parents",
+            domain: "relation",
+            intent: "create",
+            target: {
+              from: "Alex",
+              fromPersonId: "plan:person-Alex",
+              to: "Sam",
+              toPersonId: "plan:person-Sam",
+            },
+            changes: { label: "spouses", basis: "Original: Alex and Sam are spouses." },
+          },
+          {
+            id: "one-parent-only",
+            domain: "relation",
+            intent: "create",
+            target: {
+              from: "Alex",
+              fromPersonId: "plan:person-Alex",
+              to: "Chris",
+              toPersonId: "plan:person-Chris",
+            },
+            changes: { label: "father", basis: "Original: Chris is their son." },
+          },
+        ],
+      },
+      persons: [],
+      relations: [],
+      events: [],
+      sourceMaterial: "Alex and Sam are spouses. Chris is their son.",
+    });
+    expect(
+      incompleteParents.staged.relations?.find((relation) => relation.to === "Chris"),
+    ).toMatchObject({
+      _relationChecked: false,
+      _relationReason: expect.stringContaining("另一位父母关系可能遗漏"),
+    });
   });
 
   it("serializes only complete tool-history entries", () => {

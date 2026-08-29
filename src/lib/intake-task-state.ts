@@ -27,7 +27,7 @@ export interface IntakeRelationMutationTask extends IntakeMutationTaskBase {
 
 export interface IntakeFactMutationTask extends IntakeMutationTaskBase {
   domain: "fact";
-  target: { person: string; personId?: string; key: string };
+  target: { person: string; personId?: string; key: string; factId?: string };
 }
 
 export interface IntakeEventMutationTask extends IntakeMutationTaskBase {
@@ -37,12 +37,12 @@ export interface IntakeEventMutationTask extends IntakeMutationTaskBase {
 
 export interface IntakeReminderMutationTask extends IntakeMutationTaskBase {
   domain: "reminder";
-  target: { title: string };
+  target: { title: string; reminderId?: string };
 }
 
 export interface IntakeEvidenceMutationTask extends IntakeMutationTaskBase {
   domain: "evidence";
-  target: { title: string };
+  target: { title: string; evidenceId?: string };
 }
 
 export interface IntakeSummaryMutationTask extends IntakeMutationTaskBase {
@@ -154,6 +154,7 @@ function parseTask(value: unknown, index: number): IntakeMutationTask {
         person: text(target.person, `tasks[${index}].target.person`, 200),
         personId: optionalText(target.personId, `tasks[${index}].target.personId`, 200),
         key: text(target.key, `tasks[${index}].target.key`, 200),
+        factId: optionalText(target.factId, `tasks[${index}].target.factId`, 200),
       },
       changes,
     };
@@ -172,25 +173,25 @@ function parseTask(value: unknown, index: number): IntakeMutationTask {
     };
   }
   if (row.domain === "reminder") {
-    if (taskIntent !== "create") throw new Error("录入任务计划暂不支持更新已有提醒");
     return {
       id,
       domain: "reminder",
       intent: taskIntent,
       target: {
         title: text(target.title, `tasks[${index}].target.title`, 500),
+        reminderId: optionalText(target.reminderId, `tasks[${index}].target.reminderId`, 200),
       },
       changes,
     };
   }
   if (row.domain === "evidence") {
-    if (taskIntent !== "create") throw new Error("录入任务计划暂不支持更新已有材料");
     return {
       id,
       domain: "evidence",
       intent: taskIntent,
       target: {
         title: text(target.title, `tasks[${index}].target.title`, 500),
+        evidenceId: optionalText(target.evidenceId, `tasks[${index}].target.evidenceId`, 200),
       },
       changes,
     };

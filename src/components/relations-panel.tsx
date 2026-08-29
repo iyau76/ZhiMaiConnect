@@ -1264,10 +1264,10 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
         <TabsContent value="roster" className="space-y-4 pt-4">
           <PageGuide
             id="relations-roster"
-            title="档案页"
+            title={t("档案页")}
             points={[
-              "填名字就能建人，先建人再连关系。",
-              "点一行可以打开人物卡补职位、部门等资料。",
+              t("填名字就能建人，先建人再连关系。"),
+              t("点一行可以打开人物卡补职位、部门等资料。"),
             ]}
           />
 
