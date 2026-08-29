@@ -716,6 +716,12 @@ describe("competition demo data", () => {
     const demoMemberships = (await facesDb.listCollectionMemberships()).filter((item) =>
       item.id.startsWith("demo-zhimai-"),
     );
+    const demoRelations = (await facesDb.listRelationAssertions()).filter((item) =>
+      item.id.startsWith("demo-zhimai-"),
+    );
+    const demoEvents = (await facesDb.listLifeEvents()).filter((item) =>
+      item.id.startsWith("demo-zhimai-"),
+    );
     expect(demoPeople).toHaveLength(50);
     expect(demoPeople.every((item) => item.profile?.circle === undefined)).toBe(true);
     expect(demoCollections.map((item) => [item.name, item.kind])).toEqual([
@@ -729,6 +735,34 @@ describe("competition demo data", () => {
     expect(demoMemberships).toHaveLength(50);
     expect(new Set(demoMemberships.map((item) => item.personId))).toEqual(
       new Set(demoPeople.map((item) => item.id)),
+    );
+    expect(demoRelations).toHaveLength(80);
+    expect(demoRelations.map((item) => item.label)).not.toContain("同圈伙伴");
+    expect([...new Set(demoRelations.map((item) => item.predicate))]).toEqual(
+      expect.arrayContaining([
+        "parent_of",
+        "spouse_of",
+        "sibling_of",
+        "cousin_of",
+        "roommate_of",
+        "classmate_of",
+        "reports_to",
+        "manages",
+        "collaborates_with",
+      ]),
+    );
+    expect(demoRelations.filter((item) => item.confirmationStatus === "pending")).toEqual([
+      expect.objectContaining({ label: "可能认识", confidence: 0.62 }),
+    ]);
+    expect(demoRelations).toContainEqual(
+      expect.objectContaining({
+        label: "前室友",
+        validity: expect.objectContaining({ status: "ended" }),
+      }),
+    );
+    expect(demoEvents).toHaveLength(25);
+    expect(new Set(demoEvents.map((item) => item.precision ?? "day"))).toEqual(
+      new Set(["day", "month", "year", "range"]),
     );
 
     await loadDemoData();

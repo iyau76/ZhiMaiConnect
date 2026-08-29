@@ -286,7 +286,10 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
   await expect(page.getByText(/当前视图显示 \d+ 条关系，隐藏 \d+ 条/)).toBeVisible();
 
   await page.getByLabel("关系网视图").selectOption("all");
-  await expect(graph.getByRole("button", { name: /查看关系详情/ })).toHaveCount(80);
+  // 80 条原始关系之外，规范亲属关系会产生可解释的本地推导边。
+  await expect
+    .poll(() => graph.getByRole("button", { name: /查看关系详情/ }).count())
+    .toBeGreaterThanOrEqual(80);
 
   await graph.scrollIntoViewIfNeeded();
   const transformBeforeWheel = await graph.locator(":scope > g").getAttribute("transform");

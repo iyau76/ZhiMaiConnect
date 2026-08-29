@@ -58,7 +58,7 @@ export function DemoDataControls() {
         </h2>
         <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
           {t(
-            "一键载入 50 位虚构人物、80 条关系及配套事件。所有邮箱使用 example.invalid，界面和来源均标注为合成数据，不对应真实个人。",
+            "一键载入 50 位虚构人物、80 条类型化关系、25 条共同事件和 3 条提醒，可演示跨圈引荐、同名消歧与待核验流程。所有邮箱使用 example.invalid，不对应真实个人。",
           )}
         </p>
       </div>
