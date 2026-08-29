@@ -44,6 +44,45 @@ const intakeDraft = {
 };
 
 function intakePlanReply(prompt: string) {
+  if (prompt.includes("尤二姐是尤氏继母的女儿")) {
+    return JSON.stringify({
+      type: "plan",
+      summary: "保留来源对齐关系，并把名称包含造成的可疑关系留给用户判断",
+      tasks: [
+        ...["尤氏", "尤氏继母", "尤二姐"].map((name) => ({
+          id: `person-${name}`,
+          domain: "person",
+          intent: "create",
+          target: { name },
+          changes: { name },
+        })),
+        {
+          id: "unsupported-nested-name-relation",
+          domain: "relation",
+          intent: "create",
+          target: {
+            from: "尤氏",
+            fromPersonId: "plan:person-尤氏",
+            to: "尤氏继母",
+            toPersonId: "plan:person-尤氏继母",
+          },
+          changes: { label: "母女", basis: "原文：尤二姐是尤氏继母的女儿。" },
+        },
+        {
+          id: "supported-parent-relation",
+          domain: "relation",
+          intent: "create",
+          target: {
+            from: "尤氏继母",
+            fromPersonId: "plan:person-尤氏继母",
+            to: "尤二姐",
+            toPersonId: "plan:person-尤二姐",
+          },
+          changes: { label: "母女", basis: "原文：尤二姐是尤氏继母的女儿。" },
+        },
+      ],
+    });
+  }
   if (prompt.includes("团队聚餐改到 9 月 2 日")) {
     return JSON.stringify({
       type: "plan",

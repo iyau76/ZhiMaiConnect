@@ -793,21 +793,84 @@ function sourcePassages(sourceMaterial: string) {
   ).filter(Boolean);
 }
 
+function personMentionIndex(passage: string, personName: string, personNames: string[]) {
+  const target = compactClaimText(personName);
+  if (!target) return -1;
+  let body = compactClaimText(passage);
+  const containingNames = [...new Set(personNames.map(compactClaimText))]
+    .filter((name) => name !== target && name.length > target.length && name.includes(target))
+    .sort((left, right) => right.length - left.length);
+  for (const name of containingNames) body = body.replaceAll(name, " ".repeat(name.length));
+  return body.indexOf(target);
+}
+
+function bodyWithPersonNamesMasked(passage: string, personNames: string[]) {
+  let body = compactClaimText(passage);
+  for (const name of [...new Set(personNames.map(compactClaimText))].sort(
+    (left, right) => right.length - left.length,
+  )) {
+    if (name) body = body.replaceAll(name, " ".repeat(name.length));
+  }
+  return body;
+}
+
+/**
+ * Bind a binary relation to the clause that states it. Cross-clause carry is
+ * allowed only for an omitted subject ("王夫人是正妻，生了元春") or an
+ * explicit plural pronoun ("贾兰是他们的儿子"). Merely appearing somewhere
+ * in the same sentence is insufficient.
+ */
+function relationTextSupportsEndpoints(
+  text: string,
+  relation: IngestRelation,
+  personNames: string[],
+) {
+  const predicate = inferRelationSemantics(relation.label).predicate;
+  const cue = EXPLICIT_RELATION_CUES[predicate];
+  const clauses = text
+    .replace(/^(原文|original|推断依据|inference\s+basis)\s*[:：]/i, "")
+    .split(/[，,；;。.!?！？]+/u)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  let fromSeen = false;
+  let toSeen = false;
+  for (const clause of clauses) {
+    const fromIndex = personMentionIndex(clause, relation.from, personNames);
+    const toIndex = personMentionIndex(clause, relation.to, personNames);
+    const cueIndex = cue ? bodyWithPersonNamesMasked(clause, personNames).search(cue) : 0;
+    const fromHere = fromIndex >= 0;
+    const toHere = toIndex >= 0;
+    if (fromHere && toHere && cueIndex >= 0) return true;
+
+    if (cueIndex >= 0 && fromHere !== toHere && (fromHere ? toSeen : fromSeen)) {
+      const unrelatedBeforeCue = personNames.some((name) => {
+        if (
+          normalized(name) === normalized(relation.from) ||
+          normalized(name) === normalized(relation.to)
+        ) {
+          return false;
+        }
+        const index = personMentionIndex(clause, name, personNames);
+        return index >= 0 && index < cueIndex;
+      });
+      const mentionedEndpointIndex = fromHere ? fromIndex : toIndex;
+      const cueIntroducesObjects = cueIndex <= mentionedEndpointIndex;
+      const explicitCarry = /(?:他们|她们|二人|两人|their)\s*(?:的|有|'s)?/i.test(clause);
+      if (!unrelatedBeforeCue && (cueIntroducesObjects || explicitCarry)) return true;
+    }
+    fromSeen ||= fromHere;
+    toSeen ||= toHere;
+  }
+  return false;
+}
+
 function passageForRelation(
   sourceMaterial: string,
   relation: IngestRelation,
   personNames: string[],
 ) {
-  const from = compactClaimText(relation.from);
-  const to = compactClaimText(relation.to);
-  const predicate = inferRelationSemantics(relation.label).predicate;
-  const cue = EXPLICIT_RELATION_CUES[predicate];
   return sourcePassages(sourceMaterial)
-    .filter((passage) => {
-      const compact = compactClaimText(passage);
-      if (!compact.includes(from) || !compact.includes(to)) return false;
-      return !cue || cue.test(claimBodyWithoutEntityNames(passage, personNames));
-    })
+    .filter((passage) => relationTextSupportsEndpoints(passage, relation, personNames))
     .sort((left, right) => left.length - right.length)[0];
 }
 
@@ -844,9 +907,7 @@ function auditModelRelations(
       .replace(/^(原文|original|推断依据|inference\s+basis)\s*[:：]/i, "")
       .trim();
     const compactBasis = compactClaimText(basisBody);
-    const basisNamesBothEndpoints =
-      compactBasis.includes(compactClaimText(relation.from)) &&
-      compactBasis.includes(compactClaimText(relation.to));
+    const basisNamesBothEndpoints = relationTextSupportsEndpoints(basisBody, relation, personNames);
     if (
       context.sourceMaterial?.trim() &&
       (!compactClaimText(context.sourceMaterial).includes(compactBasis) || !basisNamesBothEndpoints)

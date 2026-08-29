@@ -225,11 +225,13 @@ const EN: Record<string, string> = {
   "条 AI 内容已带待核验标记": "AI-generated items were saved with a needs-review marker",
   条关系缺少依据并保持待确认: "relationships have no source basis and remain pending",
   批量接受低风险高置信事件: "Batch-accept low-risk, high-confidence events",
-  一键接受全部待确认: "Accept all pending items",
-  "确定接受全部待确认条目吗？请先核对 AI 推断值和人物身份。":
-    "Accept every pending item? Review AI-inferred values and person identities first.",
-  "已接受全部待确认条目；确认入库前仍会检查人物身份和日期格式":
-    "All pending items accepted; person identity and date validation still run before saving.",
+  一键接受已对齐项: "Accept all aligned items",
+  "确定批量接受已对齐条目吗？证据未对齐的关系会保留待确认，可单独接受。":
+    "Accept all source-aligned items? Relations whose evidence is not aligned will remain pending and can be accepted individually.",
+  已接受来源对齐的待确认条目: "Accepted the source-aligned pending items",
+  "条证据未对齐关系仍待确认，可逐条查看或接受":
+    "source-unaligned relations remain pending; review or accept them individually",
+  已接受全部来源对齐的待确认条目: "Accepted all source-aligned pending items",
   "已批量接受未编辑、日期有效的高置信度本地事件；其余顶层条目仍需逐条确认":
     "Accepted unedited, high-confidence local events with valid dates; every other top-level item still requires individual review",
   已拦截缺少原文证据的敏感值: "Blocked sensitive values without source evidence",

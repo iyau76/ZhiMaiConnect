@@ -127,6 +127,34 @@ test("待确认条目是软提醒，直接入库后关系仍保留 pending 状�
   expect(assertions.every((relation) => relation.confirmationStatus === "pending")).toBe(true);
 });
 
+test("批量接受只确认来源对齐关系，名称子串误配保持可见且可单独处理", async ({ page }) => {
+  await openApp(page);
+  await page
+    .getByRole("heading", { name: /随手写，AI 来整理/ })
+    .locator("..")
+    .getByRole("textbox")
+    .fill("尤二姐是尤氏继母的女儿。");
+  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+
+  const relationCards = page.locator('[data-draft-kind="relation"]');
+  await expect(relationCards).toHaveCount(2);
+  await expect(relationCards.first()).toContainText("同时包含关系两端");
+
+  await page.getByRole("button", { name: /一键接受已对齐项/ }).click();
+  await expect(page.getByText("待确认 1", { exact: true })).toBeVisible();
+  await expect(relationCards.first().getByRole("button", { name: "接受此项" })).toBeVisible();
+  await expect(relationCards.nth(1).getByRole("button", { name: "已接受" })).toBeDisabled();
+
+  await page.getByRole("button", { name: "确认入库" }).click();
+  const assertions = await readIndexedDbStore<{
+    confirmationStatus?: string;
+    evidence?: { basis?: string };
+  }>(page, "relationAssertions");
+  expect(assertions).toHaveLength(2);
+  expect(assertions.filter((item) => item.confirmationStatus === "confirmed")).toHaveLength(1);
+  expect(assertions.filter((item) => item.confirmationStatus === "pending")).toHaveLength(1);
+});
+
 test("事件草稿按月或年录入时不要求选择具体日期，并能解析原始时间表述", async ({ page }) => {
   await openApp(page);
   await page.getByRole("button", { name: "离线演示草稿" }).click();

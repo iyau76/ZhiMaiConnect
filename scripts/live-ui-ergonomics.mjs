@@ -233,7 +233,7 @@ try {
     draftMetrics.draftCount = draftCount;
     draftMetrics.acceptButtons = await page.getByRole("button", { name: "接受此项" }).count();
     draftMetrics.hasAcceptAll = await page
-      .getByRole("button", { name: /一键接受全部待确认/ })
+      .getByRole("button", { name: /一键接受已对齐项/ })
       .isVisible()
       .catch(() => false);
     await draftCards.first().scrollIntoViewIfNeeded();

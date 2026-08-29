@@ -178,12 +178,18 @@ async function readRelationshipArchive(page) {
           : "";
       return `${endpoints}\u0000${relation.predicate}\u0000${customLabel}\u0000${qualifierKey}`;
     };
-    const assertionIds = new Set(assertions.map((relation) => relation.id));
-    const assertionKeys = assertions.map(canonical).sort();
+    const confirmedAssertions = assertions.filter(
+      (relation) => (relation.confirmationStatus ?? "confirmed") === "confirmed",
+    );
+    const pendingAssertions = assertions.filter(
+      (relation) => relation.confirmationStatus === "pending",
+    );
+    const assertionIds = new Set(confirmedAssertions.map((relation) => relation.id));
+    const assertionKeys = confirmedAssertions.map(canonical).sort();
     const derivedKeys = derived.map(canonical).sort();
     return {
       personNames: persons.map((person) => person.name).sort(),
-      assertions: assertions.map((relation) => ({
+      assertions: confirmedAssertions.map((relation) => ({
         id: relation.id,
         from: names.get(relation.fromId) ?? relation.fromId,
         to: names.get(relation.toId) ?? relation.toId,
@@ -191,6 +197,17 @@ async function readRelationshipArchive(page) {
         qualifiers: normalizedQualifiers(relation.qualifiers),
         label: relation.label,
         evidence: relation.evidence,
+        confirmationStatus: relation.confirmationStatus ?? "confirmed",
+      })),
+      pendingAssertions: pendingAssertions.map((relation) => ({
+        id: relation.id,
+        from: names.get(relation.fromId) ?? relation.fromId,
+        to: names.get(relation.toId) ?? relation.toId,
+        predicate: relation.predicate,
+        qualifiers: normalizedQualifiers(relation.qualifiers),
+        label: relation.label,
+        evidence: relation.evidence,
+        confirmationStatus: relation.confirmationStatus,
       })),
       derived: derived.map((relation) => ({
         id: relation.id,
@@ -447,12 +464,15 @@ async function runIntake(page, text) {
 }
 
 async function acceptAndCommit(page) {
-  const acceptAll = page.getByRole("button", { name: /一键接受全部待确认/ });
-  if (await acceptAll.isVisible().catch(() => false)) await acceptAll.click();
-  for (;;) {
-    const button = page.getByRole("button", { name: "接受此项" }).first();
-    if (!(await button.isVisible().catch(() => false))) break;
-    await button.click();
+  const acceptAll = page.getByRole("button", { name: /一键接受已对齐项/ });
+  if (await acceptAll.isVisible().catch(() => false)) {
+    await acceptAll.click();
+  } else {
+    for (;;) {
+      const button = page.getByRole("button", { name: "接受此项" }).first();
+      if (!(await button.isVisible().catch(() => false))) break;
+      await button.click();
+    }
   }
   await page.getByRole("button", { name: "确认入库" }).click();
   try {

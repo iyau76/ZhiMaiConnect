@@ -1235,9 +1235,15 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   };
 
   const acceptAllPendingItems = () => {
-    if (!draft || !window.confirm(t("确定接受全部待确认条目吗？请先核对 AI 推断值和人物身份。"))) {
+    if (
+      !draft ||
+      !window.confirm(t("确定批量接受已对齐条目吗？证据未对齐的关系会保留待确认，可单独接受。"))
+    ) {
       return;
     }
+    const unresolvedRelationCount = (draft.relations ?? []).filter(
+      (item) => item._audit?.confirmationStatus !== "accepted" && item._relationChecked === false,
+    ).length;
     const accept = <T extends DraftAuditFields>(item: T): T => ({
       ...item,
       _audit: acceptedAudit(item._audit),
@@ -1248,14 +1254,20 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             ...previous,
             people: (previous.people ?? []).map(accept),
             facts: (previous.facts ?? []).map(accept),
-            relations: (previous.relations ?? []).map(accept),
+            relations: (previous.relations ?? []).map((item) =>
+              item._relationChecked === false ? item : accept(item),
+            ),
             events: (previous.events ?? []).map(accept),
             reminders: (previous.reminders ?? []).map(accept),
             evidence: (previous.evidence ?? []).map(accept),
           }
         : previous,
     );
-    toast.success(t("已接受全部待确认条目；确认入库前仍会检查人物身份和日期格式"));
+    toast.success(
+      unresolvedRelationCount > 0
+        ? `${t("已接受来源对齐的待确认条目")}；${unresolvedRelationCount} ${t("条证据未对齐关系仍待确认，可逐条查看或接受")}`
+        : t("已接受全部来源对齐的待确认条目"),
+    );
   };
 
   const commit = async () => {
@@ -2336,7 +2348,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     onClick={acceptAllPendingItems}
                   >
                     <Check className="size-3" aria-hidden="true" />
-                    {t("一键接受全部待确认")} · {pendingReviewCount}
+                    {t("一键接受已对齐项")} · {pendingReviewCount}
                   </Button>
                 )}
               </span>
@@ -2884,6 +2896,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                         <span className="text-muted-foreground">{relation.note}</span>
                       )}
                     </div>
+                    {relation._relationChecked === false && relation._relationReason && (
+                      <p className="text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
+                        {relation._relationReason}
+                      </p>
+                    )}
                     <Input
                       value={relation.basis ?? ""}
                       onChange={(event) => patchRelation(index, { basis: event.target.value })}

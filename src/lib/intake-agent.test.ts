@@ -887,6 +887,46 @@ describe("intake agent", () => {
     });
   });
 
+  it("does not treat a shorter name inside a longer kinship name as a separate endpoint", () => {
+    const compiled = compileIntakePlan({
+      candidate: {
+        type: "plan",
+        tasks: [
+          ...["尤氏", "贾珍", "尤氏继母", "尤二姐"].map((name) => ({
+            id: `person-${name}`,
+            domain: "person" as const,
+            intent: "create" as const,
+            target: { name },
+            changes: {},
+          })),
+          {
+            id: "nested-name-parent",
+            domain: "relation",
+            intent: "create",
+            target: {
+              from: "尤氏",
+              fromPersonId: "plan:person-尤氏",
+              to: "尤氏继母",
+              toPersonId: "plan:person-尤氏继母",
+            },
+            changes: {
+              label: "母女",
+              basis: "原文：尤氏是贾珍的妻子，尤二姐是尤氏继母的女儿。",
+            },
+          },
+        ],
+      },
+      persons: [],
+      relations: [],
+      events: [],
+      sourceMaterial: "尤氏是贾珍的妻子，尤二姐是尤氏继母的女儿。",
+    });
+    expect(compiled.staged.relations?.[0]).toMatchObject({
+      _relationChecked: false,
+      _relationReason: expect.stringContaining("同时包含关系两端"),
+    });
+  });
+
   it("accepts an explicit sibling claim and softly flags an incomplete plural-parent claim", () => {
     const explicitSibling = compileIntakePlan({
       candidate: {
