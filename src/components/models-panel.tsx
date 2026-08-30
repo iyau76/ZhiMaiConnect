@@ -704,10 +704,10 @@ export function ModelsPanel({
 
       <AgentControlCenter latestRun={latestAgentRun} />
 
-      {/* 问一问：可带上本机资料做人际建议 */}
+      {/* 问答智能体：可带上本机资料做人际建议 */}
       <div className="rounded-2xl border border-border bg-card/40 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-sm font-medium">{t("问一问")}</span>
+          <span className="text-sm font-medium">{t("问答智能体")}</span>
           <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <input
               type="checkbox"
@@ -812,7 +812,7 @@ export function ModelsPanel({
               current={assistantTrace.at(-1)?.text ?? t("正在准备回答")}
               steps={assistantTrace.length}
               running={busy}
-              history={assistantTrace.map((item) => item.text)}
+              events={assistantTrace}
               stepLabel={t("步")}
             />
           </div>

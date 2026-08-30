@@ -24,7 +24,7 @@ test("模型失败、切换页面和刷新后，未提交材料仍保留", async
   const material = "这是一段模型失败后也不能丢失的合成演示材料。";
   const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
   await intake.getByRole("textbox").fill(material);
-  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  await page.getByRole("button", { name: "智能体整理成档案" }).click();
   await expect(page.getByLabel("Notifications alt+T").getByText("模拟模型不可用")).toBeVisible();
   await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
   await expect(intake.getByRole("textbox")).toHaveValue(material);

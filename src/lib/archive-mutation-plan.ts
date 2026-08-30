@@ -971,7 +971,7 @@ function applyPersonPatch(person: PersonRecord, patch: PersonMutationPatch, now:
   const fieldSources = { ...(profile.fieldSources ?? {}) };
   const approvedSource = {
     kind: "ai" as const,
-    detail: "AI 档案变更计划，经用户批准",
+    detail: "智能体提议，经用户批准",
     at: now,
   };
   for (const key of Object.keys(setProfile)) fieldSources[key] = approvedSource;
@@ -1231,7 +1231,7 @@ export function prepareArchiveMutationPlan(
         createdAt: now,
         updatedAt: now,
         supersedesAssertionId: current!.id,
-        source: { kind: "ai", detail: "AI 关系变更计划，经用户批准", at: now },
+        source: { kind: "ai", detail: "智能体提议，经用户批准", at: now },
       };
       batch.assertions = pushUnique(batch.assertions, next);
       assertionById.set(next.id, next);

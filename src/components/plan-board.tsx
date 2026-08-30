@@ -1,14 +1,21 @@
-import { CheckCircle2, Circle, CircleDot, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { BrainCircuit, CheckCircle2, Circle, CircleDot, Loader2, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { SourceBadge } from "@/components/source-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { askText, parseLooseJson } from "@/lib/ai-text";
-import { facesDb, type EvidenceRecord, type PersonRecord, type TaskRecord } from "@/lib/face-db";
+import {
+  facesDb,
+  type LifeEventRecord,
+  type PersonRecord,
+  type RelationRecord,
+  type TaskRecord,
+} from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
+import { runPlanningAgent, type PlannerTraceEvent } from "@/lib/planning-agent";
 import { makeSource } from "@/lib/provenance";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
@@ -29,33 +36,43 @@ const PRIORITY: Record<TaskRecord["priority"], { zh: string; en: string; cls: st
 export function PlanBoard({ preset }: { preset: ProviderPreset }) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [people, setPeople] = useState<PersonRecord[]>([]);
-  const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
+  const [relations, setRelations] = useState<RelationRecord[]>([]);
+  const [events, setEvents] = useState<LifeEventRecord[]>([]);
   const [officer, setOfficer] = useState("");
+  const [goal, setGoal] = useState("");
   const [title, setTitle] = useState("");
   const [detail, setDetail] = useState("");
   const [due, setDue] = useState("");
   const [priority, setPriority] = useState<TaskRecord["priority"]>("normal");
-  const [busy, setBusy] = useState(false);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [trace, setTrace] = useState<PlannerTraceEvent[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
-    const [rows, persons, docs] = await Promise.all([
+    const [rows, persons, rel, ev] = await Promise.all([
       facesDb.listTasks(),
       facesDb.listPersons(),
-      facesDb.listEvidence(),
+      facesDb.listRelations(),
+      facesDb.listLifeEvents(),
     ]);
     setTasks(rows);
     setPeople(persons);
-    setEvidence(docs);
+    setRelations(rel);
+    setEvents(ev);
   }, []);
 
   useEffect(() => {
     void refresh();
+    return () => abortRef.current?.abort();
+  }, [refresh]);
+
+  useEffect(() => {
     try {
       setOfficer(localStorage.getItem(OFFICER_KEY) ?? "");
     } catch {
       /* ignore */
     }
-  }, [refresh]);
+  }, []);
 
   const rememberOfficer = (value: string) => {
     setOfficer(value);
@@ -86,7 +103,7 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
     setDetail("");
     setDue("");
     await refresh();
-    toast.success(t("已加入探案计划"));
+    toast.success(t("已加入行动计划"));
   };
 
   const patch = async (task: TaskRecord, next: Partial<TaskRecord>) => {
@@ -99,51 +116,49 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
     await refresh();
   };
 
-  const generate = async () => {
-    if (!people.length && !evidence.length) {
+  const generatePlan = async () => {
+    if (!goal.trim() || planBusy) return;
+    if (!people.length) {
       toast.error(t("库里还没有资料，先去「录入」写点情况"));
       return;
     }
-    const zh = getLang() !== "en";
-    const roster = people.map((p) => `- ${p.name}（${p.profile?.relation ?? "?"}）`).join("\n");
-    const docs = evidence
-      .slice(0, 20)
-      .map((item) => `- [${item.kind}] ${item.title}：${item.text.slice(0, 300)}`)
-      .join("\n");
-    const prompt = zh
-      ? `你是办案计划助手。根据下面的案件资料，排出接下来 5-8 条具体可执行的行动项（走访谁、调什么记录、送检什么），按优先级排序。只输出 JSON：{"tasks":[{"title":"一句话行动","detail":"想验证什么、注意事项","priority":"high|normal|low"}]}\n\n【人物】\n${roster || "暂无"}\n\n【材料】\n${docs || "暂无"}`
-      : `You are an investigation planner. From the case material below, produce 5-8 concrete next actions ordered by priority. Output JSON only: {"tasks":[{"title":"one-line action","detail":"what it verifies, cautions","priority":"high|normal|low"}]}\n\n[People]\n${roster || "none"}\n\n[Material]\n${docs || "none"}`;
-
-    setBusy(true);
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setPlanBusy(true);
+    setTrace([]);
     try {
-      const raw = await askText(preset, prompt);
-      const parsed = parseLooseJson<{
-        tasks?: Array<{ title?: string; detail?: string; priority?: string }>;
-      }>(raw);
-      const list = (parsed.tasks ?? []).filter((item) => item.title?.trim());
-      if (!list.length) throw new Error(t("AI 没有给出可用的行动项"));
+      const result = await runPlanningAgent({
+        preset,
+        goal: goal.trim(),
+        persons: people,
+        relations,
+        events,
+        signal: controller.signal,
+        onTrace: (event) => setTrace((current) => [...current.slice(-29), event]),
+      });
       const now = Date.now();
-      for (const [index, item] of list.entries()) {
+      for (const [index, item] of result.tasks.entries()) {
         await facesDb.putTask({
           id: crypto.randomUUID(),
-          title: item.title!.trim(),
-          detail: item.detail?.trim() || undefined,
-          assignee: officer.trim() || undefined,
-          priority:
-            item.priority === "high" || item.priority === "low"
-              ? (item.priority as TaskRecord["priority"])
-              : "normal",
+          title: item.title,
+          detail: item.detail,
+          assignee: item.assignee ?? (officer.trim() || undefined),
+          personIds: item.personIds?.length ? item.personIds : undefined,
+          priority: item.priority,
           status: "todo",
+          due: item.due,
           createdAt: now - index,
           source: makeSource("ai", preset.model),
         });
       }
       await refresh();
-      toast.success(`${t("已生成行动项")} ${list.length}`);
+      toast.success(`${t("已生成行动项")} ${result.tasks.length}`);
     } catch (error) {
-      toast.error((error as Error).message);
+      if (!controller.signal.aborted) toast.error((error as Error).message);
     } finally {
-      setBusy(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      setPlanBusy(false);
     }
   };
 
@@ -153,27 +168,54 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
     <section className="flex min-w-0 flex-col gap-4 rounded-2xl border border-border bg-card/60 p-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="flex items-baseline gap-2.5">
-          <span className="font-display text-xl leading-none tracking-tight">{t("探案计划")}</span>
+          <span className="font-display text-xl leading-none tracking-tight">{t("行动计划")}</span>
           <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
-            Plan
+            Agent Plan
           </span>
         </h2>
-        <Button
-          size="sm"
-          variant="outline"
-          className="rounded-full px-4"
-          disabled={busy}
-          onClick={() => void generate()}
-        >
-          {busy ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-          ) : (
-            <Sparkles className="size-3.5" aria-hidden="true" />
-          )}
-          {t("让 AI 排计划")}
-        </Button>
       </header>
 
+      <div className="space-y-2 rounded-xl border border-border bg-background/45 p-3">
+        <div className="flex flex-wrap gap-2">
+          <Input
+            value={goal}
+            onChange={(event) => {
+              abortRef.current?.abort();
+              setGoal(event.target.value);
+              setTrace([]);
+            }}
+            placeholder={t("目标，例：筹备校园记忆展开幕活动")}
+            className="min-w-0 flex-1"
+          />
+          <Button onClick={() => void generatePlan()} disabled={planBusy || !goal.trim()}>
+            {planBusy ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <BrainCircuit className="size-4" aria-hidden="true" />
+            )}
+            {planBusy ? t("拆解中…") : t("智能体拆解任务")}
+          </Button>
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          {t(
+            "智能体会先读取本机档案、核对相关人物与关系，再按优先级排出可执行行动项；排出的任务可继续手动修改，确认后再执行。",
+          )}
+        </p>
+        {trace.length > 0 && (
+          <ReasoningDisclosure
+            label={t("规划轨迹")}
+            current={trace.at(-1)?.text ?? t("正在拆解")}
+            steps={trace.length}
+            running={planBusy}
+            events={trace}
+            stepLabel={t("步")}
+          />
+        )}
+      </div>
+
+      <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+        {t("手动加一条行动项")}
+      </p>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto]">
         <Input
           value={title}
@@ -183,7 +225,7 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
         <Input
           value={officer}
           onChange={(event) => rememberOfficer(event.target.value)}
-          placeholder={t("负责人 / 办案人")}
+          placeholder={t("负责人")}
         />
         <Input
           type="date"
@@ -292,9 +334,7 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
       </div>
 
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        {t(
-          "计划里的每条行动项都记录了负责人和来源（人工排的还是 AI 排的），AI 排的需要办案人确认后再执行。",
-        )}
+        {t("每条行动项记录负责人和来源（人工或智能体）；智能体排出的任务需要人工确认后再执行。")}
       </p>
     </section>
   );

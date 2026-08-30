@@ -254,6 +254,7 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
   return null;
 }
 
+// prompt v2 · 2026-08-30：增加“去年夏天”示例，统一 range 输出格式。
 /** 交给 AI 去理解「大概什么时候」，返回可入库的时间 */
 export function fuzzyPrompt(text: string, now = new Date()) {
   return [
@@ -261,6 +262,7 @@ export function fuzzyPrompt(text: string, now = new Date()) {
     `今天是 ${now.toISOString().slice(0, 10)}。`,
     'JSON 形如 {"precision":"day|month|year|range","date":"YYYY-MM-DD","dateEnd":"YYYY-MM-DD"}。',
     "precision=year 时 date 用当年 1 月 1 日；month 用当月 1 日；range 时必须给 dateEnd。",
+    '示例："去年夏天" → {"precision":"range","date":"2025-06-01","dateEnd":"2025-08-31"}。',
     `用户描述：${text}`,
   ].join("\n");
 }

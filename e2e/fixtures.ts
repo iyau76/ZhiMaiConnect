@@ -405,7 +405,7 @@ export { expect };
 
 export async function openApp(page: Page) {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "AI 整理成档案" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "智能体整理成档案" })).toBeVisible();
   // The 50/80 graph smoke test can briefly saturate the dev server when two
   // workers start together, so wait for actual hydration instead of treating
   // SSR visibility as interactivity.

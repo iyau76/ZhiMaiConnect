@@ -235,6 +235,7 @@ export function upcoming(
   return items.sort((a, b) => a.days - b.days);
 }
 
+// prompt v2 · 2026-08-30：资料不足时必须按示例句式明说，禁止补写未知喜好。
 /** 生成一句祝福 / 礼物建议的 prompt */
 export function blessingPrompt(item: UpcomingItem) {
   if (item.kind === "birthday" && item.person) {
@@ -249,7 +250,7 @@ export function blessingPrompt(item: UpcomingItem) {
     ]
       .filter(Boolean)
       .join("\n");
-    return `我的朋友「${item.person.name}」快过生日了。已知信息：\n${facts || "（暂无更多信息）"}\n\n请给我：\n1）两条生日祝福（一条轻松、一条正式），每条标注使用了上面哪项依据；\n2）三个具体的礼物建议，逐项说明依据、适合原因和大概预算，不要重复已经送过的礼物；\n3）如果信息太少，明确写出“资料不足”，并指出还缺什么，绝对不要补写未知喜好。\n用中文，简短分点，不要客套开场白。`;
+    return `我的朋友「${item.person.name}」快过生日了。已知信息：\n${facts || "（暂无更多信息）"}\n\n请给我：\n1）两条生日祝福（一条轻松、一条正式），每条标注使用了上面哪项依据；\n2）三个具体的礼物建议，逐项说明依据、适合原因和大概预算，不要重复已经送过的礼物；\n3）如果信息太少，必须这样明说：“资料不足：缺少喜好与送礼记录，建议先问候再自然询问近况”，并指出还缺什么；绝对不要补写未知喜好。\n用中文，简短分点，不要客套开场白。`;
   }
   return `马上是「${item.title}」。${item.tip ?? ""}\n请给我：\n1）三条不同语气的节日问候，可以直接复制发送；\n2）适合在这个节日联系哪一类人（家人 / 朋友 / 同事）以及理由。\n用中文，简短分点，不要客套开场白。`;
 }

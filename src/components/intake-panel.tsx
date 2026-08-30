@@ -233,6 +233,7 @@ function decorateDraft(result: Draft, sourceSummary: string, material: string): 
   };
 }
 
+// prompt v2 · 2026-08-30：增加“材料 → 标准 JSON”示例，收紧不写材料未提及内容。
 function buildPrompt(text: string, known: string[], previous: Draft | null) {
   const zh = getLang() !== "en";
   const today = new Date().toISOString().slice(0, 10);
@@ -253,6 +254,8 @@ function buildPrompt(text: string, known: string[], previous: Draft | null) {
 - reminders 放需要用户采取行动的待办，如「给小雨回电话」；due 仅在材料明确给出日期时使用 yyyy-mm-dd，people 写相关人物姓名。不要把同一件事同时放进 events 和 reminders，除非材料同时明确表达日历事件和后续行动。
 - confidence 是你对每一条抽取准确性的自评（0 到 1），无法判断时留空；它只是提示，不能代替用户确认。
 - summary 用一两句话说明这份材料讲了什么。
+- 先看一个示例：材料「张伟是我大学室友，3 月 12 日生日，喜欢篮球。」应输出：
+{"people":[{"name":"张伟","note":"","age":"","gender":"","relation":"大学室友","birthday":"03-12","circle":"","closeness":null,"likes":["篮球"],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[],"confidence":null}],"facts":[],"relations":[],"events":[],"reminders":[],"evidence":[{"kind":"note","title":"张伟","text":"张伟是我大学室友，3 月 12 日生日，喜欢篮球。","origin":"","confidence":null}],"summary":"记录大学室友张伟的生日与喜好。"}
 ${KINSHIP_RULES_ZH}`
     : `You organise a personal contact network. Convert the text below into structured JSON. Output JSON only, no markdown, no explanation.
 Use exactly this structure: ${SCHEMA}
@@ -270,6 +273,8 @@ Rules:
 - reminders are actions the user still needs to take. Set due only when the material gives a date. Do not duplicate one fact across events and reminders unless both a calendar moment and a follow-up action are explicit.
 - confidence is the model's 0-1 self-assessment for each extracted item and never replaces user confirmation.
 - summary = one or two sentences about the material.
+- Example: for "Zhang Wei is my college roommate, born March 12, likes basketball." output:
+{"people":[{"name":"Zhang Wei","note":"","age":"","gender":"","relation":"college roommate","birthday":"03-12","circle":"","closeness":null,"likes":["basketball"],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[],"confidence":null}],"facts":[],"relations":[],"events":[],"reminders":[],"evidence":[{"kind":"note","title":"Zhang Wei","text":"Zhang Wei is my college roommate, born March 12, likes basketball.","origin":"","confidence":null}],"summary":"Recorded college roommate Zhang Wei's birthday and interests."}
 ${KINSHIP_RULES_EN}`;
 
   const knownLine = zh
@@ -2064,7 +2069,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             ) : (
               <Sparkles className="size-3.5" aria-hidden="true" />
             )}
-            {t("AI 整理成档案")}
+            {t("智能体整理成档案")}
           </Button>
           <input
             ref={fileRef}
@@ -2199,7 +2204,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               current={job.trace.at(-1)?.text ?? t("正在准备")}
               steps={job.trace.length}
               running={busy}
-              history={job.trace.map((item) => item.text)}
+              events={job.trace}
               stepLabel={t("步")}
             />
           </div>

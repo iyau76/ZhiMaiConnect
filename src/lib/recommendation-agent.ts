@@ -343,6 +343,7 @@ ${archiveAgentToolRegistry.modelGuide(ARCHIVE_AGENT_TOOL_SCOPES.recommendation.p
 })}
 人物工具均在浏览器本地执行；联网工具只发送公开 query/location，不发送人物档案。`;
 
+// prompt v2 · 2026-08-30：增加最终 JSON 示例，把“本地锁定排序不可改动”变成可对照硬约束。
 function buildAgentPrompt(
   task: string,
   data: ArchiveData,
@@ -380,6 +381,9 @@ ${history}
 
 最终格式（decision 必须逐字复述 rankingLocked 工具的模式、完整 ID 顺序和可达状态；不得自己写分数或排名结论）：
 {"type":"final","summary":"已核对候选证据","decision":{"mode":"open|connection|target_side","orderedPersonIds":["按本地结果顺序的ID"],"accessVerified":false},"outreachDraft":"只写给本地第一名的可编辑消息正文；不要在这里评论排名、评分或路径"}
+
+最终示例（decision 必须逐字复制本地 rankingLocked 的模式与 ID 顺序，不得新增人物或改写排序）：
+{"type":"final","summary":"已核对候选证据","decision":{"mode":"open","orderedPersonIds":["按本地rankingLocked顺序的ID"],"accessVerified":false},"outreachDraft":"可编辑求助话术正文"}
 
 能力槽覆盖、候选、顺序、分数、可达模式和路径最终都由本地渲染器输出；你只能核对证据并润色求助话术。目标侧模式不得生成联系话术。${formatCorrection ? "上一轮格式或 decision 与本地锁定结果不一致，本轮务必只返回完整合法 JSON，并逐字复制 rankingLocked 结果。" : ""}`,
   }).prompt;
@@ -473,7 +477,7 @@ export async function runRecommendationAgent(options: {
         runtime.finalize("completed");
         const run = projectAgentRun(runtime.recorder.events(), {
           id: runtime.recorder.runId,
-          title: `这事该拜托谁：${clipped(options.task, 40)}`,
+          title: `引荐智能体：${clipped(options.task, 40)}`,
           agentName: "recommendation",
           model: options.preset.model,
         });
@@ -840,7 +844,7 @@ export async function runRecommendationAgent(options: {
         runtime.finalize("completed");
         const run = projectAgentRun(runtime.recorder.events(), {
           id: runtime.recorder.runId,
-          title: `这事该拜托谁：${clipped(options.task, 40)}`,
+          title: `引荐智能体：${clipped(options.task, 40)}`,
           agentName: "recommendation",
           model: options.preset.model,
         });
@@ -907,7 +911,7 @@ export async function runRecommendationAgent(options: {
     });
     const run = projectAgentRun(runtime.recorder.events(), {
       id: runtime.recorder.runId,
-      title: `这事该拜托谁：${clipped(options.task, 40)}`,
+      title: `引荐智能体：${clipped(options.task, 40)}`,
       agentName: "recommendation",
       model: options.preset.model,
     });

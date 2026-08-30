@@ -19,7 +19,7 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
     .fill(
       "唐悦是我的大学摄影社搭档，生日 3 月 12 日，微信 tangyue_photo，喜欢人像摄影。2026 年 8 月 29 日和唐悦一起讨论校园记忆展。 ",
     );
-  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  await page.getByRole("button", { name: "智能体整理成档案" }).click();
 
   await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
   const intakeTrace = intake.getByRole("status");
@@ -134,7 +134,7 @@ test("批量接受只确认来源对齐关系，名称子串误配保持可见�
     .locator("..")
     .getByRole("textbox")
     .fill("尤二姐是尤氏继母的女儿。");
-  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  await page.getByRole("button", { name: "智能体整理成档案" }).click();
 
   const relationCards = page.locator('[data-draft-kind="relation"]');
   await expect(relationCards).toHaveCount(2);
@@ -272,7 +272,7 @@ test("更新已有档案时，姓名变更会按预览实际写入", async ({ pa
     .fill(
       "唐悦是我的大学摄影社搭档，生日 3 月 12 日，微信 tangyue_photo，喜欢人像摄影。2026 年 8 月 29 日和唐悦一起讨论校园记忆展。",
     );
-  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  await page.getByRole("button", { name: "智能体整理成档案" }).click();
   const target = page.getByRole("combobox", { name: "选择新建人物或更新已有档案" });
   await target.selectOption("existing-tangyue");
   await expect(target).toHaveValue("existing-tangyue");
@@ -296,7 +296,7 @@ test("补充并重新整理会保留人工字段及其来源", async ({ page, mo
     .fill(
       "唐悦是我的大学摄影社搭档，生日 3 月 12 日，微信 tangyue_photo，喜欢人像摄影。2026 年 8 月 29 日和唐悦一起讨论校园记忆展。",
     );
-  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  await page.getByRole("button", { name: "智能体整理成档案" }).click();
 
   const person = page.locator('[data-draft-kind="person"]');
   await person.getByRole("combobox", { name: "亲密度", exact: true }).selectOption("4");
@@ -530,7 +530,7 @@ test("本地候选排序后才请求 AI，并产出可编辑求助话术", async
   });
 
   await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
-  const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+  const recommendation = page.getByRole("heading", { name: "引荐智能体" }).locator("..");
   await expect(recommendation).toBeVisible();
   await recommendation.getByRole("textbox").fill("帮我看一下租房合同中的违约条款");
   await page.getByRole("button", { name: "本地筛选候选" }).click();
@@ -608,7 +608,7 @@ test("目标人物引荐只返回真实可达路径，断开的高亲密度同�
   });
 
   await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
-  const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+  const recommendation = page.getByRole("heading", { name: "引荐智能体" }).locator("..");
   await recommendation.getByRole("textbox").fill("我想找贾母办事，应该通过谁联系？");
   await recommendation.getByRole("button", { name: "本地筛选候选" }).click();
   await expect(recommendation).toContainText("本地只召回了问题中出现的人名，不猜测谁是目标");
@@ -663,7 +663,7 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
   });
 
   await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
-  const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+  const recommendation = page.getByRole("heading", { name: "引荐智能体" }).locator("..");
   await recommendation.getByRole("textbox").fill("帮我看一下租房合同中的违约条款");
   await recommendation.getByRole("switch", { name: /AI 全库分析/ }).click();
   await recommendation.getByRole("button", { name: "AI 全库分析", exact: true }).click();
@@ -685,10 +685,10 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
   expect(prompts.join("\n")).not.toContain("private-lawyer@example.invalid");
 });
 
-test("AI 助理问一问会展示流式轨迹并调用受控网页检索工具", async ({ page, mockNetwork }) => {
+test("智能体问答智能体会展示流式轨迹并调用受控网页检索工具", async ({ page, mockNetwork }) => {
   await openApp(page);
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const questionCard = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^智能体/ }));
+  const questionCard = page.getByText("问答智能体", { exact: true }).locator("..").locator("..");
   await questionCard.getByRole("textbox").fill("Open-Meteo 现在适合做无密钥天气查询吗？");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 
@@ -701,7 +701,7 @@ test("AI 助理问一问会展示流式轨迹并调用受控网页检索工具",
   expect(mockNetwork.visionRequests).toHaveLength(2);
 });
 
-test("AI 助理修改人物时必须先批准，批准前人物库保持不变", async ({ page }) => {
+test("智能体修改人物时必须先批准，批准前人物库保持不变", async ({ page }) => {
   await openApp(page);
   await seedIndexedDb(page, {
     persons: [
@@ -717,8 +717,8 @@ test("AI 助理修改人物时必须先批准，批准前人物库保持不变",
     ],
   });
   await openApp(page);
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const questionCard = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^智能体/ }));
+  const questionCard = page.getByText("问答智能体", { exact: true }).locator("..").locator("..");
   await questionCard.getByRole("textbox").fill("把合成测试人物的职位改成品牌总监");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 
@@ -734,7 +734,7 @@ test("AI 助理修改人物时必须先批准，批准前人物库保持不变",
   expect(people[0].profile?.title).toBe("品牌总监");
 });
 
-test("AI 助理修改人物关系时同样必须先批准", async ({ page }) => {
+test("智能体修改人物关系时同样必须先批准", async ({ page }) => {
   await openApp(page);
   await seedIndexedDb(page, {
     persons: [
@@ -754,8 +754,8 @@ test("AI 助理修改人物关系时同样必须先批准", async ({ page }) => 
     ],
   });
   await openApp(page);
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const questionCard = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^智能体/ }));
+  const questionCard = page.getByText("问答智能体", { exact: true }).locator("..").locator("..");
   await questionCard.getByRole("textbox").fill("把甲和乙的关系改成前同事");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 
@@ -787,7 +787,7 @@ test("AI 录入可检索并更新已有事件，确认前不覆盖原记录", as
   await openApp(page);
   const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
   await intake.getByRole("textbox").fill("把团队聚餐改到 9 月 2 日");
-  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  await page.getByRole("button", { name: "智能体整理成档案" }).click();
 
   const eventDraft = page.locator('[data-draft-kind="event"]');
   await expect(eventDraft.getByRole("combobox", { name: "事件写入方式" })).toHaveValue(

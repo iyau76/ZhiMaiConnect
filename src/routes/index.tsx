@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, CalendarDays, Cpu, PenLine, Settings, Users } from "lucide-react";
+import { Bell, CalendarDays, ClipboardList, Cpu, PenLine, Settings, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AppearanceControls, LanguageToggle } from "@/components/appearance-controls";
@@ -8,6 +8,7 @@ import { DemoDataControls } from "@/components/demo-data-controls";
 import { IntakePanel } from "@/components/intake-panel";
 import { ModelsPanel } from "@/components/models-panel";
 import { PageGuide } from "@/components/page-guide";
+import { PlanBoard } from "@/components/plan-board";
 import { PreflightPanel } from "@/components/preflight-panel";
 import { RemindersPanel } from "@/components/reminders-panel";
 
@@ -63,7 +64,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-type View = "intake" | "people" | "reminders" | "calendar" | "models" | "settings";
+type View = "intake" | "people" | "reminders" | "calendar" | "plan" | "models" | "settings";
 
 function getNav(): Array<{ id: View; label: string; hint: string; icon: typeof Users }> {
   return [
@@ -71,7 +72,8 @@ function getNav(): Array<{ id: View; label: string; hint: string; icon: typeof U
     { id: "people", label: t("人物关系"), hint: t("档案与关系网"), icon: Users },
     { id: "reminders", label: t("提醒"), hint: t("生日、节日与待办"), icon: Bell },
     { id: "calendar", label: t("日历"), hint: t("哪天和谁做了什么"), icon: CalendarDays },
-    { id: "models", label: t("AI 助理"), hint: t("模型设置与建议"), icon: Cpu },
+    { id: "plan", label: t("计划"), hint: t("目标拆解与行动项"), icon: ClipboardList },
+    { id: "models", label: t("智能体"), hint: t("问答智能体与模型设置"), icon: Cpu },
     { id: "settings", label: t("设置"), hint: t("主题、无障碍与语言"), icon: Settings },
   ];
 }
@@ -109,7 +111,7 @@ const HEADINGS: Record<
     points: [
       "填了生日的人会自动出现在「最近 60 天」。",
       "点「祝福 / 礼物」，AI 结合喜好和送礼记录给具体建议。",
-      "「这事该拜托谁」会从你的人脉里挑合适的人。",
+      "「引荐智能体」会从你的人脉里挑合适的人。",
     ],
   },
   calendar: {
@@ -120,6 +122,17 @@ const HEADINGS: Record<
     points: [
       "紫点是生日，黄点是节日，灰点是你自己的记录。",
       "点某一天写下和谁做了什么，以后翻回来一目了然。",
+    ],
+  },
+  plan: {
+    kicker: "Plan · Agent",
+    a: "把目标拆成",
+    b: "可执行的行动",
+    guide: "这一页：交给智能体拆解任务",
+    points: [
+      "输入一个目标，智能体会先读本机档案、核对人物与关系，再拆成行动项。",
+      "行动项按优先级进入待办、进行中、已完成，可以继续手动修改。",
+      "智能体只生成可执行清单，不会替你对外发消息。",
     ],
   },
   settings: {
@@ -136,10 +149,10 @@ const HEADINGS: Record<
     kicker: "Assistant · Setup",
     a: "挑一个顺手的",
     b: "模型",
-    guide: "这一页：选模型、问建议",
+    guide: "这一页：问答智能体与模型设置",
     points: [
       "自定义接口要填 API Key，否则会返回 401。",
-      "可以带上人物和关系数据，直接问 AI 该怎么处理某段关系。",
+      "问答智能体会按需读取档案、核对日期天气或网页，再给带证据的回答。",
     ],
   },
 };
@@ -317,6 +330,10 @@ function Index() {
               </div>
             ) : view === "calendar" ? (
               <CalendarPanel preset={activePreset} />
+            ) : view === "plan" ? (
+              <div className="min-w-0 space-y-5">
+                <PlanBoard preset={activePreset} />
+              </div>
             ) : view === "models" ? (
               <ModelsPanel
                 presets={presets}

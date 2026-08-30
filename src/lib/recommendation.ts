@@ -527,6 +527,7 @@ export function staleContacts(
     .sort((a, b) => b.days - a.days);
 }
 
+// prompt v2 · 2026-08-30：只允许引用候选卡里的理由、证据和风险，禁止新增人物或理由。
 export function recommendationPrompt(task: string, candidates: CandidateRecommendation[]) {
   const connectionMode = candidates.some((candidate) => candidate.mode === "connection");
   const targetSideMode = candidates.some((candidate) => candidate.mode === "target_side");
@@ -557,5 +558,6 @@ export function recommendationPrompt(task: string, candidates: CandidateRecommen
       : targetSideMode
         ? "请比较这些人与目标的关系依据，明确第一步仍是补充本人到候选的联系渠道；不要直接写成已经可以请托的路径。"
         : "请比较前三名各自适合与不适合之处，回答“为什么不是另一个人”，再给第一名写一段可编辑的求助话术。不要声称自动发送。",
+    "只能使用上面候选卡里给出的理由、证据和风险；不得新增名单外人物、不得编造新理由。证据不足时直接说明缺什么。",
   ].join("\n\n");
 }

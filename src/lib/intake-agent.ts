@@ -984,6 +984,7 @@ export const serializeIntakeHistory = (
   maxCharacters = MAX_HISTORY,
 ) => serializeToolHistory(history, maxCharacters);
 
+// prompt v2 · 2026-08-30：固定“先检索 → 核对 ID → 再暂存”顺序，并补充最终草稿示例。
 function promptForRound(
   extractionPrompt: string | IntakePromptSections,
   round: number,
@@ -1019,7 +1020,10 @@ ${archiveIndex}`
 {"type":"tools","summary":"并行核对人物和关系","calls":[{"tool":"get_profiles","args":{"personIds":["..."]}},{"tool":"get_relation","args":{"relationId":"..."}}]}`;
   const finalResponseGuide = `完成后输出：
 {"type":"final","summary":"简短说明","draft":<前述严格结构的草稿 JSON>}
-已经通过 stage_* 暂存的更新不要在 final.draft 中重复。若无需工具，也可直接输出前述严格结构的草稿 JSON，以兼容简单新增录入。`;
+已经通过 stage_* 暂存的更新不要在 final.draft 中重复。若无需工具，也可直接输出前述严格结构的草稿 JSON，以兼容简单新增录入。
+
+最终示例（draft 字段必须符合前述严格结构）：
+{"type":"final","summary":"整理完成，新增 1 位人物","draft":{"people":[{"name":"小雨","relation":"大学室友","birthday":"03-12","likes":["手冲咖啡"]}],"relations":[],"events":[],"reminders":[],"evidence":[]}}`;
   const responseGuide =
     taskState?.nextAction === "declare_plan"
       ? `本轮唯一动作是一次性声明所有新增和更新，不调用工具、不写工具名、不输出 final。稳定 ID 只能复制上方结构化索引，不得编造：已入库记录使用 archive id；未提交工作区记录使用其 recordRef，并分别填入 personId/relationId/eventId/factId/reminderId/evidenceId。关系端点用 fromPersonId/toPersonId，它们同样可以填写人物 recordRef。补充材料在纠正工作区内容时必须 update 原 recordRef，不能保留旧值再 create 一条新值。新人物没有引用时，用 plan:<person task id> 作为同一计划后续关系端点。“我/me”是保留视角，ID 固定为 ${SELF_PERSON_ID}，不得新建一个名为“我”的普通人物。本地会校验 ID、处理歧义并统一暂存；模型只负责把语义写成 typed plan。每个 changes 必须是可直接进入对应草稿的字段。相同记录同一 domain 的多个字段合并为一项，不得遗漏并列句：

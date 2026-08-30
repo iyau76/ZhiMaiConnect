@@ -1,4 +1,4 @@
-/** 个人版：提醒 —— 生日、节日、待办，以及「这事该拜托谁」 */
+/** 个人版：提醒 —— 生日、节日、待办，以及「引荐智能体」 */
 
 import {
   BrainCircuit,
@@ -534,11 +534,11 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
         </ul>
       </section>
 
-      {/* 这事拜托谁：本地确定性召回，或用户主动授权 AI 按需读取全库 */}
+      {/* 引荐智能体：本地确定性召回，或用户主动授权 AI 按需读取全库 */}
       <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Users className="size-4 text-primary" aria-hidden="true" />
-          {t("这事该拜托谁")}
+          {t("引荐智能体")}
         </h2>
         <Textarea
           value={ask}
@@ -655,7 +655,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
               current={agentTrace.at(-1)?.text ?? t("正在准备")}
               steps={agentTrace.length}
               running={agentBusy}
-              history={agentTrace.map((event) => event.text)}
+              events={agentTrace}
               stepLabel={t("步")}
             />
           </div>

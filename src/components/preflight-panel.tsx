@@ -98,7 +98,7 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
       detail: modelReady
         ? en
           ? `${preset.name} · ${preset.model} (test connectivity separately on the AI assistant page)`
-          : `${preset.name} · ${preset.model}（联网能力请在“AI 助理”页另点测试连接）`
+          : `${preset.name} · ${preset.model}（联网能力请在“智能体”页另点测试连接）`
         : preset.kind === "lovable" && lovableConfigured === false
           ? en
             ? "LOVABLE_API_KEY is missing on the server; use local Ollama or a custom endpoint. Local features remain available."
@@ -106,7 +106,7 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
           : lovableConfigured === null && preset.kind === "lovable"
             ? en
               ? "Could not read server setup status; test connectivity on the AI assistant page."
-              : "无法读取服务端配置状态；请在“AI 助理”页测试连接"
+              : "无法读取服务端配置状态；请在“智能体”页测试连接"
             : en
               ? "The model, endpoint or session key is incomplete; local features remain available."
               : "模型、接口地址或会话密钥不完整；本地功能仍可演示",
@@ -137,7 +137,7 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
       detail: persistedKeyRisk()
         ? en
           ? "A key from an older version remains in localStorage; resave or clear it on the AI assistant page."
-          : "发现旧版本遗留的 localStorage 密钥；请在 AI 助理页重新保存或清除"
+          : "发现旧版本遗留的 localStorage 密钥；请在智能体页重新保存或清除"
         : en
           ? "No persisted API key found; custom keys stay in the current session only."
           : "未发现持久化 API Key；自定义密钥仅保存在当前会话",

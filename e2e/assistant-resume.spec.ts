@@ -66,8 +66,8 @@ test("503 后可从中断轮次继续，并保留已完成的档案工具结果"
     });
   });
 
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const assistant = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^智能体/ }));
+  const assistant = page.getByText("问答智能体", { exact: true }).locator("..").locator("..");
   await assistant.getByRole("textbox").fill("唐悦喜欢什么？请先查档案再回答。");
   await assistant.getByRole("button", { name: "发送问题" }).click();
 

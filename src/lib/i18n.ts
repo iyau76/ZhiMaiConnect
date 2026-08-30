@@ -63,6 +63,13 @@ export function useLang(): Lang {
 /** 中文原文 -> 英文。没有条目时回退中文原文。 */
 const EN: Record<string, string> = {
   "AI 助理": "AI assistant",
+  智能体: "Agent",
+  智能体整理成档案: "Agent organises into profiles",
+  问答智能体: "Q&A agent",
+  引荐智能体: "Referral agent",
+  问答智能体与模型设置: "Q&A agent & model setup",
+  计划: "Plan",
+  目标拆解与行动项: "Goal decomposition & actions",
   "AI 正在整理": "AI is organising",
   分析轨迹: "Analysis trace",
   整理轨迹: "Organisation trace",
@@ -316,6 +323,14 @@ const EN: Record<string, string> = {
   部门信息已保存: "Group info saved",
   部门名称: "Group name",
   问一问: "Ask",
+  校验: "Checks",
+  有错误: "Error",
+  运行中: "Running",
+  准备: "Prepare",
+  分析: "Analyse",
+  工具: "Tool",
+  完成: "Complete",
+  错误: "Error",
   问答轨迹: "Answer trace",
   正在准备回答: "Preparing answer",
   发送问题: "Send question",
@@ -761,6 +776,18 @@ const EN: Record<string, string> = {
   "AI 没有给出可用的行动项": "AI returned no usable actions",
   "计划里的每条行动项都记录了负责人和来源（人工排的还是 AI 排的），AI 排的需要办案人确认后再执行。":
     "Every action records its assignee and source (manual or AI). AI-drafted actions need an officer's confirmation first.",
+  行动计划: "Action plan",
+  "目标，例：筹备校园记忆展开幕活动": "Goal, e.g. prepare the campus memory exhibition opening",
+  智能体拆解任务: "Agent decomposition",
+  "拆解中…": "Planning…",
+  "智能体会先读取本机档案、核对相关人物与关系，再按优先级排出可执行行动项；排出的任务可继续手动修改，确认后再执行。":
+    "The agent reads local profiles and relations, then produces priority-ordered actions you can edit and confirm before executing.",
+  规划轨迹: "Planning trace",
+  正在拆解: "Preparing plan",
+  手动加一条行动项: "Add an action manually",
+  已加入行动计划: "Added to action plan",
+  "每条行动项记录负责人和来源（人工或智能体）；智能体排出的任务需要人工确认后再执行。":
+    "Every action records its assignee and source (manual or agent). Agent-drafted actions need your confirmation first.",
   上传人: "Uploaded by",
   "上传人：谁登记的": "Uploaded by (who registered it)",
   "来源：从哪来的，如 现场勘查 / 物证编号 A-013": "Origin, e.g. scene search / exhibit no. A-013",
@@ -1103,6 +1130,8 @@ const EN: Record<string, string> = {
     "Use Wish / gift for suggestions grounded in interests and gift history.",
   "「这事该拜托谁」会从你的人脉里挑合适的人。":
     "Who should I ask? ranks suitable people from your network.",
+  "「引荐智能体」会从你的人脉里挑合适的人。":
+    "The referral agent ranks suitable people from your network.",
   记住和谁的: "Remember each day",
   每一天: "with people",
   "这一页：一天一条，日子就有迹可循": "On this page: keep a trace of each day",
@@ -1112,10 +1141,20 @@ const EN: Record<string, string> = {
     "Choose a day and record what happened with whom.",
   挑一个顺手的: "Choose the right",
   "这一页：选模型、问建议": "On this page: choose a model and ask for advice",
+  "这一页：问答智能体与模型设置": "On this page: Q&A agent and model setup",
   "自定义接口要填 API Key，否则会返回 401。":
     "Custom endpoints require an API key or will return 401.",
-  "可以带上人物和关系数据，直接问 AI 该怎么处理某段关系。":
-    "You can include profile and relationship data when asking AI for advice.",
+  "问答智能体会按需读取档案、核对日期天气或网页，再给带证据的回答。":
+    "The Q&A agent reads archives on demand and checks dates, weather or web sources before answering with evidence.",
+  把目标拆成: "Turn a goal into ",
+  可执行的行动: "executable actions",
+  "这一页：交给智能体拆解任务": "On this page: let the agent break a goal into tasks",
+  "输入一个目标，智能体会先读本机档案、核对人物与关系，再拆成行动项。":
+    "Enter a goal; the agent reads local profiles and relations first, then decomposes it into actions.",
+  "行动项按优先级进入待办、进行中、已完成，可以继续手动修改。":
+    "Actions land in To do / In progress / Done and stay editable.",
+  "智能体只生成可执行清单，不会替你对外发消息。":
+    "The agent only drafts an executable checklist; it never sends messages for you.",
   "Agent 控制中心": "Agent control centre",
   最多: "up to",
   轮: "rounds",

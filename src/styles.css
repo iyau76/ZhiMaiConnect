@@ -509,3 +509,8 @@
     animation: none;
   }
 }
+
+.reasoning-disclosure-body {
+  border-top: 1px solid color-mix(in oklch, var(--primary) 14%, var(--border));
+  background: color-mix(in oklch, var(--card) 78%, transparent);
+}

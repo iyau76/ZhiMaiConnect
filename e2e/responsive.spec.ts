@@ -25,7 +25,7 @@ for (const width of [390, 768, 1440]) {
 
     await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
     await page.getByRole("button", { name: "离线演示问题（合成数据）" }).click();
-    const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+    const recommendation = page.getByRole("heading", { name: "引荐智能体" }).locator("..");
     await expect(recommendation.getByRole("textbox")).toHaveValue(
       "我要组织校园记忆展开幕活动，找谁负责拍照比较合适？",
     );
@@ -44,7 +44,7 @@ for (const width of [390, 768, 1440]) {
     await page.getByRole("button", { name: "记下来" }).click();
     await expect(page.getByText(eventTitle, { exact: true }).first()).toBeVisible();
 
-    await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+    await clickVisible(page, page.getByRole("button", { name: /^智能体/ }));
     await expect(page.getByText("模型配置", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "测试连接" }).click();
     await expect(page.getByText(/连接正常/)).toBeVisible();
