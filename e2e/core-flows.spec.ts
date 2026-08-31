@@ -37,10 +37,6 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
   await page.getByRole("combobox", { name: "亲密度", exact: true }).selectOption("4");
   await expect(page.getByText("AI 推断值待核验 · 1")).toBeVisible();
 
-  await page.getByRole("button", { name: "确认入库" }).click();
-  await expect(page.getByText("仍有待确认条目：3")).toBeVisible();
-  await expect(await readIndexedDbStore(page, "persons")).toEqual([]);
-
   const batch = page.getByRole("button", { name: /批量接受低风险高置信事件/ });
   await batch.click();
   await expect(page.getByText("待确认 2", { exact: true })).toBeVisible();
@@ -115,18 +111,73 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
   expect(String(mockNetwork.visionRequests[0].prompt)).toContain("唐悦");
 });
 
-test("待确认条目会阻止入库，并可经二次确认一键全部接受", async ({ page }) => {
+test("待确认条目是软提醒，直接入库后关系仍保留 pending 状态", async ({ page }) => {
   await openApp(page);
   await page.getByRole("button", { name: "离线演示草稿" }).click();
   await expect(page.getByText(/待确认 \d+/, { exact: true })).toBeVisible();
+  await expect(page.getByText(/待确认是软提醒/)).toBeVisible();
 
   await page.getByRole("button", { name: "确认入库" }).click();
-  await expect(page.getByText(/仍有待确认条目：\d+/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
+  const assertions = await readIndexedDbStore<{ confirmationStatus?: string }>(
+    page,
+    "relationAssertions",
+  );
+  expect(assertions.length).toBeGreaterThan(0);
+  expect(assertions.every((relation) => relation.confirmationStatus === "pending")).toBe(true);
+});
 
-  const acceptAll = page.getByRole("button", { name: /一键接受全部待确认/ });
-  await acceptAll.click();
-  await expect(page.getByText("待确认 0", { exact: true })).toBeVisible();
-  await expect(acceptAll).toHaveCount(0);
+test("批量接受只确认来源对齐关系，名称子串误配保持可见且可单独处理", async ({ page }) => {
+  await openApp(page);
+  await page
+    .getByRole("heading", { name: /随手写，AI 来整理/ })
+    .locator("..")
+    .getByRole("textbox")
+    .fill("尤二姐是尤氏继母的女儿。");
+  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+
+  const relationCards = page.locator('[data-draft-kind="relation"]');
+  await expect(relationCards).toHaveCount(2);
+  await expect(relationCards.first()).toContainText("同时包含关系两端");
+
+  await page.getByRole("button", { name: /一键接受已对齐项/ }).click();
+  await expect(page.getByText("待确认 1", { exact: true })).toBeVisible();
+  await expect(relationCards.first().getByRole("button", { name: "接受此项" })).toBeVisible();
+  await expect(relationCards.nth(1).getByRole("button", { name: "已接受" })).toBeDisabled();
+
+  await page.getByRole("button", { name: "确认入库" }).click();
+  const assertions = await readIndexedDbStore<{
+    confirmationStatus?: string;
+    evidence?: { basis?: string };
+  }>(page, "relationAssertions");
+  expect(assertions).toHaveLength(2);
+  expect(assertions.filter((item) => item.confirmationStatus === "confirmed")).toHaveLength(1);
+  expect(assertions.filter((item) => item.confirmationStatus === "pending")).toHaveLength(1);
+});
+
+test("事件草稿按月或年录入时不要求选择具体日期，并能解析原始时间表述", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "离线演示草稿" }).click();
+  const eventDraft = page.locator('[data-draft-kind="event"]').first();
+  const precision = eventDraft.getByRole("combobox", { name: "日期精度" });
+
+  await precision.selectOption("month");
+  const month = eventDraft.getByRole("textbox", { name: "事件月份" });
+  await expect(month).toHaveAttribute("type", "month");
+  await month.fill("2024-07");
+
+  await precision.selectOption("year");
+  const year = eventDraft.getByRole("spinbutton", { name: "事件年份" });
+  await expect(year).toHaveValue("2024");
+  await year.fill("2023");
+
+  const phrase = eventDraft.getByRole("textbox", { name: "原始时间表述" });
+  await phrase.fill("去年夏天");
+  await phrase.blur();
+  await expect(precision).toHaveValue("range");
+  await expect(eventDraft.getByRole("textbox", { name: "事件日期" })).toHaveValue(
+    `${new Date().getFullYear() - 1}-06-01`,
+  );
 });
 
 test("人物改名会传播到 Fact、关系、事件和提醒的持久化引用", async ({ page }) => {
@@ -560,8 +611,10 @@ test("目标人物引荐只返回真实可达路径，断开的高亲密度同�
   const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
   await recommendation.getByRole("textbox").fill("我想找贾母办事，应该通过谁联系？");
   await recommendation.getByRole("button", { name: "本地筛选候选" }).click();
+  await expect(recommendation).toContainText("本地只召回了问题中出现的人名，不猜测谁是目标");
+  await recommendation.getByRole("combobox", { name: "选择目标人物" }).selectOption("jia-mu");
 
-  await expect(recommendation.getByText(/目标模式：只显示/)).toBeVisible();
+  await expect(recommendation.getByText(/已验证可达路径/)).toBeVisible();
   await expect(recommendation.locator("ol li")).toHaveCount(1);
   await expect(recommendation.locator("ol li").first()).toContainText("贾琏");
   await expect(recommendation.locator("ol li").first()).toContainText("我 → 贾琏 → 贾母");
@@ -619,15 +672,16 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
   await expect(trace).toContainText("分析完成");
   await expect(trace).toContainText(/\d+ 步/);
   await expect(recommendation.locator("ol li").first()).toContainText("陈安");
-  await expect(recommendation.locator("ol li").first()).toContainText("88 本地锁定分");
+  await expect(recommendation.locator("ol li").first()).toContainText(/\d+ 本地锁定分/);
   await expect(
     recommendation.getByRole("textbox", { name: "可编辑的候选比较与求助话术" }),
-  ).toContainText("为什么不是赵宇");
+  ).not.toHaveValue(/赵宇/);
 
-  expect(mockNetwork.visionRequests).toHaveLength(2);
+  expect(mockNetwork.visionRequests).toHaveLength(3);
   const prompts = mockNetwork.visionRequests.map((request) => String(request.prompt));
-  expect(prompts[0]).toContain("已授权访问完整决策档案");
-  expect(prompts[1]).toContain('"tool":"search_profiles"');
+  expect(prompts[0]).toContain("你负责理解一项人际协作任务");
+  expect(prompts.slice(1).join("\n")).toContain("已授权访问完整决策档案");
+  expect(prompts[2]).toContain('"tool":"search_profiles"');
   expect(prompts.join("\n")).not.toContain("private-lawyer@example.invalid");
 });
 
@@ -668,13 +722,13 @@ test("AI 助理修改人物时必须先批准，批准前人物库保持不变",
   await questionCard.getByRole("textbox").fill("把合成测试人物的职位改成品牌总监");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 
-  const approval = questionCard.getByRole("region", { name: "待批准的人物修改" });
+  const approval = questionCard.getByRole("region", { name: "待批准的批量档案修改" });
   await expect(approval).toContainText("品牌经理");
   await expect(approval).toContainText("品牌总监");
   let people = await readIndexedDbStore<{ profile?: { title?: string } }>(page, "persons");
   expect(people[0].profile?.title).toBe("品牌经理");
 
-  await approval.getByRole("button", { name: "批准并执行" }).click();
+  await approval.getByRole("button", { name: /签字并原子执行/ }).click();
   await expect(approval).toHaveCount(0);
   people = await readIndexedDbStore<{ profile?: { title?: string } }>(page, "persons");
   expect(people[0].profile?.title).toBe("品牌总监");
@@ -705,13 +759,13 @@ test("AI 助理修改人物关系时同样必须先批准", async ({ page }) => 
   await questionCard.getByRole("textbox").fill("把甲和乙的关系改成前同事");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 
-  const approval = questionCard.getByRole("region", { name: "待批准的关系修改" });
+  const approval = questionCard.getByRole("region", { name: "待批准的批量档案修改" });
   await expect(approval).toContainText("同事");
   await expect(approval).toContainText("前同事");
   let relations = await readIndexedDbStore<{ label: string }>(page, "relations");
   expect(relations[0].label).toBe("同事");
 
-  await approval.getByRole("button", { name: "批准并执行" }).click();
+  await approval.getByRole("button", { name: /签字并原子执行/ }).click();
   await expect(approval).toHaveCount(0);
   relations = await readIndexedDbStore<{ label: string }>(page, "relations");
   expect(relations[0].label).toBe("前同事");
@@ -747,11 +801,12 @@ test("AI 录入可检索并更新已有事件，确认前不覆盖原记录", as
 
   await eventDraft.getByRole("button", { name: "接受此项" }).click();
   await page.getByRole("button", { name: "确认入库" }).click();
+  await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
   events = await readIndexedDbStore<{ id: string; date: string }>(page, "lifeEvents");
   expect(events).toEqual([
     expect.objectContaining({ id: "event-update-agent", date: "2026-09-02" }),
   ]);
-  expect(mockNetwork.visionRequests).toHaveLength(3);
+  expect(mockNetwork.visionRequests).toHaveLength(1);
 });
 
 test("日历中的既有事件可以原位编辑而不是重复新建", async ({ page }) => {

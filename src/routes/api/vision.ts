@@ -78,90 +78,43 @@ function resolveTarget(body: VisionBody) {
   };
 }
 
-/** Validate the first SSE payload before committing a 200 response, then stream plain text. */
-async function sseToText(upstream: ReadableStream<Uint8Array>, request: UpstreamRequest) {
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
+/**
+ * Keep the Worker on the transport plane: forward bytes and refresh the idle
+ * deadline, while the browser performs SSE decoding. This removes per-token
+ * UTF-8 concatenation and JSON.parse work from the edge CPU budget.
+ */
+function proxySseBytes(
+  upstream: ReadableStream<Uint8Array>,
+  request: UpstreamRequest,
+  onFinish: (result: {
+    outcome: "completed" | "cancelled" | "stream_error";
+    bytes: number;
+  }) => void,
+) {
   const reader = upstream.getReader();
-  let ended = false;
-
-  const parse = (value: Uint8Array) => {
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    const chunks: Uint8Array[] = [];
-    for (const raw of lines) {
-      const line = raw.trim();
-      if (!line.startsWith("data:")) continue;
-      const content = line.slice(5).trim();
-      if (!content) continue;
-      if (content === "[DONE]") {
-        ended = true;
-        break;
-      }
-      try {
-        const payload = JSON.parse(content) as {
-          choices?: Array<{ delta?: { content?: unknown } }>;
-        };
-        const delta = payload.choices?.[0]?.delta?.content;
-        if (typeof delta === "string" && delta) chunks.push(encoder.encode(delta));
-      } catch {
-        // Ignore heartbeats and provider metadata, but never count them as valid output.
-      }
-    }
-    return chunks;
+  let bytes = 0;
+  let finished = false;
+  const finish = (outcome: "completed" | "cancelled" | "stream_error") => {
+    if (finished) return;
+    finished = true;
+    onFinish({ outcome, bytes });
   };
-
-  const initial: Uint8Array[] = [];
-  try {
-    request.refreshTimeout();
-    while (!initial.length && !ended) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value.byteLength > 0) request.refreshTimeout();
-      initial.push(...parse(value));
-    }
-    if (!initial.length) {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-      request.dispose();
-      throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 未返回可用的流式内容");
-    }
-  } catch (error) {
-    if (!(error instanceof SafeApiError)) {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-      request.dispose();
-    }
-    throw error;
-  }
-
   return new ReadableStream<Uint8Array>({
-    async start(controller) {
+    async pull(controller) {
       try {
-        for (const chunk of initial) controller.enqueue(chunk);
-        if (ended) {
-          await reader.cancel().catch(() => undefined);
+        const { done, value } = await reader.read();
+        if (done) {
           controller.close();
+          reader.releaseLock();
+          request.dispose();
+          finish("completed");
           return;
         }
-        // The initial deadline covers connection/headers. After that it becomes an
-        // inactivity deadline refreshed by every upstream byte, including reasoning
-        // chunks that are intentionally not forwarded to the UI.
-        request.refreshTimeout();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value.byteLength > 0) request.refreshTimeout();
-          for (const chunk of parse(value)) controller.enqueue(chunk);
-          if (ended) {
-            await reader.cancel().catch(() => undefined);
-            controller.close();
-            return;
-          }
+        if (value.byteLength > 0) {
+          bytes += value.byteLength;
+          request.refreshTimeout();
         }
-        controller.close();
+        controller.enqueue(value);
       } catch {
         controller.error(
           new Error(
@@ -170,24 +123,49 @@ async function sseToText(upstream: ReadableStream<Uint8Array>, request: Upstream
               : "上游 AI 响应流中断",
           ),
         );
-      } finally {
         reader.releaseLock();
         request.dispose();
+        finish("stream_error");
       }
     },
-    cancel() {
+    async cancel() {
       request.abort();
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
       request.dispose();
+      finish("cancelled");
     },
   });
 }
 
 export async function handleVisionPost(request: Request): Promise<Response> {
   let upstreamRequest: UpstreamRequest | undefined;
+  const startedAt = Date.now();
+  const clientRequestId = request.headers.get("x-zhimai-client-request") ?? crypto.randomUUID();
+  const requestBytes = Number(request.headers.get("content-length")) || undefined;
+  let model = "unknown";
+  let upstreamHeaderMs: number | undefined;
+  const logResult = (
+    outcome: string,
+    details: { status?: number; code?: string; streamBytes?: number } = {},
+  ) => {
+    console.info(
+      `[vision] ${JSON.stringify({
+        clientRequestId,
+        outcome,
+        model,
+        requestBytes,
+        upstreamHeaderMs,
+        wallTimeMs: Date.now() - startedAt,
+        ...details,
+      })}`,
+    );
+  };
   try {
     requireApiSession(request);
     await enforceRateLimit(request, "vision", 30);
     const body = await parseJsonRequest(request, visionBodySchema, API_LIMITS.visionRequestBytes);
+    model = body.model;
     const target = resolveTarget(body);
     const oneShot = body.action === "test" || body.action === "audit";
     const prompt = body.action === "test" ? "回复两个字：连通" : (body.prompt ?? "");
@@ -199,6 +177,14 @@ export async function handleVisionPost(request: Request): Promise<Response> {
         body.action === "test" ? null : body.image,
       ),
       stream: !oneShot,
+      ...(body.maxOutputTokens
+        ? /(?:^|\/)(?:gpt-5|o[134])(?:[.-]|$)/i.test(body.model)
+          ? { max_completion_tokens: body.maxOutputTokens }
+          : { max_tokens: body.maxOutputTokens }
+        : {}),
+      ...(body.temperature !== undefined && !/(?:^|\/)(?:gpt-5|o[134])(?:[.-]|$)/i.test(body.model)
+        ? { temperature: body.temperature }
+        : {}),
       ...(body.model.startsWith("openai/gpt-5.6") ? { reasoning_effort: "none" } : {}),
     };
 
@@ -217,8 +203,10 @@ export async function handleVisionPost(request: Request): Promise<Response> {
     );
 
     const upstream = upstreamRequest.response;
+    upstreamHeaderMs = Date.now() - startedAt;
     if (!upstream.ok) {
       const response = await consumeUpstreamError(upstream, "vision");
+      logResult("upstream_rejected", { status: response.status });
       upstreamRequest.dispose();
       upstreamRequest = undefined;
       return response;
@@ -248,6 +236,7 @@ export async function handleVisionPost(request: Request): Promise<Response> {
       } catch {
         throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 返回了无效响应");
       }
+      logResult("completed", { status: 200 });
       return apiJson({ ok: true, reply });
     }
 
@@ -264,13 +253,25 @@ export async function handleVisionPost(request: Request): Promise<Response> {
       throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 未返回 SSE 流");
     }
 
-    const stream = await sseToText(upstream.body, upstreamRequest);
+    const stream = proxySseBytes(upstream.body, upstreamRequest, (result) =>
+      logResult(result.outcome, {
+        status: result.outcome === "completed" ? 200 : undefined,
+        streamBytes: result.bytes,
+      }),
+    );
     upstreamRequest = undefined;
     return new Response(stream, {
-      headers: noStoreHeaders({ "Content-Type": "text/plain; charset=utf-8" }),
+      headers: noStoreHeaders({
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "X-Accel-Buffering": "no",
+      }),
     });
   } catch (error) {
     upstreamRequest?.dispose();
+    logResult("failed", {
+      status: error instanceof SafeApiError ? error.status : 500,
+      code: error instanceof SafeApiError ? error.code : "INTERNAL_ERROR",
+    });
     if (!(error instanceof SafeApiError)) console.error("[vision] unexpected internal failure");
     return apiErrorResponse(error);
   }

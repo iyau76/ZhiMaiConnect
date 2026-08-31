@@ -222,8 +222,9 @@ test("草稿中人工修改的关系、证据与 Fact 不会被误标为 AI 来�
 
   await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
   await page.getByRole("tab", { name: "关系网" }).click();
-  const graph = page.locator("svg").filter({ has: page.locator("#relation-arrow") });
-  await graph.getByRole("button", { name: /查看关系详情：唐悦 ⇄ 周宁/ }).click();
+  const relationList = page.getByText(/完整关系列表 · 1/);
+  await relationList.click();
+  await relationList.locator("..").getByRole("button", { name: "详情" }).click();
   const relationDetail = page.getByRole("region", { name: "关系详情" });
   await expect(relationDetail).toContainText("人工录入");
   await expect(relationDetail).toContainText("草稿中人工编辑");
@@ -285,7 +286,10 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
   await expect(page.getByText(/当前视图显示 \d+ 条关系，隐藏 \d+ 条/)).toBeVisible();
 
   await page.getByLabel("关系网视图").selectOption("all");
-  await expect(graph.getByRole("button", { name: /查看关系详情/ })).toHaveCount(80);
+  // 80 条原始关系之外，规范亲属关系会产生可解释的本地推导边。
+  await expect
+    .poll(() => graph.getByRole("button", { name: /查看关系详情/ }).count())
+    .toBeGreaterThanOrEqual(80);
 
   await graph.scrollIntoViewIfNeeded();
   const transformBeforeWheel = await graph.locator(":scope > g").getAttribute("transform");

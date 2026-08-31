@@ -25,37 +25,24 @@ export function normalizeRelationConfidence(basis?: string, confidence?: number)
 }
 
 export const KINSHIP_RULES_ZH = `
-- 事实字段与关系字段分轨处理：联系方式、生日、账号、单位、数值等事实字段只保留材料明确写出的值，绝对不要编造；关系字段允许“原文明说”和“有依据的亲属推导”两类输出。
-- 原文明说的关系：basis 写“原文：最短支持片段”，confidence 为 0.9–1。可规范化称谓和方向，但不得改变血亲/姻亲性质。
-- 推导关系：仅当材料中每个中间关系都明确出现、且能按下列规则一步推出时输出；basis 必须写“推断依据：…”，note 写“AI 亲属推导，需核验”，confidence 为 0.5–0.75。没有短依据就不要输出。
-- “X 的爸爸/妈妈/儿子/女儿/哥哥/姐姐/弟弟/妹妹”等是关系短语。创建被提到的人；未具名时使用不会混淆的上下文称谓，如“爸爸”“爷爷”“大姑的儿子”，并建立短语中明说的父子、母子或兄弟姐妹关系。缺少必要中间人时补建该称谓人物，不要丢掉关系。
-- 连续父母/子女两跳可推一个隔代关系：爸爸的爸爸→祖孙，妈妈的妈妈→外祖孙，儿子的女儿→祖孙。祖辈放 from，孙辈放 to；不得造“孙祖”标签。
-- 共同父母、同一父亲或同一母亲名下的多个子女，两两建立兄弟/兄妹/姐弟/姐妹。不同母亲注明“同父异母”，不同父亲注明“同母异父”；不能把半血缘写成同母所生。
-- 父母的兄弟姐妹与其子女可一步推出叔伯侄、姑侄、舅甥、姨甥：父亲的兄弟/姐妹分别是叔伯/姑，母亲的兄弟/姐妹分别是舅/姨。兄弟姐妹的子女使用同一规则的反向称谓。未写长幼时只用“叔伯侄”“兄弟姐妹”等中性标签，不猜哥哥/弟弟、姐姐/妹妹。
-- 配偶及配偶一侧亲属属于姻亲：配偶的父母可一步推出翁媳、婆媳或岳婿；配偶的兄弟姐妹可推出叔嫂、姑嫂等姻亲。依据必须同时列出配偶边和亲属边，不得写成亲兄弟、亲姐妹等血亲。
-- 连续三条明确的父母子女边可推曾祖孙，confidence 不高于 0.7；超过三条的长链不自动闭包。继父/继母的子女只能标“继兄弟姐妹（无血缘）”；材料明说同宗时可标“族亲/族兄弟”，不得提升为亲兄弟。
-- 父亲的兄弟之子女是堂亲；父亲的姐妹之子女是姑表；母亲的兄弟之子女是舅表；母亲的姐妹之子女是姨表。关系链不足时只保留已明确的边，不猜堂/表。
-- 规范 label 优先使用：父子、母子、父女、母女、兄弟、兄妹、姐弟、姐妹、夫妻、祖孙、外祖孙、叔侄、姑侄、舅甥、姨甥、堂兄弟、堂兄妹、姑表兄妹、舅表姐弟、姨表姐弟、翁媳、婆媳、岳婿、继姐妹。父母/祖辈放 from，子女/孙辈放 to；夫妻和同辈关系可双向。
-- 每条输出关系只允许一个可复核的推导结论。普通社会关系（同事、同学、合作）只能按原文明说输出，不得由“共事”继续猜朋友或合作伙伴。遇到“舅姥爷的表侄”等亲疏不明链条，不继续推导，留给用户补充。
+- 模型只负责抽取材料明确表达的实体和关系断言，不负责推导兄弟姐妹、祖孙、叔侄、堂表亲或姻亲。所有传递推导由提交后的本地规则引擎在稳定人物 ID 上统一重建。
+- 每条关系的 basis 必须写“原文：最短支持片段”，confidence 通常为 0.9–1。禁止输出以“推断依据：”开头的关系，也不要把常识补全成原文事实。
+- “X 的爸爸/妈妈/儿子/女儿/哥哥/姐姐/弟弟/妹妹”等关系短语本身就是材料明说的断言：建立短语直接表达的那一条边。未具名人物使用带上下文的称谓，如“大姑的儿子”，不要把不同材料里的“爸爸”当成同一人。
+- 逐句建立“原文 claim → 关系任务”的一一对应：并列人物逐个展开；“他们的儿子/女儿”同时建立两位明确父母到该子女的直接断言；妾、正妻、丈夫、妻子本身就是配偶断言。不能因为同一人物已在另一条边出现而跳过本句。
+- 中文并列分句会省略主语：如“A 的正妻 B……；妾 C……”中的“妾 C”仍承接 A，必须建立 A↔C 的妾关系；不要只抽取 C 与子女。
+- 每条关系必须是两个端点之间的原子关系。“B、C 是 A 的继母的女儿”不能直接写成 A→B“继母的女儿”；应建立带上下文的未具名继母实体再连接，无法可靠拆分时保留人物与原文，不制造多跳关系边。
+- 亲属称谓明确表达性别时，把这个实体的 gender 同步写为男/女（如儿子、父亲、丈夫为男，女儿、母亲、妻子、妾为女）。最终 parentRole/childRole 由本地编译器结合人物字段确定，不能只靠 label 猜测。
+- 父母/祖辈放 from，子女/孙辈放 to；夫妻和同辈关系任选材料自然顺序。未写长幼时用“兄弟姐妹”等中性标签，不猜哥哥/弟弟。
+- 只保留材料明确写出的血亲、姻亲、同事、同学、合作、暗恋等关系，不从共同出现、共同单位或同一事件继续猜朋友/伙伴。
+- label 保留用户语义，如“前同事”“大学室友”“暗恋”；不要为了套少量枚举而损失“前任、方向、堂表分支”等信息。语义谓词和角色限定由本地关系本体统一生成。
 
-示例一：材料“贾母有两个儿子贾赦和贾政。贾政的小儿子是贾宝玉。”应包含：
-{"from":"贾母","to":"贾赦","label":"母子","basis":"原文：贾母有两个儿子贾赦和贾政","confidence":0.96}
-{"from":"贾赦","to":"贾政","label":"兄弟","note":"AI 亲属推导，需核验","basis":"推断依据：同为贾母之子","confidence":0.7}
-{"from":"贾母","to":"贾宝玉","label":"祖孙","note":"AI 亲属推导，需核验","basis":"推断依据：贾母是贾政之母，贾政是贾宝玉之父","confidence":0.68}
-
-示例二：材料“我大姑有一个儿子和一个女儿。”应补建“大姑”“大姑的儿子”“大姑的女儿”，保留两条原文明说的母子/母女关系，并输出：
-{"from":"大姑的儿子","to":"大姑的女儿","label":"兄妹","note":"AI 亲属推导，需核验","basis":"推断依据：两人同为大姑的子女","confidence":0.7}
+示例：材料“贾母有两个儿子贾赦和贾政。贾政的小儿子是贾宝玉。”只输出三条原文明说的父母子女断言：贾母→贾赦、贾母→贾政、贾政→贾宝玉。不要输出贾赦↔贾政或贾母→贾宝玉；它们会由本地规则投影产生。
 `;
 
 export const KINSHIP_RULES_EN = `
-- Treat facts and relations separately. Never invent contact details, birthdays, accounts, organisations or numeric facts. Relations may be either explicit or auditable kinship inferences.
-- For an explicit relation, basis starts with “Original:”, confidence is 0.9–1. For a derived relation, every intermediate edge must be explicit, basis starts with “Inference basis:”, note says it needs review, and confidence is 0.5–0.75.
-- Create people named by relational phrases such as “X's father/mother/son/daughter/sibling”; use an unambiguous contextual placeholder when no name is given.
-- Two explicit parent/child edges may yield one grandparent relation. Children sharing a parent may yield sibling relations; distinguish half-siblings. In-laws must never be labelled as blood relatives.
-- A parent's explicit sibling may yield one uncle/aunt-to-nibling relation. Do not guess older/younger sibling order when the source does not state it.
-- A spouse plus the spouse's explicit parent or sibling may yield one in-law relation (parent-in-law, sibling-in-law). The basis must name both supporting edges and the result must never be labelled as blood kin.
-- Three consecutive explicit parent/child edges may yield a great-grandparent relation at confidence no higher than 0.7. Do not close longer chains. A step-parent's child is a step-sibling without blood relation; an explicitly stated same-clan tie may be normalised to clan kin but never to a sibling.
-- Distinguish paternal cousins, paternal-aunt cousins, maternal-uncle cousins and maternal-aunt cousins only when the full supporting chain is explicit. Do not continue through long or ambiguous chains.
-- Ordinary social ties (work, school, collaboration) may only be output when explicit; never infer friendship or partnership from co-presence. Prefer canonical labels and put the parent/grandparent in from and the child/grandchild in to. Every inferred relation requires a short basis and confidence no higher than 0.75.
-- Canonical labels include parent-child, sibling (without guessing seniority), spouse, grandparent, great-grandparent, uncle/aunt-nibling, the four cousin branches, parent/sibling-in-law, step-sibling and clan kin. Use “Original:” for explicit edges and “Inference basis:” for derived edges exactly as in the Chinese contract.
+- The model extracts only entities and relationship assertions explicitly stated by the material. It must not derive siblings, grandparents, cousins or in-laws. A deterministic local rule engine rebuilds those projections after entity resolution.
+- Every relationship basis starts with “Original:” and quotes the shortest supporting passage. Do not output “Inference basis:” relationships or complete facts from common knowledge.
+- Relational phrases such as “X's father/mother/son/daughter/sibling” directly state one edge. Create a context-scoped placeholder when unnamed; do not merge every person called “father”.
+- Expand coordinated clauses one assertion at a time. “Their son/daughter” creates one explicit parent assertion from each named parent; wife, husband and concubine are explicit spouse assertions. Kinship nouns also populate explicit entity gender so the local compiler, not display wording, fixes parent/child roles.
+- Put a parent before a child. Preserve meaningful labels such as former colleague, college roommate or has a crush on; the local ontology supplies stable predicates and qualifiers.
 `;

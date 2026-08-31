@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { PersonRecord, RelationRecord } from "./face-db";
-import { detectTargetIntent, rankConnectionPaths } from "./connection-paths";
+import {
+  mentionedArchivePeople,
+  rankConnectionPaths,
+  rankTargetSideEntries,
+} from "./connection-paths";
 
 const NOW = new Date("2026-08-28T00:00:00Z");
 
@@ -31,29 +35,36 @@ function relation(id: string, fromId: string, toId: string, patch: Partial<Relat
   } satisfies RelationRecord;
 }
 
-describe("target intent", () => {
+describe("archive person recall without local intent guessing", () => {
   const persons = [person("jia-mu", "贾母"), person("jia-lian", "贾琏")];
 
-  it("recognizes an archived person as a target", () => {
-    expect(detectTargetIntent("我想找贾母办事，应该通过谁联系？", persons)).toMatchObject({
-      mode: "target",
-      target: { id: "jia-mu" },
-    });
+  it("recalls an archived person mentioned in the question", () => {
+    expect(mentionedArchivePeople("我想给贾母送一份寿礼，应该怎么安排？", persons)).toEqual([
+      expect.objectContaining({ id: "jia-mu" }),
+    ]);
   });
 
-  it("keeps a skill request in open recommendation mode", () => {
-    expect(detectTargetIntent("找一个懂摄影的人", persons).mode).toBe("open");
+  it("never offers the ego record as a recalled archive person", () => {
+    const self = { ...person("self", "我"), entityRole: "ego" as const };
+    expect(mentionedArchivePeople("我想找贾母办事，应该通过谁联系？", [self, ...persons])).toEqual([
+      expect.objectContaining({ id: "jia-mu" }),
+    ]);
   });
 
-  it("does not guess when multiple named targets are requested", () => {
-    expect(detectTargetIntent("想联系贾母和贾琏", persons).mode).toBe("ambiguous");
+  it("does not invent a person match for a capability request", () => {
+    expect(mentionedArchivePeople("找一个懂摄影的人", persons)).toEqual([]);
   });
 
-  it("recognizes a one-character archived name", () => {
-    expect(detectTargetIntent("我想找婷办事", [person("ting", "婷")])).toMatchObject({
-      mode: "target",
-      target: { id: "ting" },
-    });
+  it("recalls every named person without deciding which one is the target", () => {
+    expect(
+      mentionedArchivePeople("想请贾琏帮我给贾母送寿礼", persons).map((row) => row.id),
+    ).toEqual(["jia-mu", "jia-lian"]);
+  });
+
+  it("recalls a one-character archived name", () => {
+    expect(mentionedArchivePeople("我想给婷送礼物", [person("ting", "婷")])).toEqual([
+      expect.objectContaining({ id: "ting" }),
+    ]);
   });
 });
 
@@ -116,6 +127,39 @@ describe("connection path ranking", () => {
         now: NOW,
       }),
     ).toHaveLength(1);
+  });
+
+  it("treats an explicit ego relationship as verified access", () => {
+    const self = { ...person("self", "我"), entityRole: "ego" as const };
+    const result = rankConnectionPaths({
+      persons: [self, selfContact, target],
+      relations: [
+        relation("access", self.id, selfContact.id, { label: "大学室友" }),
+        relation("family", selfContact.id, target.id),
+      ],
+      events: [],
+      targetId: target.id,
+      now: NOW,
+    });
+    expect(result[0].person.id).toBe(selfContact.id);
+    expect(result[0].evidence).toContain("与我的已记录关系：大学室友");
+  });
+
+  it("returns target-side leads without claiming they are reachable", () => {
+    const result = rankTargetSideEntries({
+      persons: [target, selfContact, classmateA],
+      relations: [relation("family", selfContact.id, target.id)],
+      events: [],
+      targetId: target.id,
+      now: NOW,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      person: { id: "jia-lian" },
+      mode: "target_side",
+      targetEntry: { targetId: "jia-mu", relationIds: ["family"] },
+    });
+    expect(result[0].risks.join(" ")).toContain("尚未证明你能联系此人");
   });
 
   it("enforces the total-hop limit including the virtual self edge", () => {

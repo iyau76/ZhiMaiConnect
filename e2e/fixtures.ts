@@ -43,37 +43,157 @@ const intakeDraft = {
   summary: "识别出一位大学同学、一项共同活动和一个待办；写入前仍可编辑。",
 };
 
+function intakePlanReply(prompt: string) {
+  if (prompt.includes("尤二姐是尤氏继母的女儿")) {
+    return JSON.stringify({
+      type: "plan",
+      summary: "保留来源对齐关系，并把名称包含造成的可疑关系留给用户判断",
+      tasks: [
+        ...["尤氏", "尤氏继母", "尤二姐"].map((name) => ({
+          id: `person-${name}`,
+          domain: "person",
+          intent: "create",
+          target: { name },
+          changes: { name },
+        })),
+        {
+          id: "unsupported-nested-name-relation",
+          domain: "relation",
+          intent: "create",
+          target: {
+            from: "尤氏",
+            fromPersonId: "plan:person-尤氏",
+            to: "尤氏继母",
+            toPersonId: "plan:person-尤氏继母",
+          },
+          changes: { label: "母女", basis: "原文：尤二姐是尤氏继母的女儿。" },
+        },
+        {
+          id: "supported-parent-relation",
+          domain: "relation",
+          intent: "create",
+          target: {
+            from: "尤氏继母",
+            fromPersonId: "plan:person-尤氏继母",
+            to: "尤二姐",
+            toPersonId: "plan:person-尤二姐",
+          },
+          changes: { label: "母女", basis: "原文：尤二姐是尤氏继母的女儿。" },
+        },
+      ],
+    });
+  }
+  if (prompt.includes("团队聚餐改到 9 月 2 日")) {
+    return JSON.stringify({
+      type: "plan",
+      summary: "把已有团队聚餐调整到 9 月 2 日",
+      tasks: [
+        {
+          id: "event-update",
+          domain: "event",
+          intent: "update",
+          target: {
+            title: "团队聚餐",
+            eventId: "event-update-agent",
+            date: "2026-09-01",
+          },
+          changes: { date: "2026-09-02" },
+        },
+      ],
+    });
+  }
+  const workspacePersonRef = prompt.match(/"recordRef":"(draft:person:[^"]+)"/u)?.[1];
+  if (workspacePersonRef && prompt.includes("愿意帮校园记忆展拍摄")) {
+    return JSON.stringify({
+      type: "plan",
+      summary: "已把补充说明合并到唐悦的未提交档案",
+      tasks: [
+        {
+          id: "person-tangyue-supplement",
+          domain: "person",
+          intent: "update",
+          target: { name: "唐悦", personId: workspacePersonRef },
+          changes: { note: "愿意帮校园记忆展拍摄" },
+        },
+      ],
+    });
+  }
+  const existing = prompt.includes('"id":"existing-tangyue"');
+  return JSON.stringify({
+    type: "plan",
+    summary: "识别出一位大学同学、一项共同活动和一个待办；写入前仍可编辑。",
+    tasks: [
+      {
+        id: "person-tangyue",
+        domain: "person",
+        intent: existing ? "update" : "create",
+        target: {
+          name: "唐悦",
+          ...(existing ? { personId: "existing-tangyue" } : {}),
+        },
+        changes: {
+          name: "唐悦",
+          relation: "大学摄影社搭档",
+          contact: "微信 tangyue_photo",
+          birthday: "03-12",
+          closeness: 5,
+          likes: ["人像摄影", "手冲咖啡"],
+          confidence: 0.94,
+        },
+      },
+      {
+        id: "event-memory-exhibition",
+        domain: "event",
+        intent: "create",
+        target: { title: "讨论校园记忆展" },
+        changes: {
+          date: "2026-08-29",
+          precision: "day",
+          people: ["唐悦"],
+          confidence: 0.9,
+        },
+      },
+      {
+        id: "reminder-photo-list",
+        domain: "reminder",
+        intent: "create",
+        target: { title: "给唐悦发送拍摄清单" },
+        changes: {
+          due: "2026-08-28",
+          people: ["唐悦"],
+          kind: "custom",
+          confidence: 0.91,
+        },
+      },
+    ],
+  });
+}
+
 function visionReply(body: Record<string, unknown>) {
   if (body.action === "test") return "连接正常";
   const prompt = typeof body.prompt === "string" ? body.prompt : "";
+  if (prompt.includes("本轮唯一动作是一次性声明所有新增和更新")) {
+    return intakePlanReply(prompt);
+  }
   if (prompt.includes("结构化 JSON") || prompt.includes("structured JSON")) {
-    if (prompt.includes("团队聚餐改到 9 月 2 日")) {
-      if (!prompt.includes('"tool":"search_events"')) {
-        return JSON.stringify({
-          type: "tool",
-          summary: "先查找已录入的聚餐事件",
-          tool: "search_events",
-          args: { query: "团队聚餐" },
-        });
-      }
-      if (!prompt.includes('"tool":"stage_event_update"')) {
-        return JSON.stringify({
-          type: "tool",
-          summary: "暂存日期修改，等待用户确认",
-          tool: "stage_event_update",
-          args: { eventId: "event-update-agent", changes: { date: "2026-09-02" } },
-        });
-      }
-      return JSON.stringify({
-        type: "final",
-        summary: "事件更新已暂存",
-        draft: { summary: "将已有团队聚餐调整到 9 月 2 日。" },
-      });
-    }
+    if (prompt.includes("团队聚餐改到 9 月 2 日")) return intakePlanReply(prompt);
     return JSON.stringify(intakeDraft);
   }
   if (prompt.includes("以下候选及排序由本地确定性规则产生")) {
     return "首选陈安：人物档案明确记录了合同审阅经验。为什么不是赵宇：赵宇更擅长网站开发，缺少合同证据。\n\n可编辑话术：陈安你好，方便时能否帮我看一下租房合同中的违约条款？不用着急，我会先隐去无关个人信息。";
+  }
+  if (prompt.includes("你负责理解一项人际协作任务")) {
+    return JSON.stringify({
+      type: "recommendation_plan",
+      mode: "open",
+      slots: [
+        {
+          label: "合同审查",
+          deliverable: "核对租房合同违约条款与法律风险",
+          searchTerms: ["合同", "法律", "律师", "合同审阅"],
+        },
+      ],
+    });
   }
   if (prompt.includes("人际协作推荐智能体")) {
     if (!prompt.includes('"call":{"tool":"search_profiles"')) {
@@ -84,54 +204,65 @@ function visionReply(body: Record<string, unknown>) {
         args: { query: "合同 法律", limit: 8 },
       });
     }
+    const orderedPersonIds = prompt.includes('"orderedPersonIds":["person-lawyer-agent"]')
+      ? ["person-lawyer-agent"]
+      : ["person-lawyer-agent", "person-dev-agent"];
     return JSON.stringify({
       type: "final",
       summary: "已结合档案与共同事件完成比较",
-      recommendations: [
-        {
-          personId: "person-lawyer-agent",
-          score: 92,
-          confidence: "高",
-          reasons: ["法律职业与合同审阅经历直接匹配"],
-          evidence: ["档案记录：律师；共同事件：一起审核租房合同"],
-          risks: ["联系前仍需确认时间与意愿"],
-        },
-        {
-          personId: "person-dev-agent",
-          score: 35,
-          confidence: "低",
-          reasons: ["关系较熟悉"],
-          evidence: ["档案记录：前端工程师"],
-          risks: ["没有合同审阅证据"],
-        },
-      ],
-      answer:
-        "首选陈安：法律和合同经验最直接。为什么不是赵宇：现有档案只有开发经验。\n\n可编辑话术：陈安你好，方便时能否帮我看一下租房合同中的违约条款？",
+      decision: {
+        mode: "open",
+        orderedPersonIds,
+        accessVerified: false,
+      },
+      outreachDraft: "陈安你好，方便时能否帮我看一下租房合同中的违约条款？",
     });
   }
   if (prompt.includes("通用问答智能体")) {
     if (prompt.includes("把甲和乙的关系改成前同事")) {
+      if (!prompt.includes('"tool":"get_relation"')) {
+        return JSON.stringify({
+          type: "tool",
+          summary: "先核对现有关系",
+          tool: "get_relation",
+          args: { relationId: "relation-update-agent" },
+        });
+      }
       return JSON.stringify({
-        type: "tool",
-        summary: "准备关系修改提案",
-        tool: "update_relation",
-        args: {
-          relationId: "relation-update-agent",
-          reason: "用户明确纠正人物关系",
-          changes: { label: "前同事", basis: "原文：甲和乙现在是前同事" },
-        },
+        type: "proposal",
+        title: "把甲乙关系更新为前同事",
+        reason: "用户明确纠正人物关系",
+        operations: [
+          {
+            kind: "update_relation",
+            relationId: "relation-update-agent",
+            reason: "用户明确纠正人物关系",
+            changes: { label: "前同事", basis: "原文：甲和乙现在是前同事" },
+          },
+        ],
       });
     }
     if (prompt.includes("把合成测试人物的职位改成品牌总监")) {
+      if (!prompt.includes('"tool":"get_profiles"')) {
+        return JSON.stringify({
+          type: "tool",
+          summary: "先核对人物现有职位",
+          tool: "get_profiles",
+          args: { personIds: ["person-update-agent"] },
+        });
+      }
       return JSON.stringify({
-        type: "tool",
-        summary: "准备职位修改提案",
-        tool: "update_person",
-        args: {
-          personId: "person-update-agent",
-          reason: "用户明确要求修改职位",
-          changes: { title: "品牌总监" },
-        },
+        type: "proposal",
+        title: "把合成测试人物更新为品牌总监",
+        reason: "用户明确要求修改职位",
+        operations: [
+          {
+            kind: "update_person",
+            personId: "person-update-agent",
+            reason: "用户明确要求修改职位",
+            changes: { set: { profile: { title: "品牌总监" } } },
+          },
+        ],
       });
     }
     if (!prompt.includes('"call":{"tool":"search_web"')) {
@@ -382,8 +513,19 @@ export interface IndexedDbSeed {
 
 export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {
   await page.evaluate(async (records) => {
+    const relationshipModule = await import("/src/lib/face-db.ts");
+    const relationshipBatch = {
+      persons: records.persons,
+      relations: records.relations,
+      lifeEvents: records.lifeEvents,
+      reminders: records.reminders,
+    };
+    if (Object.values(relationshipBatch).some((rows) => rows?.length)) {
+      await relationshipModule.facesDb.putBatch(relationshipBatch);
+    }
+
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openglass-faces", 9);
+      const request = indexedDB.open("openglass-faces", 12);
       request.onupgradeneeded = () => {
         const target = request.result;
         const stores = [
@@ -407,9 +549,10 @@ export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    const entries = Object.entries(records).filter(([, rows]) => rows?.length) as Array<
-      [string, SeedRecord[]]
-    >;
+    const relationshipStores = new Set(["persons", "relations", "lifeEvents", "reminders"]);
+    const entries = Object.entries(records).filter(
+      ([store, rows]) => !relationshipStores.has(store) && rows?.length,
+    ) as Array<[string, SeedRecord[]]>;
     if (!entries.length) return;
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(
@@ -428,8 +571,12 @@ export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {
 
 export async function readIndexedDbStore<T = SeedRecord>(page: Page, store: string) {
   return page.evaluate(async (storeName) => {
+    if (storeName === "relations") {
+      const relationshipModule = await import("/src/lib/face-db.ts");
+      return (await relationshipModule.facesDb.listRelations()) as T[];
+    }
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openglass-faces", 9);
+      const request = indexedDB.open("openglass-faces", 12);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });

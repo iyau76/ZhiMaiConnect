@@ -30,9 +30,29 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { runAssistantAgent } from "@/lib/assistant-agent";
 import { makeSource } from "@/lib/provenance";
-import { PRESET_TAGS, presetTagLabels, primaryTagOf, tagsOf } from "@/lib/circle-tags";
+import {
+  applyPersonDeletionPlan,
+  peopleDeletionImpactText,
+  personDeletionImpactText,
+  previewPeopleDeletion,
+  previewPersonDeletion,
+} from "@/lib/person-deletion";
+import { PRESET_TAGS, presetTagLabels, tagsOf } from "@/lib/circle-tags";
 import { inferMutual, isMutualRelation } from "@/lib/relation-kind";
+import {
+  buildRelationCommunityOverview,
+  detectRelationCommunities,
+  relationCommunityMap,
+} from "@/lib/relation-community";
+import {
+  buildCircleLayoutProjection,
+  DEFAULT_RELATION_GRAPH_GROUPING,
+  loadRelationGraphGrouping,
+  saveRelationGraphGrouping,
+  type RelationGraphGroupingMode,
+} from "@/lib/relation-graph-grouping";
 import {
   relationCategory,
   relationEvidenceMode,
@@ -40,9 +60,12 @@ import {
   type GraphViewMode,
   type RelationCategory,
 } from "@/lib/relation-graph";
+import { inferRelationSemantics } from "@/lib/relation-ontology";
 import {
   assertValidPersonName,
   facesDb,
+  type CollectionMembershipRecord,
+  type CollectionRecord,
   type EvidenceRecord,
   type LifeEventRecord,
   type PersonRecord,
@@ -51,13 +74,17 @@ import {
 } from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { askModel } from "@/lib/vision-client";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 interface Props {
   preset: ProviderPreset;
   onOpenIntake: () => void;
 }
+
+type GraphDrill =
+  | { mode: "blocks" }
+  | { mode: "group"; key: string }
+  | { mode: "members"; key: string; memberIds: string[] };
 
 const DEFAULT_RELATION_LABELS = ["朋友", "同事", "同学", "亲属", "夫妻", "合作伙伴"];
 
@@ -71,24 +98,18 @@ function graphColor(key: string) {
   };
 }
 
-/** 兼容旧数据里保存的中文预设标签与当前界面的翻译标签。 */
-function isSameTag(value: string, displayedTag: string) {
-  const normalized = value.trim();
-  return normalized === displayedTag || t(normalized) === displayedTag;
-}
-
-function displayCircleTag(value: string) {
-  const normalized = value.trim();
-  if (normalized === "未分组" || normalized === "Untagged") return t("未分组");
-  return (PRESET_TAGS as readonly string[]).includes(normalized) ? t(normalized) : normalized;
-}
-
 export function RelationsPanel({ preset, onOpenIntake }: Props) {
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [relations, setRelations] = useState<RelationRecord[]>([]);
   const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
   const [lifeEvents, setLifeEvents] = useState<LifeEventRecord[]>([]);
   const [reminders, setReminders] = useState<ReminderRecord[]>([]);
+  const [collections, setCollections] = useState<CollectionRecord[]>([]);
+  const [collectionMemberships, setCollectionMemberships] = useState<CollectionMembershipRecord[]>(
+    [],
+  );
+  const [collectionFilterId, setCollectionFilterId] = useState<string | null>(null);
+  const [newCollectionName, setNewCollectionName] = useState("");
   const [newName, setNewName] = useState("");
   const [newNote, setNewNote] = useState("");
   const [editing, setEditing] = useState<PersonRecord | null>(null);
@@ -100,8 +121,12 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   const relationLabelRef = useRef<HTMLInputElement | null>(null);
   /** auto = 按关系词推断方向；mutual = 双箭头；directed = 单箭头 */
   const [dirMode, setDirMode] = useState<"auto" | "mutual" | "directed">("auto");
-  /** 关系网布局：按标签分圈 / 不分组 */
-  const [groupBy, setGroupBy] = useState<"none" | "tag">("tag");
+  /** 关系网布局：用户圈层 / 拓扑社区 / 不分组。 */
+  const [groupBy, setGroupBy] = useState<RelationGraphGroupingMode>(() =>
+    typeof localStorage === "undefined"
+      ? DEFAULT_RELATION_GRAPH_GROUPING
+      : loadRelationGraphGrouping(localStorage),
+  );
   const [relationFilter, setRelationFilter] = useState("all");
   const [relationCategoryFilter, setRelationCategoryFilter] = useState<RelationCategory | "all">(
     "all",
@@ -113,7 +138,8 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     "all" | "confirmed" | "pending"
   >("all");
   const [graphViewMode, setGraphViewMode] = useState<GraphViewMode>("overview");
-  const [showEdgeLabels, setShowEdgeLabels] = useState(true);
+  const [focusDepth, setFocusDepth] = useState<1 | 2>(1);
+  const [showEdgeLabels, setShowEdgeLabels] = useState(false);
   /** 档案页：搜索词、标签筛选、批量选中 */
   const [query, setQuery] = useState("");
   const [filterTags, setFilterTags] = useState<string[]>([]);
@@ -129,9 +155,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   /** 当前选中的关系边：在图与无障碍列表中共享同一详情面板。 */
   const [selectedRelationId, setSelectedRelationId] = useState<string | null>(null);
   /** 只有点击圈层图例中的“只看”才缩小范围；普通节点选择不会改变图的数据范围。 */
-  const [drill, setDrill] = useState<{ mode: "blocks" | "group"; key?: string }>({
-    mode: "blocks",
-  });
+  const [drill, setDrill] = useState<GraphDrill>({ mode: "blocks" });
   /** 画布缩放 / 平移 */
   const [viewport, setViewport] = useState({ scale: 1, tx: 0, ty: 0 });
   const [graphFullscreen, setGraphFullscreen] = useState(false);
@@ -157,23 +181,32 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
   const refresh = useCallback(async () => {
     await facesDb.pruneOrphanRelations();
-    const [p, r, events, reminderRows, evidenceRows] = await Promise.all([
-      facesDb.listPersons(),
-      facesDb.listRelations(),
-      facesDb.listLifeEvents(),
-      facesDb.listReminders(),
-      facesDb.listEvidence(),
-    ]);
+    const [p, r, events, reminderRows, evidenceRows, collectionRows, membershipRows] =
+      await Promise.all([
+        facesDb.listPersons(),
+        facesDb.listRelations(),
+        facesDb.listLifeEvents(),
+        facesDb.listReminders(),
+        facesDb.listEvidence(),
+        facesDb.listCollections(),
+        facesDb.listCollectionMemberships(),
+      ]);
     setPeople(p);
     setRelations(r);
     setLifeEvents(events);
     setReminders(reminderRows);
     setEvidence(evidenceRows);
+    setCollections(collectionRows);
+    setCollectionMemberships(membershipRows);
   }, []);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (typeof localStorage !== "undefined") saveRelationGraphGrouping(localStorage, groupBy);
+  }, [groupBy]);
 
   const nameOf = useCallback(
     (id: string) => people.find((person) => person.id === id)?.name ?? t("已删除"),
@@ -210,12 +243,15 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   };
 
   const removePerson = async (person: PersonRecord) => {
-    await facesDb.deletePerson(person.id);
-    for (const relation of relations) {
-      if (relation.fromId === person.id || relation.toId === person.id)
-        await facesDb.deleteRelation(relation.id);
+    try {
+      const preview = await previewPersonDeletion(person.id);
+      if (!window.confirm(`${personDeletionImpactText(preview.impact)}\n\n确认执行吗？`)) return;
+      await applyPersonDeletionPlan(preview.plan);
+      await refresh();
+      toast.success(`${t("已删除")}：${person.name}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("删除失败"));
     }
-    await refresh();
   };
 
   const addRelation = async () => {
@@ -225,20 +261,52 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     }
     const now = Date.now();
     const relationId = crypto.randomUUID();
-    await facesDb.putRelation({
-      id: relationId,
-      fromId,
-      toId,
-      label: label.trim() || t("认识"),
-      mutual: dirMode === "auto" ? inferMutual(label.trim() || t("认识")) : dirMode === "mutual",
-      createdAt: now,
-      updatedAt: now,
-      confirmationStatus: "confirmed",
-      evidenceMode: "explicit",
-      confidence: 1,
-      visibility: "auto",
-      recommendationPolicy: "allow",
-      source: makeSource("manual"),
+    const relationLabel = label.trim() || t("认识");
+    const semantics = inferRelationSemantics(relationLabel);
+    const mutual = dirMode === "auto" ? inferMutual(relationLabel) : dirMode === "mutual";
+    await facesDb.putRelationshipBatch({
+      assertions: [
+        {
+          id: relationId,
+          recordType: "assertion",
+          fromId,
+          toId,
+          predicate: semantics.predicate,
+          qualifiers: semantics.qualifiers,
+          label: relationLabel,
+          direction:
+            semantics.predicate === "custom" ? (mutual ? "symmetric" : "directed") : "ontology",
+          evidence: { mode: "manual", sourceIds: [] },
+          validity: {
+            status:
+              semantics.qualifiers.temporalStatus === "former"
+                ? "ended"
+                : semantics.qualifiers.temporalStatus === "current"
+                  ? "active"
+                  : "unknown",
+            validFrom: semantics.qualifiers.validFrom,
+            validTo: semantics.qualifiers.validTo,
+          },
+          confidence: 1,
+          confirmationStatus: "confirmed",
+          createdAt: now,
+          updatedAt: now,
+          source: makeSource("manual"),
+        },
+      ],
+      viewPreferences: [
+        { id: relationId, subjectId: relationId, visibility: "auto", updatedAt: now },
+      ],
+      referralPolicies: [
+        {
+          id: relationId,
+          subjectId: relationId,
+          policy: "allow",
+          direction: "both",
+          contexts: [],
+          updatedAt: now,
+        },
+      ],
     });
     const fromName = nameOf(fromId);
     const toName = nameOf(toId);
@@ -262,6 +330,9 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     setDirMode("auto");
     setRelationPick(source ? "to" : "from");
     setSelectedRelationId(null);
+    // A large overview contains aggregate community nodes rather than people.
+    // Relationship composition always switches to the person-level graph.
+    setGraphViewMode("standard");
     setRelationComposerOpen(true);
   };
 
@@ -280,23 +351,21 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     }
     setSummarizing(true);
     setSummary("");
-    const roster = people
-      .map((person) => `${person.name}：${person.note || t("暂无备注")}`)
-      .join("\n");
-    const links = relations
-      .map((r) => `${nameOf(r.fromId)} —${r.label}→ ${nameOf(r.toId)}`)
-      .join("\n");
     try {
-      await askModel(
+      const result = await runAssistantAgent({
         preset,
-        getLang() === "en"
-          ? `Here are my people profiles and relationship data. Answer in English: what circles/groups exist, key tags for each person, who bridges different circles, and what information is clearly missing.\n\n[People]\n${roster}\n\n[Relations]\n${links || "none"}`
-          : `下面是我的人物档案和人际关系数据。请用中文整理：有哪些圈子/群体、每个人的关键标签、谁是连接不同圈子的关键人物、还有哪些信息明显缺失需要补充。\n\n【人物】\n${roster}\n\n【关系】\n${links || t("暂无")}`,
-        null,
-        [],
-        (chunk) => setSummary((prev) => prev + chunk),
-        new AbortController().signal,
-      );
+        question:
+          getLang() === "en"
+            ? "Review the complete local archive. Summarise evidence-backed groups and key tags, identify people who bridge topology communities, and list genuinely missing information worth collecting. Do not persist computed topology communities as factual circles. Answer in English."
+            : "请梳理当前完整人物档案：概括可证实的群体结构和每个人的关键标签，指出连接不同拓扑社区的桥接人物，并列出确实缺失、值得后续补充的信息。不要把拓扑社区写回为事实圈层。",
+        persons: people,
+        relations,
+        events: lifeEvents,
+        collections,
+        collectionMemberships,
+        includeArchive: true,
+      });
+      setSummary(result.answer);
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -352,20 +421,19 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       return;
     }
     const targets = people.filter((person) => checkedIds.includes(person.id));
-    for (const person of targets) {
+    const updates = targets.map((person) => {
       const current = new Set(person.profile?.tags ?? []);
       if (add) current.add(tag);
       else current.delete(tag);
-      const circle = person.profile?.circle?.trim();
-      await facesDb.putPerson({
+      return {
         ...person,
         profile: {
           ...(person.profile ?? {}),
           tags: [...current],
-          circle: !add && circle === tag ? undefined : person.profile?.circle,
         },
-      });
-    }
+      };
+    });
+    await facesDb.putBatch({ persons: updates });
     await refresh();
     toast.success(
       `${targets.length} ${t("人")} ${add ? t("已加上标签") : t("已移除标签")}「${tag}」`,
@@ -375,99 +443,147 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   /** 批量删除（连同关系一起删） */
   const removeChecked = async () => {
     const targets = people.filter((person) => checkedIds.includes(person.id));
-    for (const person of targets) await removePerson(person);
-    setCheckedIds([]);
-    toast.success(`${t("已删除")} ${targets.length} ${t("人")}`);
+    if (!targets.length) return;
+    try {
+      const preview = await previewPeopleDeletion(targets.map((person) => person.id));
+      if (!window.confirm(`${peopleDeletionImpactText(preview.impact)}\n\n确认批量执行吗？`))
+        return;
+      await applyPersonDeletionPlan(preview.plan);
+      setCheckedIds([]);
+      await refresh();
+      toast.success(`${t("已删除")} ${targets.length} ${t("人")}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("批量删除失败"));
+      await refresh();
+    }
   };
 
-  /** 落位用的主圈子（一个人只画在一个地方）；显式圈层优先于自动识别标签。 */
-  const groupOf = useCallback(
-    (person: PersonRecord) =>
-      person.profile?.circle?.trim()
-        ? displayCircleTag(person.profile.circle)
-        : primaryTagOf(person),
-    [],
+  /**
+   * Layout communities are a disposable graph projection. User collections
+   * are independent, overlapping filters and never become spatial truth.
+   */
+  const relationCommunities = useMemo(
+    () => detectRelationCommunities(people, relations),
+    [people, relations],
+  );
+  const communityByPersonId = useMemo(
+    () => relationCommunityMap(relationCommunities),
+    [relationCommunities],
+  );
+  const communityNames = useMemo(
+    () =>
+      new Map(
+        relationCommunities.map((community, index) => {
+          const names = community.memberIds
+            .map((id) => people.find((person) => person.id === id)?.name)
+            .filter((name): name is string => Boolean(name));
+          return [
+            community.id,
+            names.length <= 2 ? names.join("、") || `${t("社区")} ${index + 1}` : `${names[0]}等`,
+          ] as const;
+        }),
+      ),
+    [people, relationCommunities],
+  );
+  const circleLayout = useMemo(
+    () => buildCircleLayoutProjection(people, collections, collectionMemberships, t("未分圈层")),
+    [people, collections, collectionMemberships],
+  );
+  const layoutGroupOf = useCallback(
+    (person: PersonRecord) => {
+      if (groupBy === "circles") {
+        const circle = circleLayout.groupByPersonId.get(person.id);
+        return circle
+          ? { key: circle.key, label: circle.label }
+          : { key: "circles:none", label: t("未分圈层") };
+      }
+      if (groupBy === "communities") {
+        const communityId = communityByPersonId.get(person.id) ?? `community:person:${person.id}`;
+        return {
+          key: communityId,
+          label: communityNames.get(communityId) ?? t("未连接"),
+        };
+      }
+      return { key: "", label: "" };
+    },
+    [circleLayout, communityByPersonId, communityNames, groupBy],
   );
 
-  const tagMembers = useMemo(
-    () => (tagOpen ? people.filter((person) => groupOf(person) === tagOpen) : []),
-    [people, tagOpen, groupOf],
+  const openCollection = collections.find((collection) => collection.id === tagOpen) ?? null;
+  const openCollectionMemberIds = new Set(
+    collectionMemberships
+      .filter((membership) => membership.collectionId === tagOpen)
+      .map((membership) => membership.personId),
   );
+  const tagMembers = tagOpen
+    ? people.filter((person) => openCollectionMemberIds.has(person.id))
+    : [];
+  const tagCandidates = tagOpen
+    ? people.filter((person) => !openCollectionMemberIds.has(person.id))
+    : [];
 
-  const tagCandidates = useMemo(
-    () => (tagOpen ? people.filter((person) => groupOf(person) !== tagOpen) : []),
-    [people, tagOpen, groupOf],
-  );
+  const createCollection = async () => {
+    const name = newCollectionName.trim();
+    if (!name) return;
+    if (collections.some((collection) => collection.name === name)) {
+      toast.error(t("已有同名圈层"));
+      return;
+    }
+    const now = Date.now();
+    const id = `collection:${crypto.randomUUID()}`;
+    await facesDb.putCollection({ id, name, kind: "context", createdAt: now, updatedAt: now });
+    setNewCollectionName("");
+    setTagOpen(id);
+    await refresh();
+  };
 
-  /** 重命名圈层：更新成员的显式标签和主圈层，不再借用企业部门字段。 */
-  const renameTagGroup = async (current: string, next: string) => {
+  const renameTagGroup = async (_current: string, next: string) => {
+    if (!openCollection) return;
     const value = next.trim();
     if (!value) return;
-    const members = people.filter((person) => groupOf(person) === current);
-    for (const person of members) {
-      const tags = (person.profile?.tags ?? [])
-        .map((tag) => (isSameTag(tag, current) ? value : tag.trim()))
-        .filter(Boolean);
-      if (value !== t("未分组") && !tags.some((tag) => isSameTag(tag, value))) tags.push(value);
-      await facesDb.putPerson({
-        ...person,
-        updatedAt: Date.now(),
-        profile: {
-          ...(person.profile ?? {}),
-          tags: [...new Set(tags)],
-          circle: value,
-        },
-      });
-    }
-    if (drill.mode === "group" && drill.key === current) {
-      setDrill({ mode: "group", key: value });
-    }
-    setTagOpen(value);
+    await facesDb.putCollection({ ...openCollection, name: value, updatedAt: Date.now() });
     await refresh();
   };
 
-  /** 加入圈层：标签保留多选能力，circle 明确这次关系图使用的主圈层。 */
-  const addPersonToTag = async (personId: string, tag: string) => {
-    const person = people.find((item) => item.id === personId);
-    if (!person) return;
-    const tags = new Set((person.profile?.tags ?? []).map((item) => item.trim()).filter(Boolean));
-    if (tag !== t("未分组") && ![...tags].some((item) => isSameTag(item, tag))) tags.add(tag);
-    await facesDb.putPerson({
-      ...person,
-      updatedAt: Date.now(),
-      profile: { ...(person.profile ?? {}), tags: [...tags], circle: tag },
+  const addPersonToTag = async (personId: string) => {
+    if (!openCollection || !people.some((person) => person.id === personId)) return;
+    await facesDb.putCollectionMembership({
+      id: `${openCollection.id}\u0000${personId}`,
+      collectionId: openCollection.id,
+      personId,
+      source: "manual",
+      createdAt: Date.now(),
     });
     await refresh();
   };
 
-  /** 移出圈层：优先落到另一个显式标签，其次回到自动识别标签或“未分组”。 */
-  const removePersonFromTag = async (personId: string, tag: string) => {
-    const person = people.find((item) => item.id === personId);
-    if (!person) return;
-    const tags = (person.profile?.tags ?? [])
-      .map((item) => item.trim())
-      .filter((item) => item && !isSameTag(item, tag));
-    const withoutCurrentCircle: PersonRecord = {
-      ...person,
-      profile: { ...(person.profile ?? {}), tags, circle: undefined },
-    };
-    const detectedFallback = tagsOf(withoutCurrentCircle).find((item) => item !== tag);
-    const nextCircle = tags[0] || detectedFallback || t("未分组");
-    await facesDb.putPerson({
-      ...person,
-      updatedAt: Date.now(),
-      profile: { ...(person.profile ?? {}), tags, circle: nextCircle },
-    });
+  const removePersonFromTag = async (personId: string) => {
+    if (!openCollection) return;
+    await facesDb.deleteCollectionMembership(`${openCollection.id}\u0000${personId}`);
     await refresh();
   };
 
   /** 当前钻取层级下要画哪些人 */
   const visiblePeople = useMemo(() => {
-    if (groupBy === "none") return people;
+    const collectionMemberIds = collectionFilterId
+      ? new Set(
+          collectionMemberships
+            .filter((membership) => membership.collectionId === collectionFilterId)
+            .map((membership) => membership.personId),
+        )
+      : null;
+    const collectionPeople = collectionMemberIds
+      ? people.filter((person) => collectionMemberIds.has(person.id))
+      : people;
+    if (drill.mode === "members") {
+      const memberIds = new Set(drill.memberIds);
+      return collectionPeople.filter((person) => memberIds.has(person.id));
+    }
+    if (groupBy === "none") return collectionPeople;
     if (drill.mode === "group")
-      return people.filter((person) => groupOf(person) === (drill.key ?? ""));
-    return people;
-  }, [people, groupBy, drill, groupOf]);
+      return collectionPeople.filter((person) => layoutGroupOf(person).key === drill.key);
+    return collectionPeople;
+  }, [people, groupBy, drill, layoutGroupOf, collectionFilterId, collectionMemberships]);
 
   const policyFilteredRelations = useMemo(
     () =>
@@ -497,13 +613,63 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
         events: lifeEvents,
         mode: graphViewMode,
         selectedId,
+        focusDepth,
       }),
-    [policyFilteredRelations, lifeEvents, graphViewMode, selectedId],
+    [policyFilteredRelations, lifeEvents, graphViewMode, selectedId, focusDepth],
   );
+
+  /**
+   * Above this size, overview is a community map. It is a reversible visual
+   * projection: clicking a community drills into the exact member ids.
+   */
+  const aggregateOverview =
+    graphViewMode === "overview" &&
+    groupBy === "communities" &&
+    drill.mode === "blocks" &&
+    visiblePeople.length > 60;
+  const communityOverview = useMemo(
+    () =>
+      buildRelationCommunityOverview(visiblePeople, graphVisibility.visible, relationCommunities),
+    [visiblePeople, graphVisibility.visible, relationCommunities],
+  );
+  const overviewGraph = useMemo(() => {
+    const count = communityOverview.nodes.length;
+    const ringRadius = count <= 1 ? 0 : Math.max(190, count * 42);
+    const size = Math.max(520, 2 * (ringRadius + 100));
+    const center = size / 2;
+    const names = new Map(people.map((person) => [person.id, person.name]));
+    const nodes = communityOverview.nodes.map((node, index) => {
+      const angle = (index / Math.max(count, 1)) * Math.PI * 2 - Math.PI / 2;
+      const memberNames = node.memberIds
+        .map((id) => names.get(id))
+        .filter((name): name is string => Boolean(name));
+      const label = node.isolated
+        ? `${t("未连接人物")} · ${node.memberIds.length}`
+        : node.memberIds.length <= 2
+          ? memberNames.join("、")
+          : `${memberNames[0] ?? t("社区")}等 · ${node.memberIds.length}`;
+      return {
+        ...node,
+        label,
+        x: center + ringRadius * Math.cos(angle),
+        y: center + ringRadius * Math.sin(angle),
+        r: Math.min(72, 28 + Math.sqrt(node.memberIds.length) * 6),
+        color: graphColor(node.id),
+      };
+    });
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const edges = communityOverview.edges
+      .map((edge) => ({ ...edge, a: nodeById.get(edge.fromId), b: nodeById.get(edge.toId) }))
+      .filter((edge) => edge.a && edge.b);
+    return { size, nodes, edges };
+  }, [communityOverview, people]);
 
   /** 关系网布局：默认一个大圆；按标签分组时每个圈层自成一簇。 */
   const graph = useMemo(() => {
-    const people = visiblePeople;
+    // In aggregate overview mode the community projection below is the only
+    // graph we need. Avoid the quadratic edge-label placement work for a dense
+    // 200-person graph that will not be rendered.
+    const people = aggregateOverview ? [] : visiblePeople;
     /** 两个人之间的最短距离（保证关系词写得下） */
     const MIN_EDGE = 150;
     type Node = {
@@ -515,7 +681,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       color: ReturnType<typeof graphColor>;
     };
     const nodes: Node[] = [];
-    const clusters: { name: string; x: number; y: number; r: number }[] = [];
+    const clusters: { key: string; name: string; x: number; y: number; r: number }[] = [];
 
     /** 环形排布时，为了让相邻两点至少隔开 MIN_EDGE 所需的半径 */
     const ringFor = (count: number) =>
@@ -554,16 +720,16 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     let size = 640;
 
     if (groupBy !== "none") {
-      const buckets = new Map<string, PersonRecord[]>();
+      const buckets = new Map<string, { name: string; members: PersonRecord[] }>();
       for (const person of people) {
-        const key = groupOf(person);
-        const list = buckets.get(key);
-        if (list) list.push(person);
-        else buckets.set(key, [person]);
+        const group = layoutGroupOf(person);
+        const bucket = buckets.get(group.key);
+        if (bucket) bucket.members.push(person);
+        else buckets.set(group.key, { name: group.label, members: [person] });
       }
-      const groups = [...buckets.entries()].map(([name, members]) => {
-        const layout = layeredRing(members.length);
-        return { name, members, inner: layout.radius, points: layout.points };
+      const groups = [...buckets.entries()].map(([key, bucket]) => {
+        const layout = layeredRing(bucket.members.length);
+        return { key, ...bucket, inner: layout.radius, points: layout.points };
       });
       const maxR = Math.max(...groups.map((group) => group.inner + 52), 120);
       // 多个圈层时，各簇均匀分布在一个更大的环上，彼此不重叠
@@ -578,14 +744,14 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
         const angle = (groupIndex / groups.length) * Math.PI * 2 - Math.PI / 2;
         const cx = center + ringRadius * Math.cos(angle);
         const cy = center + ringRadius * Math.sin(angle);
-        clusters.push({ name: group.name, x: cx, y: cy, r: group.inner + 52 });
+        clusters.push({ key: group.key, name: group.name, x: cx, y: cy, r: group.inner + 52 });
         group.members.forEach((person, index) => {
           const point = group.points[index] ?? { x: 0, y: 0 };
           nodes.push({
             id: person.id,
             name: person.name,
-            group: group.name,
-            color: graphColor(group.name),
+            group: group.key,
+            color: graphColor(group.key),
             x: cx + point.x,
             y: cy + point.y,
           });
@@ -598,12 +764,11 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       const center = size / 2;
       people.forEach((person, index) => {
         const point = layout.points[index] ?? { x: 0, y: 0 };
-        const group = groupOf(person);
         nodes.push({
           id: person.id,
           name: person.name,
-          group,
-          color: graphColor(group),
+          group: "",
+          color: graphColor("all"),
           x: center + point.x,
           y: center + point.y,
         });
@@ -622,7 +787,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
     // 圈层跟着点走：用该圈层所有点的实际位置重新算圆心和半径
     for (const cluster of clusters) {
-      const members = nodes.filter((node) => node.group === cluster.name);
+      const members = nodes.filter((node) => node.group === cluster.key);
       if (!members.length) continue;
       const cx = members.reduce((sum, node) => sum + node.x, 0) / members.length;
       const cy = members.reduce((sum, node) => sum + node.y, 0) / members.length;
@@ -633,7 +798,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
     // 只折叠完全相同方向、标签与方向性的重复记录；不同标签必须分别保留。
     const seen = new Set<string>();
-    const edges = graphVisibility.visible
+    const edges = (aggregateOverview ? [] : graphVisibility.visible)
       .filter((relation) => {
         const key = `${relation.fromId}>${relation.toId}::${relation.label.trim()}::${
           isMutualRelation(relation) ? "mutual" : "directed"
@@ -773,18 +938,25 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
 
     const shaped = clusters.map((cluster) => ({
       ...cluster,
-      color: graphColor(cluster.name),
+      color: graphColor(cluster.key),
       path: blob(
         cluster.x,
         cluster.y,
         cluster.r * 1.08,
-        cluster.name,
-        nodes.filter((node) => node.group === cluster.name),
+        cluster.key,
+        nodes.filter((node) => node.group === cluster.key),
       ),
     }));
 
     return { size, nodes, edges: labelled, clusters: shaped };
-  }, [visiblePeople, graphVisibility.visible, groupBy, groupOf, positions]);
+  }, [
+    aggregateOverview,
+    visiblePeople,
+    graphVisibility.visible,
+    groupBy,
+    layoutGroupOf,
+    positions,
+  ]);
 
   const relationLabels = useMemo(
     () => [...new Set(relations.map((relation) => relation.label).filter(Boolean))].sort(),
@@ -836,7 +1008,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     [evidence, selectedRelation?.sourceId],
   );
 
-  const viewSize = graph.size;
+  const viewSize = aggregateOverview ? overviewGraph.size : graph.size;
   const viewSizeRef = useRef(viewSize);
   viewSizeRef.current = viewSize;
 
@@ -916,13 +1088,11 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   const focusPerson = (id: string) => {
     setSelectedId(id);
     setSelectedRelationId(null);
-    setGraphViewMode("focus1");
   };
 
   /** 返回：从某个人退回全部圈子总览 */
   const goBack = useCallback(() => {
     setSelectedId(null);
-    setGraphViewMode("overview");
     resetView();
     setDrill({ mode: "blocks" });
   }, []);
@@ -935,7 +1105,6 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
         closeRelationComposer();
       } else if (selectedId) {
         setSelectedId(null);
-        setGraphViewMode("overview");
       } else if (drill.mode !== "blocks") {
         goBack();
       }
@@ -1001,7 +1170,6 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
     }
     setSelectedId(null);
     setSelectedRelationId(null);
-    setGraphViewMode("overview");
   };
 
   const onNodePointerDown = (
@@ -1096,10 +1264,10 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
         <TabsContent value="roster" className="space-y-4 pt-4">
           <PageGuide
             id="relations-roster"
-            title="档案页"
+            title={t("档案页")}
             points={[
-              "填名字就能建人，先建人再连关系。",
-              "点一行可以打开人物卡补职位、部门等资料。",
+              t("填名字就能建人，先建人再连关系。"),
+              t("点一行可以打开人物卡补职位、部门等资料。"),
             ]}
           />
 
@@ -1346,6 +1514,79 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             )}
           </div>
 
+          <div className="space-y-2 rounded-xl border border-border bg-muted/15 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium">{t("我的集合")}</span>
+              <span className="text-[11px] text-muted-foreground">
+                {t("集合可以重叠，只用于筛选和整理，不决定图上的空间位置。")}
+              </span>
+              {collectionFilterId && (
+                <button
+                  type="button"
+                  className="ml-auto text-[11px] text-primary hover:underline"
+                  onClick={() => setCollectionFilterId(null)}
+                >
+                  {t("显示全部人物")}
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {collections
+                .filter((collection) => collection.kind !== "computed_community")
+                .map((collection) => {
+                  const count = collectionMemberships.filter(
+                    (membership) => membership.collectionId === collection.id,
+                  ).length;
+                  return (
+                    <div
+                      key={collection.id}
+                      className={cn(
+                        "inline-flex overflow-hidden rounded-full border bg-background text-[11px]",
+                        collectionFilterId === collection.id ? "border-primary" : "border-border",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        className="px-2.5 py-1 hover:bg-accent"
+                        onClick={() =>
+                          setCollectionFilterId((current) =>
+                            current === collection.id ? null : collection.id,
+                          )
+                        }
+                      >
+                        {collection.name} · {count}
+                      </button>
+                      <button
+                        type="button"
+                        className="border-l border-border px-2 py-1 text-primary hover:bg-accent"
+                        aria-label={`${t("管理圈层")}：${collection.name}`}
+                        onClick={() => setTagOpen(collection.id)}
+                      >
+                        {t("管理")}
+                      </button>
+                    </div>
+                  );
+                })}
+              <Input
+                value={newCollectionName}
+                onChange={(event) => setNewCollectionName(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && void createCollection()}
+                placeholder={t("新集合名称")}
+                className="h-8 w-36 rounded-full text-xs"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 rounded-full px-2.5 text-[11px]"
+                disabled={!newCollectionName.trim()}
+                onClick={() => void createCollection()}
+              >
+                <Plus className="size-3" aria-hidden="true" />
+                {t("新建集合")}
+              </Button>
+            </div>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <Button
               onClick={openRelationComposer}
@@ -1357,12 +1598,19 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             </Button>
             <select
               value={groupBy}
-              onChange={(event) => setGroupBy(event.target.value as typeof groupBy)}
+              onChange={(event) => {
+                setGroupBy(event.target.value as RelationGraphGroupingMode);
+                setDrill({ mode: "blocks" });
+                setPositions({});
+                resetView();
+              }}
               className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              aria-label={t("分组布局")}
               title={t("布局")}
             >
-              <option value="tag">{t("按标签分圈")}</option>
               <option value="none">{t("不分组")}</option>
+              <option value="circles">{t("按圈层布局")}</option>
+              <option value="communities">{t("按拓扑社区布局")}</option>
             </select>
             <select
               value={graphViewMode}
@@ -1372,13 +1620,19 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
               title={t("关系网视图")}
             >
               <option value="overview">{t("概览：结构骨架")}</option>
-              <option value="focus1" disabled={!selectedId}>
-                {t("聚焦：一跳关系")}
-              </option>
-              <option value="focus2" disabled={!selectedId}>
-                {t("聚焦：两跳关系")}
-              </option>
+              <option value="standard">{t("标准：事实与有效推导")}</option>
               <option value="all">{t("全部：包含常隐")}</option>
+            </select>
+            <select
+              value={focusDepth}
+              onChange={(event) => setFocusDepth(Number(event.target.value) as 1 | 2)}
+              disabled={!selectedId}
+              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              aria-label={t("聚焦范围")}
+              title={selectedId ? t("聚焦范围") : t("先单击一个人物节点")}
+            >
+              <option value={1}>{t("高亮：一跳")}</option>
+              <option value={2}>{t("高亮：两跳")}</option>
             </select>
             <select
               value={relationFilter}
@@ -1611,35 +1865,48 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
             </div>
           )}
 
-          {groupBy === "tag" && graph.clusters.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2" aria-label={t("圈层图例")}>
-              <span className="text-[11px] text-muted-foreground">{t("圈层图例")}：</span>
+          {groupBy !== "none" && graph.clusters.length > 0 && (
+            <div
+              className="flex flex-wrap items-center gap-2"
+              aria-label={t(groupBy === "circles" ? "圈层图例" : "拓扑社区图例")}
+            >
+              <span className="text-[11px] text-muted-foreground">
+                {t(
+                  groupBy === "circles"
+                    ? "圈层布局（仅使用已确认关系圈；标签与场景集合不参与）"
+                    : "拓扑社区（Louvain 自动计算，不写入档案）",
+                )}
+                ：
+              </span>
               {graph.clusters.map((cluster) => (
                 <div
-                  key={cluster.name}
+                  key={cluster.key}
                   className="inline-flex overflow-hidden rounded-full border border-border bg-background text-[11px]"
                 >
-                  <button
-                    type="button"
-                    className="flex min-h-8 items-center gap-1.5 px-2.5 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    aria-label={`${t("编辑圈层")}：${cluster.name}`}
-                    onClick={() => setTagOpen(cluster.name)}
-                  >
+                  <span className="flex min-h-8 items-center gap-1.5 px-2.5">
                     <span
                       className="size-2.5 rounded-full"
                       style={{ backgroundColor: cluster.color.node }}
                       aria-hidden="true"
                     />
                     <span>{cluster.name}</span>
-                  </button>
+                  </span>
                   <button
                     type="button"
                     className="min-h-8 border-l border-border px-2.5 text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    aria-label={`${t("只看圈层")}：${cluster.name}`}
+                    aria-label={`${t(
+                      groupBy === "circles" ? "只看圈层" : "只看拓扑社区",
+                    )}：${cluster.name}`}
                     onClick={() => {
                       setSelectedId(null);
                       setGraphViewMode("overview");
-                      setDrill({ mode: "group", key: cluster.name });
+                      setDrill({
+                        mode: "members",
+                        key: cluster.name,
+                        memberIds: graph.nodes
+                          .filter((node) => node.group === cluster.key)
+                          .map((node) => node.id),
+                      });
                     }}
                   >
                     {t("只看")}
@@ -1665,9 +1932,11 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
               </>
             )}
             <span>
-              {relationComposerOpen
-                ? t("连线模式：依次点击两个节点，按住节点仍可拖动")
-                : t("单击节点聚焦并淡化无关人物，双击打开人物卡，按住可拖动")}
+              {aggregateOverview
+                ? t("大图概览已合并为拓扑社区；点击社区即可查看其中人物")
+                : relationComposerOpen
+                  ? t("连线模式：依次点击两个节点，按住节点仍可拖动")
+                  : t("单击节点聚焦并淡化无关人物，双击打开人物卡，按住可拖动")}
             </span>
 
             <span className="ml-auto flex items-center gap-1">
@@ -1711,10 +1980,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
               <button
                 type="button"
                 className="text-primary underline-offset-2 hover:underline"
-                onClick={() => {
-                  setSelectedId(null);
-                  setGraphViewMode("overview");
-                }}
+                onClick={() => setSelectedId(null)}
               >
                 {t("取消选中")}
               </button>
@@ -1911,8 +2177,9 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   <select
                     value={selectedRelation.visibility ?? "auto"}
                     onChange={async (event) => {
-                      await facesDb.putRelation({
-                        ...selectedRelation,
+                      await facesDb.putRelationViewPreference({
+                        id: selectedRelation.id,
+                        subjectId: selectedRelation.id,
                         visibility: event.target.value as NonNullable<RelationRecord["visibility"]>,
                         updatedAt: Date.now(),
                       });
@@ -1930,11 +2197,12 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   <select
                     value={selectedRelation.recommendationPolicy ?? "allow"}
                     onChange={async (event) => {
-                      await facesDb.putRelation({
-                        ...selectedRelation,
-                        recommendationPolicy: event.target.value as NonNullable<
-                          RelationRecord["recommendationPolicy"]
-                        >,
+                      await facesDb.putReferralPolicy({
+                        id: selectedRelation.id,
+                        subjectId: selectedRelation.id,
+                        policy: event.target.value as "allow" | "avoid" | "block",
+                        direction: "both",
+                        contexts: [],
                         updatedAt: Date.now(),
                       });
                       await refresh();
@@ -1961,7 +2229,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
               "relative overflow-hidden rounded-xl border border-border bg-muted/20",
               graphFullscreen
                 ? "flex h-screen w-screen items-center rounded-none border-0 bg-background p-4"
-                : "h-[clamp(26rem,58vh,42rem)]",
+                : "h-[clamp(20rem,46vh,32rem)]",
             )}
           >
             {relationComposerOpen && (
@@ -2040,43 +2308,149 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                 pointerEvents="all"
               />
               <g transform={`translate(${viewport.tx} ${viewport.ty}) scale(${viewport.scale})`}>
-                {graph.clusters.map((cluster) => (
-                  <g key={cluster.name}>
-                    <path
-                      d={cluster.path}
-                      pointerEvents="none"
-                      strokeWidth={1}
-                      strokeDasharray="4 4"
-                      style={{
-                        fill: cluster.color.fill,
-                        stroke: cluster.color.stroke,
-                        transition: "d 260ms ease-out",
-                      }}
-                    />
+                {aggregateOverview &&
+                  overviewGraph.edges.map((edge) => (
+                    <g key={edge.id} pointerEvents="none">
+                      <line
+                        x1={edge.a!.x}
+                        y1={edge.a!.y}
+                        x2={edge.b!.x}
+                        y2={edge.b!.y}
+                        className="stroke-primary/40"
+                        strokeWidth={Math.min(8, 1.5 + Math.log2(edge.relationCount + 1))}
+                        strokeDasharray={edge.explicitCount === 0 ? "5 5" : undefined}
+                      />
+                      <text
+                        x={(edge.a!.x + edge.b!.x) / 2}
+                        y={(edge.a!.y + edge.b!.y) / 2 - 7}
+                        textAnchor="middle"
+                        className="fill-muted-foreground text-[11px]"
+                      >
+                        {edge.relationCount} {t("条跨社区关系")}
+                      </text>
+                    </g>
+                  ))}
 
-                    <text
-                      x={cluster.x}
-                      y={cluster.y - cluster.r - 8}
-                      textAnchor="middle"
+                {aggregateOverview &&
+                  overviewGraph.nodes.map((node) => (
+                    <g
+                      key={node.id}
                       role="button"
                       tabIndex={0}
-                      className="cursor-pointer fill-primary text-[11px] font-medium underline-offset-2 hover:underline"
-                      aria-label={`${t("编辑圈层")}：${cluster.name}`}
-                      onClick={() => setTagOpen(cluster.name)}
+                      className="group cursor-pointer outline-none"
+                      aria-label={`${node.label} · ${t("点击展开社区人物")}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setDrill({
+                          mode: "members",
+                          key: node.label,
+                          memberIds: node.memberIds,
+                        });
+                        resetView();
+                      }}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter" && event.key !== " ") return;
                         event.preventDefault();
-                        setTagOpen(cluster.name);
+                        setDrill({
+                          mode: "members",
+                          key: node.label,
+                          memberIds: node.memberIds,
+                        });
+                        resetView();
                       }}
                     >
-                      <title>{t("点击编辑这个圈层")}</title>
+                      <title>{`${node.memberIds.length} ${t("人")} · ${node.internalRelationCount} ${t("条内部关系")} · ${t("点击展开")}`}</title>
+                      <circle
+                        cx={node.x}
+                        cy={node.y}
+                        r={node.r + 7}
+                        style={{ fill: node.color.fill, stroke: node.color.stroke }}
+                        strokeWidth={2}
+                        strokeDasharray={node.isolated ? "5 5" : undefined}
+                      />
+                      <circle
+                        cx={node.x}
+                        cy={node.y}
+                        r={node.r}
+                        style={{ fill: node.color.node }}
+                        className="transition-opacity group-hover:opacity-80 group-focus-visible:stroke-foreground"
+                      />
+                      <text
+                        x={node.x}
+                        y={node.y + 4}
+                        textAnchor="middle"
+                        className="fill-white text-[13px] font-semibold"
+                      >
+                        {node.memberIds.length}
+                      </text>
+                      <text
+                        x={node.x}
+                        y={node.y + node.r + 22}
+                        textAnchor="middle"
+                        className="fill-foreground text-[12px]"
+                      >
+                        {node.label}
+                      </text>
+                    </g>
+                  ))}
 
-                      {cluster.name}
-                    </text>
-                  </g>
-                ))}
+                {!aggregateOverview &&
+                  graph.clusters.map((cluster) => (
+                    <g key={cluster.key}>
+                      <path
+                        d={cluster.path}
+                        pointerEvents="none"
+                        strokeWidth={1}
+                        strokeDasharray="4 4"
+                        style={{
+                          fill: cluster.color.fill,
+                          stroke: cluster.color.stroke,
+                          transition: "d 260ms ease-out",
+                        }}
+                      />
 
-                {relationComposerOpen &&
+                      <text
+                        x={cluster.x}
+                        y={cluster.y - cluster.r - 8}
+                        textAnchor="middle"
+                        role="button"
+                        tabIndex={0}
+                        className="cursor-pointer fill-primary text-[11px] font-medium underline-offset-2 hover:underline"
+                        aria-label={`${t(
+                          groupBy === "circles" ? "只看圈层" : "只看拓扑社区",
+                        )}：${cluster.name}`}
+                        onClick={() =>
+                          setDrill({
+                            mode: "members",
+                            key: cluster.name,
+                            memberIds: graph.nodes
+                              .filter((node) => node.group === cluster.key)
+                              .map((node) => node.id),
+                          })
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          setDrill({
+                            mode: "members",
+                            key: cluster.name,
+                            memberIds: graph.nodes
+                              .filter((node) => node.group === cluster.key)
+                              .map((node) => node.id),
+                          });
+                        }}
+                      >
+                        <title>
+                          {t(groupBy === "circles" ? "点击只看这个圈层" : "点击只看这个拓扑社区")}
+                        </title>
+
+                        {cluster.name}
+                      </text>
+                    </g>
+                  ))}
+
+                {!aggregateOverview &&
+                  relationComposerOpen &&
                   fromId &&
                   toId &&
                   (() => {
@@ -2105,165 +2479,171 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                     );
                   })()}
 
-                {graph.edges.map((edge) => {
-                  const dx = edge.b!.x - edge.a!.x;
-                  const dy = edge.b!.y - edge.a!.y;
-                  const len = Math.hypot(dx, dy) || 1;
-                  const gap = 20;
-                  const ux = dx / len;
-                  const uy = dy / len;
-                  const x1 = edge.a!.x + ux * gap;
-                  const y1 = edge.a!.y + uy * gap;
-                  const x2 = edge.b!.x - ux * gap;
-                  const y2 = edge.b!.y - uy * gap;
-                  // 同一对人的多条关系画成不同弧度的曲线
-                  const cx = (x1 + x2) / 2 + -uy * edge.curve * 2;
-                  const cy = (y1 + y2) / 2 + ux * edge.curve * 2;
-                  const active =
-                    !selectedId || edge.a!.id === selectedId || edge.b!.id === selectedId;
-                  return (
-                    <g
-                      key={edge.id}
-                      role="button"
-                      tabIndex={0}
-                      opacity={relationComposerOpen ? 0.18 : active ? 1 : 0.12}
-                      className="cursor-pointer outline-none"
-                      aria-label={`${t("查看关系详情")}：${edge.a!.name} ${edge.mutual ? "⇄" : "→"} ${edge.b!.name} · ${edge.label}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedRelationId(edge.id);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setSelectedRelationId(edge.id);
-                      }}
-                    >
-                      <title>{`${edge.label} · ${t("点击查看来源、时间与确认状态")}`}</title>
-                      <path
-                        d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
-                        fill="none"
-                        className={
-                          selectedId && active
-                            ? "stroke-primary"
-                            : edge.mutual
-                              ? "stroke-primary/45"
-                              : "stroke-border"
-                        }
-                        strokeWidth={
-                          selectedRelationId === edge.id ? 3 : selectedId && active ? 2 : 1.5
-                        }
-                        strokeDasharray={
-                          edge.evidenceMode === "inferred" || edge.confirmationStatus === "pending"
-                            ? "3 4"
-                            : edge.cross
-                              ? "5 4"
-                              : undefined
-                        }
-                        markerEnd="url(#relation-arrow)"
-                        markerStart={edge.mutual ? "url(#relation-arrow-start)" : undefined}
-                      />
+                {!aggregateOverview &&
+                  graph.edges.map((edge) => {
+                    const dx = edge.b!.x - edge.a!.x;
+                    const dy = edge.b!.y - edge.a!.y;
+                    const len = Math.hypot(dx, dy) || 1;
+                    const gap = 20;
+                    const ux = dx / len;
+                    const uy = dy / len;
+                    const x1 = edge.a!.x + ux * gap;
+                    const y1 = edge.a!.y + uy * gap;
+                    const x2 = edge.b!.x - ux * gap;
+                    const y2 = edge.b!.y - uy * gap;
+                    // 同一对人的多条关系画成不同弧度的曲线
+                    const cx = (x1 + x2) / 2 + -uy * edge.curve * 2;
+                    const cy = (y1 + y2) / 2 + ux * edge.curve * 2;
+                    const active =
+                      !selectedId ||
+                      (graphVisibility.focusNodeIds.has(edge.a!.id) &&
+                        graphVisibility.focusNodeIds.has(edge.b!.id));
+                    return (
+                      <g
+                        key={edge.id}
+                        role="button"
+                        tabIndex={0}
+                        opacity={relationComposerOpen ? 0.18 : active ? 1 : 0.12}
+                        className="cursor-pointer outline-none"
+                        aria-label={`${t("查看关系详情")}：${edge.a!.name} ${edge.mutual ? "⇄" : "→"} ${edge.b!.name} · ${edge.label}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedRelationId(edge.id);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setSelectedRelationId(edge.id);
+                        }}
+                      >
+                        <title>{`${edge.label} · ${t("点击查看来源、时间与确认状态")}`}</title>
+                        <path
+                          d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
+                          fill="none"
+                          className={
+                            selectedId && active
+                              ? "stroke-primary"
+                              : edge.mutual
+                                ? "stroke-primary/45"
+                                : "stroke-border"
+                          }
+                          strokeWidth={
+                            selectedRelationId === edge.id ? 3 : selectedId && active ? 2 : 1.5
+                          }
+                          strokeDasharray={
+                            edge.evidenceMode === "inferred" ||
+                            edge.confirmationStatus === "pending"
+                              ? "3 4"
+                              : edge.cross
+                                ? "5 4"
+                                : undefined
+                          }
+                          markerEnd="url(#relation-arrow)"
+                          markerStart={edge.mutual ? "url(#relation-arrow-start)" : undefined}
+                        />
 
-                      {showEdgeLabels && (
-                        <>
-                          <rect
-                            x={edge.lx - edge.lw / 2}
-                            y={edge.ly - 9}
-                            width={edge.lw}
-                            height={17}
-                            rx={5}
-                            className="fill-background/90"
+                        {(showEdgeLabels ||
+                          selectedRelationId === edge.id ||
+                          (selectedId && active)) && (
+                          <>
+                            <rect
+                              x={edge.lx - edge.lw / 2}
+                              y={edge.ly - 9}
+                              width={edge.lw}
+                              height={17}
+                              rx={5}
+                              className="fill-background/90"
+                            />
+                            <text
+                              x={edge.lx}
+                              y={edge.ly + 3}
+                              textAnchor="middle"
+                              className="fill-muted-foreground text-[11px]"
+                            >
+                              {edge.label}
+                            </text>
+                          </>
+                        )}
+                      </g>
+                    );
+                  })}
+                {!aggregateOverview &&
+                  graph.nodes.map((node) => {
+                    const linked =
+                      relationComposerOpen ||
+                      !selectedId ||
+                      graphVisibility.focusNodeIds.has(node.id);
+                    const isRelationFrom = relationComposerOpen && node.id === fromId;
+                    const isRelationTo = relationComposerOpen && node.id === toId;
+                    const visuallySelected =
+                      node.id === selectedId || isRelationFrom || isRelationTo;
+                    return (
+                      <g
+                        key={node.id}
+                        role="button"
+                        tabIndex={0}
+                        opacity={linked ? 1 : 0.25}
+                        className={cn(
+                          "group outline-none",
+                          relationComposerOpen
+                            ? "cursor-crosshair"
+                            : "cursor-grab active:cursor-grabbing",
+                        )}
+                        onPointerDown={(event) => onNodePointerDown(event, node)}
+                        onPointerMove={onNodePointerMove}
+                        onPointerUp={onNodePointerUp}
+                        onPointerCancel={() => {
+                          dragRef.current = null;
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          activateNode(node.id);
+                        }}
+                      >
+                        <title>{`${node.name} · ${t(
+                          relationComposerOpen
+                            ? "点击选择为关系起点或终点"
+                            : "单击聚焦，拖动可移动，双击开人物卡",
+                        )}`}</title>
+                        <circle cx={node.x} cy={node.y} r={22} className="fill-transparent" />
+                        {(isRelationFrom || isRelationTo) && (
+                          <circle
+                            cx={node.x}
+                            cy={node.y}
+                            r={24}
+                            fill="none"
+                            className="stroke-primary"
+                            strokeWidth={2.5}
+                            strokeDasharray={isRelationFrom ? undefined : "4 3"}
                           />
-                          <text
-                            x={edge.lx}
-                            y={edge.ly + 3}
-                            textAnchor="middle"
-                            className="fill-muted-foreground text-[11px]"
-                          >
-                            {edge.label}
-                          </text>
-                        </>
-                      )}
-                    </g>
-                  );
-                })}
-                {graph.nodes.map((node) => {
-                  const linked =
-                    relationComposerOpen ||
-                    !selectedId ||
-                    graphViewMode === "overview" ||
-                    graphViewMode === "all" ||
-                    graphVisibility.focusNodeIds.has(node.id);
-                  const isRelationFrom = relationComposerOpen && node.id === fromId;
-                  const isRelationTo = relationComposerOpen && node.id === toId;
-                  const visuallySelected = node.id === selectedId || isRelationFrom || isRelationTo;
-                  return (
-                    <g
-                      key={node.id}
-                      role="button"
-                      tabIndex={0}
-                      opacity={linked ? 1 : 0.25}
-                      className={cn(
-                        "group outline-none",
-                        relationComposerOpen
-                          ? "cursor-crosshair"
-                          : "cursor-grab active:cursor-grabbing",
-                      )}
-                      onPointerDown={(event) => onNodePointerDown(event, node)}
-                      onPointerMove={onNodePointerMove}
-                      onPointerUp={onNodePointerUp}
-                      onPointerCancel={() => {
-                        dragRef.current = null;
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        activateNode(node.id);
-                      }}
-                    >
-                      <title>{`${node.name} · ${t(
-                        relationComposerOpen
-                          ? "点击选择为关系起点或终点"
-                          : "单击聚焦，拖动可移动，双击开人物卡",
-                      )}`}</title>
-                      <circle cx={node.x} cy={node.y} r={22} className="fill-transparent" />
-                      {(isRelationFrom || isRelationTo) && (
+                        )}
                         <circle
                           cx={node.x}
                           cy={node.y}
-                          r={24}
-                          fill="none"
-                          className="stroke-primary"
-                          strokeWidth={2.5}
-                          strokeDasharray={isRelationFrom ? undefined : "4 3"}
+                          r={visuallySelected ? 19 : 16}
+                          className={cn(
+                            "transition-opacity group-hover:opacity-80 group-focus-visible:stroke-foreground",
+                            visuallySelected && "stroke-foreground",
+                          )}
+                          style={{ fill: node.color.node }}
+                          strokeWidth={visuallySelected ? 2.5 : 2}
                         />
-                      )}
-                      <circle
-                        cx={node.x}
-                        cy={node.y}
-                        r={visuallySelected ? 19 : 16}
-                        className={cn(
-                          "transition-opacity group-hover:opacity-80 group-focus-visible:stroke-foreground",
-                          visuallySelected && "stroke-foreground",
-                        )}
-                        style={{ fill: node.color.node }}
-                        strokeWidth={visuallySelected ? 2.5 : 2}
-                      />
 
-                      <text
-                        x={node.x}
-                        y={node.y + 34}
-                        textAnchor="middle"
-                        className="fill-foreground text-[12px]"
-                      >
-                        {node.name}
-                      </text>
-                    </g>
-                  );
-                })}
+                        <text
+                          x={node.x}
+                          y={node.y + 34}
+                          textAnchor="middle"
+                          className="fill-foreground text-[12px]"
+                        >
+                          {node.name}
+                        </text>
+                      </g>
+                    );
+                  })}
 
-                {!graph.nodes.length && (
+                {!aggregateOverview && !graph.nodes.length && (
                   <text
                     x={viewSize / 2}
                     y={viewSize / 2}
@@ -2278,101 +2658,124 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
           </div>
 
           {relations.length > 0 && (
-            <ul className="space-y-1.5">
-              {relations.map((relation) => (
-                <li
-                  key={relation.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-xs"
-                >
-                  <span className="flex min-w-0 items-center gap-1.5 truncate">
-                    <span className="truncate">{nameOf(relation.fromId)}</span>
-                    <button
-                      type="button"
-                      title={
-                        isMutualRelation(relation)
-                          ? t("双向关系，点击改为单向")
-                          : t("单向关系，点击改为双向")
-                      }
-                      className="shrink-0 text-primary transition-opacity hover:opacity-70"
-                      onClick={async () => {
-                        await facesDb.putRelation({
-                          ...relation,
-                          mutual: !isMutualRelation(relation),
-                          updatedAt: Date.now(),
-                          confirmationStatus: "confirmed",
-                        });
-                        await refresh();
-                      }}
-                    >
+            <details className="rounded-xl border border-border bg-muted/10">
+              <summary className="cursor-pointer px-3 py-2 text-xs font-medium">
+                {t("完整关系列表")} · {relations.length}
+              </summary>
+              <ul className="max-h-80 space-y-1.5 overflow-y-auto border-t border-border p-2">
+                {relations.map((relation) => (
+                  <li
+                    key={relation.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-xs"
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5 truncate">
+                      <span className="truncate">{nameOf(relation.fromId)}</span>
+                      <span
+                        title={t("方向由关系本体决定；修改关系语义会生成新的事实版本")}
+                        className="shrink-0 text-primary"
+                      >
+                        {isMutualRelation(relation) ? (
+                          <ArrowLeftRight className="size-3.5" aria-hidden="true" />
+                        ) : (
+                          <ArrowRight className="size-3.5" aria-hidden="true" />
+                        )}
+                      </span>
+                      <span className="shrink-0 text-primary">{relation.label}</span>
                       {isMutualRelation(relation) ? (
-                        <ArrowLeftRight className="size-3.5" aria-hidden="true" />
+                        <ArrowLeftRight
+                          className="size-3.5 shrink-0 text-primary"
+                          aria-hidden="true"
+                        />
                       ) : (
-                        <ArrowRight className="size-3.5" aria-hidden="true" />
+                        <ArrowRight className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
                       )}
-                    </button>
-                    <span className="shrink-0 text-primary">{relation.label}</span>
-                    {isMutualRelation(relation) ? (
-                      <ArrowLeftRight
-                        className="size-3.5 shrink-0 text-primary"
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <ArrowRight className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-                    )}
-                    <span className="truncate">{nameOf(relation.toId)}</span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <SourceBadge source={relation.source} />
-                    <span
-                      className={cn(
-                        "rounded-full px-2 py-0.5 text-[10px]",
-                        relation.confirmationStatus === "pending"
-                          ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                          : "bg-primary/10 text-primary",
-                      )}
-                      title={`${t("创建于")} ${new Date(relation.createdAt).toLocaleString()} · ${t("更新于")} ${new Date(relation.updatedAt ?? relation.createdAt).toLocaleString()}`}
-                    >
-                      {relation.confirmationStatus === "pending" ? t("待确认") : t("已确认")}
+                      <span className="truncate">{nameOf(relation.toId)}</span>
                     </span>
-                    {relation.confirmationStatus === "pending" && (
+                    <span className="flex shrink-0 items-center gap-2">
+                      <SourceBadge source={relation.source} />
+                      <span
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px]",
+                          relation.confirmationStatus === "pending"
+                            ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                            : "bg-primary/10 text-primary",
+                        )}
+                        title={`${t("创建于")} ${new Date(relation.createdAt).toLocaleString()} · ${t("更新于")} ${new Date(relation.updatedAt ?? relation.createdAt).toLocaleString()}`}
+                      >
+                        {relation.confirmationStatus === "pending" ? t("待确认") : t("已确认")}
+                      </span>
+                      {relation.confirmationStatus === "pending" && (
+                        <button
+                          type="button"
+                          className="text-primary underline-offset-2 hover:underline"
+                          onClick={async () => {
+                            const assertion = (await facesDb.listRelationAssertions()).find(
+                              (item) => item.id === relation.id,
+                            );
+                            if (!assertion) {
+                              toast.error(t("只能确认事实关系；推导关系由规则自动重算"));
+                              return;
+                            }
+                            await facesDb.putRelationAssertion({
+                              ...assertion,
+                              confirmationStatus: "confirmed",
+                              updatedAt: Date.now(),
+                            });
+                            await refresh();
+                          }}
+                        >
+                          {t("确认")}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="text-primary underline-offset-2 hover:underline"
-                        onClick={async () => {
-                          await facesDb.putRelation({
-                            ...relation,
-                            confirmationStatus: "confirmed",
-                            updatedAt: Date.now(),
-                          });
-                          await refresh();
-                        }}
+                        onClick={() => setSelectedRelationId(relation.id)}
                       >
-                        {t("确认")}
+                        {t("详情")}
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      className="text-primary underline-offset-2 hover:underline"
-                      onClick={() => setSelectedRelationId(relation.id)}
-                    >
-                      {t("详情")}
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={t("删除关系")}
-                      className="text-muted-foreground transition-colors hover:text-destructive"
-                      onClick={async () => {
-                        await facesDb.deleteRelation(relation.id);
-                        if (selectedRelationId === relation.id) setSelectedRelationId(null);
-                        await refresh();
-                      }}
-                    >
-                      <Trash2 className="size-3.5" aria-hidden="true" />
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ul>
+                      {relation.recordType === "derived" ? (
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-primary"
+                          title={t("推导关系不能删除；可隐藏投影或修改支持事实")}
+                          onClick={async () => {
+                            await facesDb.putRelationViewPreference({
+                              id: relation.id,
+                              subjectId: relation.id,
+                              visibility: "hidden",
+                              updatedAt: Date.now(),
+                            });
+                            await refresh();
+                          }}
+                        >
+                          {t("隐藏")}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          aria-label={t("删除事实关系")}
+                          className="text-muted-foreground transition-colors hover:text-destructive"
+                          onClick={async () => {
+                            if (
+                              !window.confirm(
+                                t("删除这条事实关系后，相关推导关系会自动重算。继续吗？"),
+                              )
+                            )
+                              return;
+                            await facesDb.deleteRelationAssertion(relation.id);
+                            if (selectedRelationId === relation.id) setSelectedRelationId(null);
+                            await refresh();
+                          }}
+                        >
+                          <Trash2 className="size-3.5" aria-hidden="true" />
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
           )}
         </TabsContent>
       </Tabs>
@@ -2385,7 +2788,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       />
 
       <TagGroupDialog
-        tag={tagOpen}
+        tag={openCollection?.name ?? null}
         members={tagMembers}
         candidates={tagCandidates}
         onOpenChange={(open) => setTagOpen(open ? tagOpen : null)}

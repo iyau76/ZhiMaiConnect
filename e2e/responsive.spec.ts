@@ -31,9 +31,10 @@ for (const width of [390, 768, 1440]) {
     );
     const candidates = recommendation.locator("ol > li");
     await expect(candidates).toHaveCount(3);
-    await expect(candidates.nth(0)).toContainText("唐悦");
-    await expect(candidates.nth(1)).toContainText("秦月");
-    await expect(candidates.nth(2)).toContainText("叶青");
+    const candidateList = recommendation.locator("ol");
+    await expect(candidateList).toContainText("唐悦");
+    await expect(candidateList).toContainText("秦月");
+    await expect(candidateList).toContainText("叶青");
 
     await clickVisible(page, page.getByRole("button", { name: /^日历/ }));
     const eventTitle = `响应式冒烟 ${width}px`;

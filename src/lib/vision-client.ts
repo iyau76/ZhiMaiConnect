@@ -1,6 +1,8 @@
 import { assertVision, type ChatTurn, type ProviderPreset } from "./vision-providers";
 import { confirmCloudTransfer, type CloudDataType } from "./cloud-consent";
 import { apiSessionHeaders } from "./api-session";
+import { assertVisionPromptFits, fitVisionHistory } from "./ai-request-contract";
+import { ModelTransportError } from "./model-transport-resilience";
 
 function stripDataUrl(dataUrl: string) {
   const idx = dataUrl.indexOf(",");
@@ -14,6 +16,8 @@ async function streamOllama(
   history: ChatTurn[],
   onChunk: (text: string) => void,
   signal: AbortSignal,
+  maxOutputTokens?: number,
+  temperature?: number,
 ) {
   const base = preset.baseUrl.replace(/\/+$/, "");
   const messages = [
@@ -28,12 +32,27 @@ async function streamOllama(
   const response = await fetch(`${base}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: preset.model, messages, stream: true }),
+    body: JSON.stringify({
+      model: preset.model,
+      messages,
+      stream: true,
+      ...(maxOutputTokens || temperature !== undefined
+        ? {
+            options: {
+              ...(maxOutputTokens ? { num_predict: maxOutputTokens } : {}),
+              ...(temperature !== undefined ? { temperature } : {}),
+            },
+          }
+        : {}),
+    }),
     signal,
   });
 
   if (!response.ok) {
-    throw new Error(`Ollama 返回 ${response.status}：${(await response.text()).slice(0, 300)}`);
+    throw new ModelTransportError(
+      `Ollama 返回 ${response.status}：${(await response.text()).slice(0, 300)}`,
+      response.status,
+    );
   }
   if (!response.body) throw new Error("Ollama 没有返回内容");
 
@@ -66,10 +85,16 @@ async function streamServer(
   history: ChatTurn[],
   onChunk: (text: string) => void,
   signal: AbortSignal,
+  maxOutputTokens?: number,
+  temperature?: number,
 ) {
+  const clientRequestId = crypto.randomUUID();
   const response = await fetch("/api/vision", {
     method: "POST",
-    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
+    headers: await apiSessionHeaders({
+      "Content-Type": "application/json",
+      "X-Zhimai-Client-Request": clientRequestId,
+    }),
     signal,
     body: JSON.stringify({
       action: "chat",
@@ -80,27 +105,120 @@ async function streamServer(
       prompt,
       image,
       history,
+      maxOutputTokens,
+      temperature,
     }),
   });
 
   if (!response.ok) {
     let message = `请求失败（${response.status}）`;
+    let code: string | undefined;
+    let upstreamStatus: number | undefined;
+    let providerCode: string | undefined;
+    let providerType: string | undefined;
+    let upstreamRequestId: string | undefined;
     try {
-      const json = (await response.json()) as { error?: string };
+      const json = (await response.json()) as {
+        error?: string;
+        code?: string;
+        upstreamStatus?: number;
+        providerCode?: string;
+        providerType?: string;
+        upstreamRequestId?: string;
+      };
       if (json.error) message = json.error;
+      code = json.code;
+      upstreamStatus = json.upstreamStatus;
+      providerCode = json.providerCode;
+      providerType = json.providerType;
+      upstreamRequestId = json.upstreamRequestId;
     } catch {
       /* 保留默认信息 */
     }
-    throw new Error(message);
+    const edgeRequestId = response.headers.get("cf-ray") ?? undefined;
+    const diagnosticText = [
+      `client=${clientRequestId}`,
+      edgeRequestId ? `edge=${edgeRequestId}` : "",
+      upstreamStatus ? `upstream=${upstreamStatus}` : "",
+      providerCode ? `provider=${providerCode}` : "",
+      upstreamRequestId ? `upstream-request=${upstreamRequestId}` : "",
+    ]
+      .filter(Boolean)
+      .join("；");
+    throw new ModelTransportError(`${message}（${diagnosticText}）`, response.status, code, {
+      clientRequestId,
+      edgeRequestId,
+      upstreamRequestId,
+      upstreamStatus,
+      providerCode,
+      providerType,
+    });
   }
   if (!response.body) throw new Error("接口没有返回内容");
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    onChunk(decoder.decode(value, { stream: true }));
+  const isSse = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream");
+  let buffer = "";
+  let emitted = false;
+  const emit = (value: string) => {
+    if (!value) return;
+    emitted = true;
+    onChunk(value);
+  };
+  const consumeSseLines = (text: string, flush = false) => {
+    buffer += text;
+    const lines = buffer.split(/\r?\n/);
+    buffer = flush ? "" : (lines.pop() ?? "");
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      try {
+        const payload = JSON.parse(data) as {
+          error?: { message?: unknown; code?: unknown };
+          choices?: Array<{ delta?: { content?: unknown } }>;
+        };
+        if (payload.error) {
+          throw new ModelTransportError(
+            typeof payload.error.message === "string"
+              ? payload.error.message
+              : "上游 AI 返回流式错误",
+            502,
+            typeof payload.error.code === "string" ? payload.error.code : "UPSTREAM_STREAM_ERROR",
+          );
+        }
+        const delta = payload.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta) emit(delta);
+      } catch (error) {
+        if (error instanceof ModelTransportError) throw error;
+        // SSE comments, heartbeats and provider metadata do not contain answer text.
+      }
+    }
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      if (isSse) consumeSseLines(text);
+      else emit(text);
+    }
+    const tail = decoder.decode();
+    if (isSse) consumeSseLines(tail, true);
+    else if (tail) emit(tail);
+    if (!emitted) {
+      throw new ModelTransportError(
+        "上游 AI 未返回可用的流式内容",
+        502,
+        "UPSTREAM_INVALID_RESPONSE",
+      );
+    }
+  } catch (error) {
+    if (signal.aborted) throw error;
+    if (error instanceof ModelTransportError) throw error;
+    throw new ModelTransportError("上游 AI 流式响应中断", 502, "STREAM_INTERRUPTED");
   }
 }
 
@@ -124,18 +242,43 @@ export async function askModel(
   history: ChatTurn[],
   onChunk: (text: string) => void,
   signal: AbortSignal,
+  options: { maxOutputTokens?: number; temperature?: number } = {},
 ) {
   assertConfigured(preset);
+  const fittedHistory = fitVisionHistory(history);
+  const effectivePrompt = fittedHistory.summary
+    ? `${prompt}\n\n对话历史压缩说明：${fittedHistory.summary}`
+    : prompt;
+  assertVisionPromptFits(effectivePrompt);
+  const boundedHistory = fittedHistory.turns;
   // 有图就必须是验证过的多模态模型，避免拿纯文本模型瞎分析
-  if (image || history.some((turn) => turn.image)) assertVision(preset);
+  if (image || boundedHistory.some((turn) => turn.image)) assertVision(preset);
   if (preset.kind === "ollama") {
-    return streamOllama(preset, prompt, image, history, onChunk, signal);
+    return streamOllama(
+      preset,
+      effectivePrompt,
+      image,
+      boundedHistory,
+      onChunk,
+      signal,
+      options.maxOutputTokens,
+      options.temperature,
+    );
   }
   const dataTypes: CloudDataType[] = ["文字内容"];
   if (/人物档案|人物关系|人脉库|关系网/.test(prompt)) dataTypes.push("人物关系上下文");
-  if (image || history.some((turn) => turn.image)) dataTypes.push("图片");
+  if (image || boundedHistory.some((turn) => turn.image)) dataTypes.push("图片");
   confirmCloudTransfer(preset, dataTypes);
-  return streamServer(preset, prompt, image, history, onChunk, signal);
+  return streamServer(
+    preset,
+    effectivePrompt,
+    image,
+    boundedHistory,
+    onChunk,
+    signal,
+    options.maxOutputTokens,
+    options.temperature,
+  );
 }
 
 export async function testConnection(preset: ProviderPreset) {

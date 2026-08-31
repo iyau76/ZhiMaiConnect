@@ -29,8 +29,18 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { makeSource } from "@/lib/provenance";
+import {
+  applyPersonDeletionPlan,
+  personDeletionImpactText,
+  previewPersonDeletion,
+} from "@/lib/person-deletion";
 import { facesDb, type PersonRecord, type SightingRecord } from "@/lib/face-db";
 import { detectFaces, findMatch, loadFaceEngine, type DetectedFace } from "@/lib/face-engine";
+import {
+  faceEngineFailurePolicy,
+  shouldAttemptFaceEngineLoad,
+  type FaceEngineTrigger,
+} from "@/lib/face-engine-session";
 import { askModel, captureFrame } from "@/lib/vision-client";
 import type { ProviderPreset } from "@/lib/vision-providers";
 import { cn } from "@/lib/utils";
@@ -75,9 +85,12 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
 
   const peopleRef = useRef<PersonRecord[]>([]);
   const thresholdRef = useRef(threshold);
+  const autoRef = useRef(auto);
+  const engineFailureReportedRef = useRef(false);
 
   peopleRef.current = people;
   thresholdRef.current = threshold;
+  autoRef.current = auto;
 
   const refresh = useCallback(async () => {
     const [nextPeople, nextSightings] = await Promise.all([
@@ -92,20 +105,31 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
     void refresh();
   }, [refresh]);
 
-  const prepare = useCallback(async () => {
-    if (engineState === "ready") return true;
-    setEngineState("loading");
-    try {
-      await loadFaceEngine(setEngineNote);
-      setEngineState("ready");
-      return true;
-    } catch (error) {
-      setEngineState("error");
-      setEngineNote((error as Error).message);
-      toast.error(t("人脸模型加载失败，请检查网络后重试"));
-      return false;
-    }
-  }, [engineState]);
+  const prepare = useCallback(
+    async (trigger: FaceEngineTrigger) => {
+      if (engineState === "ready") return true;
+      if (!shouldAttemptFaceEngineLoad(engineState, trigger)) return false;
+      setEngineState("loading");
+      try {
+        await loadFaceEngine(setEngineNote);
+        setEngineState("ready");
+        engineFailureReportedRef.current = false;
+        return true;
+      } catch (error) {
+        setEngineState("error");
+        setEngineNote((error as Error).message);
+        const policy = faceEngineFailurePolicy({
+          autoEnabled: autoRef.current,
+          failureAlreadyReported: engineFailureReportedRef.current,
+        });
+        if (policy.disableAuto) setAuto(false);
+        if (policy.notify) toast.error(t("人脸模型加载失败，请检查网络后重试"));
+        engineFailureReportedRef.current = true;
+        return false;
+      }
+    },
+    [engineState],
+  );
 
   /** 对一张图（摄像头帧或上传的合照）做多张人脸检测 + 库内比对 */
   const analyzeFrame = useCallback(
@@ -150,27 +174,30 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
     [host, refresh],
   );
 
-  const scan = useCallback(async () => {
-    if (busyRef.current) return;
-    if (!host) {
-      setAuto(false);
-      toast.error(t("请先在上面填写摄像头地址"));
-      return;
-    }
-    busyRef.current = true;
-    setScanning(true);
-    try {
-      if (!(await prepare())) return;
-      const frame = await captureFrame(normalizeHost(host));
-      await analyzeFrame(frame, "camera");
-    } catch (error) {
-      setAuto(false);
-      toast.error(`${t("识别失败")}：${(error as Error).message}`);
-    } finally {
-      busyRef.current = false;
-      setScanning(false);
-    }
-  }, [analyzeFrame, host, prepare]);
+  const scan = useCallback(
+    async (trigger: FaceEngineTrigger = "manual") => {
+      if (busyRef.current) return;
+      if (!host) {
+        setAuto(false);
+        toast.error(t("请先在上面填写摄像头地址"));
+        return;
+      }
+      busyRef.current = true;
+      setScanning(true);
+      try {
+        if (!(await prepare(trigger))) return;
+        const frame = await captureFrame(normalizeHost(host));
+        await analyzeFrame(frame, "camera");
+      } catch (error) {
+        setAuto(false);
+        toast.error(`${t("识别失败")}：${(error as Error).message}`);
+      } finally {
+        busyRef.current = false;
+        setScanning(false);
+      }
+    },
+    [analyzeFrame, host, prepare],
+  );
 
   /** 上传一张合照，识别里面所有人脸 */
   const pickPhoto = useCallback(
@@ -180,7 +207,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
       busyRef.current = true;
       setScanning(true);
       try {
-        if (!(await prepare())) return;
+        if (!(await prepare("manual"))) return;
         const frame = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(String(reader.result));
@@ -213,7 +240,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
 
   useEffect(() => {
     if (!auto) return;
-    const timer = window.setInterval(() => void scan(), 1500);
+    const timer = window.setInterval(() => void scan("auto"), 1500);
     return () => window.clearInterval(timer);
   }, [auto, scan]);
 
@@ -256,6 +283,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
       return;
     }
     const byName = new Map(people.map((person) => [person.name, person]));
+    const recordsById = new Map<string, PersonRecord>();
     const done: Record<number, { id: string; name: string }> = {};
     for (const item of pending) {
       const existing = byName.get(item.name);
@@ -270,10 +298,11 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
             createdAt: Date.now(),
             source: makeSource("manual", t("合照识别")),
           };
-      await facesDb.putPerson(record);
+      recordsById.set(record.id, record);
       byName.set(item.name, record);
       done[item.index] = { id: record.id, name: record.name };
     }
+    await facesDb.putPersons([...recordsById.values()]);
     await refresh();
     setFaces((prev) =>
       prev.map((item, i) => (done[i] ? { ...item, ...done[i], distance: 0 } : item)),
@@ -282,9 +311,15 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
   };
 
   const removePerson = async (person: PersonRecord) => {
-    await facesDb.deletePerson(person.id);
-    await refresh();
-    toast.success(`${t("已删除")}：${person.name}`);
+    try {
+      const preview = await previewPersonDeletion(person.id);
+      if (!window.confirm(`${personDeletionImpactText(preview.impact)}\n\n确认执行吗？`)) return;
+      await applyPersonDeletionPlan(preview.plan);
+      await refresh();
+      toast.success(`${t("已删除")}：${person.name}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("删除失败"));
+    }
   };
 
   const summarize = async () => {
@@ -499,6 +534,10 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
                     toast.error(t("请先在上面填写摄像头地址"));
                     setAuto(false);
                     return;
+                  }
+                  if (checked && engineState === "error") {
+                    engineFailureReportedRef.current = false;
+                    setEngineState("idle");
                   }
                   setAuto(checked);
                 }}
@@ -746,7 +785,7 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
               size="sm"
               disabled={selectedIds.length === 0}
               onClick={async () => {
-                for (const id of selectedIds) await facesDb.deleteSighting(id);
+                await facesDb.deleteSightings(selectedIds);
                 setSelectedIds([]);
                 await refresh();
                 toast.success(t("已删除所选记录"));

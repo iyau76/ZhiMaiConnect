@@ -39,4 +39,11 @@ describe("isMutualRelation", () => {
     expect(isMutualRelation({ label: "朋友" })).toBe(true);
     expect(isMutualRelation({ label: "直属上司" })).toBe(false);
   });
+
+  it("uses the canonical predicate instead of a misleading display label", () => {
+    expect(isMutualRelation({ label: "暗恋对象", predicate: "has_crush_on", mutual: true })).toBe(
+      false,
+    );
+    expect(isMutualRelation({ label: "自定义双向", predicate: "custom", mutual: true })).toBe(true);
+  });
 });

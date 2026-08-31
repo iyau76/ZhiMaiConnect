@@ -220,12 +220,18 @@ const EN: Record<string, string> = {
   清除本地录入材料: "Clear local intake material",
   "每个顶层草稿条目都要接受或拒绝；编辑已接受条目后会重新变为待确认。":
     "Accept or reject every top-level draft item. Editing an accepted item returns it to pending review.",
+  "待确认是软提醒；可逐条接受，也可直接入库，AI 内容会保留待核验标记。":
+    "Pending review is advisory: accept items individually or save directly; AI content keeps a needs-review marker.",
+  "条 AI 内容已带待核验标记": "AI-generated items were saved with a needs-review marker",
+  条关系缺少依据并保持待确认: "relationships have no source basis and remain pending",
   批量接受低风险高置信事件: "Batch-accept low-risk, high-confidence events",
-  一键接受全部待确认: "Accept all pending items",
-  "确定接受全部待确认条目吗？请先核对 AI 推断值和人物身份。":
-    "Accept every pending item? Review AI-inferred values and person identities first.",
-  "已接受全部待确认条目；确认入库前仍会检查人物身份和日期格式":
-    "All pending items accepted; person identity and date validation still run before saving.",
+  一键接受已对齐项: "Accept all aligned items",
+  "确定批量接受已对齐条目吗？证据未对齐的关系会保留待确认，可单独接受。":
+    "Accept all source-aligned items? Relations whose evidence is not aligned will remain pending and can be accepted individually.",
+  已接受来源对齐的待确认条目: "Accepted the source-aligned pending items",
+  "条证据未对齐关系仍待确认，可逐条查看或接受":
+    "source-unaligned relations remain pending; review or accept them individually",
+  已接受全部来源对齐的待确认条目: "Accepted all source-aligned pending items",
   "已批量接受未编辑、日期有效的高置信度本地事件；其余顶层条目仍需逐条确认":
     "Accepted unedited, high-confidence local events with valid dates; every other top-level item still requires individual review",
   已拦截缺少原文证据的敏感值: "Blocked sensitive values without source evidence",
@@ -250,6 +256,11 @@ const EN: Record<string, string> = {
   "忌口 / 不喜欢（用逗号分隔）": "Dislikes (comma-separated)",
   "送礼记录（用逗号分隔）": "Gifts given (comma-separated)",
   相识场景: "How you met",
+  年份: "Year",
+  事件年份: "Event year",
+  事件月份: "Event month",
+  原始时间表述: "Original time phrase",
+  "原始时间表述，如：去年夏天": "Original time phrase, e.g. last summer",
   "亲密度（未填写）": "Closeness (not set)",
   平台账号: "Platform account",
   仍有待确认条目: "Items still pending review",
@@ -476,7 +487,17 @@ const EN: Record<string, string> = {
   关系类型筛选: "Relationship type filter",
   全部关系: "All relationships",
   显示边标签: "Show edge labels",
+  分组布局: "Grouping layout",
+  按圈层布局: "Group by circles",
+  按拓扑社区布局: "Group by topology communities",
+  未分圈层: "No confirmed circle",
   圈层图例: "Circle legend",
+  拓扑社区图例: "Topology community legend",
+  "圈层布局（仅使用已确认成员关系）": "Circle layout (confirmed memberships only)",
+  "拓扑社区（Louvain 自动计算，不写入档案）":
+    "Topology communities (computed with Louvain; never saved as archive facts)",
+  只看拓扑社区: "Show only topology community",
+  点击只看这个拓扑社区: "Show only this topology community",
   最近共同事件: "Recent shared events",
   身份与昵称历史: "Identity and alias history",
   "保留平台账号、曾用昵称和生效时间，改名不会覆盖旧身份。":
@@ -804,10 +825,13 @@ const EN: Record<string, string> = {
   探案: "Assist",
   走访顺序与询问提纲: "Interview order & question sheets",
   "资料整理 · 关系梳理": "Material intake · Relationship mapping",
+  "人物档案默认只存在本机；使用云端 AI 时，仅发送当前任务所需内容，提交前请确认。AI 结论需人工复核。":
+    "Profiles stay in this browser by default. Cloud AI receives only the data needed for the current task. Review before submitting and verify AI output.",
   "所有资料只存在本机浏览器，AI 结论仅供参考，需人工复核。":
     "Everything stays in this browser. AI output is advisory and must be reviewed by a human.",
   "摄像头取景（可选）": "Camera view (optional)",
   "随手写下，": "Write it down,",
+  自动成册: "filed automatically",
   自动成档: "filed automatically",
   想好下一步: "Decide who to",
   找谁: "approach next",
@@ -822,6 +846,18 @@ const EN: Record<string, string> = {
   "例：张伟，38 岁，市政务服务中心企业开办窗口副科长，办公电话 0571-8888…，常驻政务大厅三楼。他向中心副主任李强汇报，3 月起牵头「一件事一次办」专班，对接恒通建材等 6 家重点企业。":
     "e.g. Zhang Wei, 38, deputy section chief of the business-registration desk at the municipal service centre, office line 0571-8888..., based on the 3rd floor of the service hall. He reports to deputy director Li Qiang and has led the one-stop reform task force since March, liaising with six key firms including Hengtong Materials.",
   "AI 整理成档案": "Organise with AI",
+  "导入图片 / PDF / Word / 文本": "Import image / PDF / Word / text",
+  离线演示草稿: "Offline demo draft",
+  "允许 AI 按需读取已有档案，以识别人物或事件更新":
+    "Allow AI to read existing profiles as needed to recognise profile or event updates",
+  "支持 JPG/PNG 等图片、PDF、DOCX、TXT、MD、CSV、JSON；一次最多":
+    "Supports JPG/PNG images, PDF, DOCX, TXT, MD, CSV and JSON; up to",
+  "个，单个不超过": "files, each up to",
+  最多读取: "reads up to",
+  "页，每个文件最多提取": "pages; extracts up to",
+  "个字符。也可以 Ctrl/⌘+V 粘贴。": "characters per file. You can also paste with Ctrl/⌘+V.",
+  "录音会在停止后发送到当前转写服务；转写文字只会追加到输入框，不会自动整理或入库。":
+    "After recording stops, audio is sent to the selected transcription service. The transcript is only appended to the input and is never organised or saved automatically.",
   丢弃草稿: "Discard draft",
   "先把知道的情况写下来，怎么写都行": "Write down what you know first — any form is fine",
   已整理成档案草稿: "Draft profiles ready",
@@ -853,6 +889,24 @@ const EN: Record<string, string> = {
   "聚焦：一跳关系": "Focus: one hop",
   "聚焦：两跳关系": "Focus: two hops",
   "全部：包含常隐": "All: include hidden",
+  档案页: "Profile view",
+  "填名字就能建人，先建人再连关系。":
+    "Enter a name to create a profile, then connect it to other people.",
+  "点一行可以打开人物卡补职位、部门等资料。":
+    "Open a profile to add a role, organisation and other details.",
+  "自然语言、文件、截图和语音请走统一录入草稿；确认身份、字段 Diff 与来源后才会写入。":
+    "Send natural language, files, screenshots and audio through the unified intake draft; data is saved only after identity, field changes and sources are reviewed.",
+  前往安全录入: "Open intake",
+  我的集合: "My collections",
+  "集合可以重叠，只用于筛选和整理，不决定图上的空间位置。":
+    "Collections may overlap. They filter and organise people without controlling graph positions.",
+  显示全部人物: "Show all people",
+  管理: "Manage",
+  管理圈层: "Manage collection",
+  新集合名称: "New collection name",
+  新建集合: "Create collection",
+  "高亮：一跳": "Highlight: one hop",
+  "高亮：两跳": "Highlight: two hops",
   关系类别筛选: "Filter relationship category",
   全部类别: "All categories",
   血亲关系: "Blood family",
@@ -1062,6 +1116,48 @@ const EN: Record<string, string> = {
     "Custom endpoints require an API key or will return 401.",
   "可以带上人物和关系数据，直接问 AI 该怎么处理某段关系。":
     "You can include profile and relationship data when asking AI for advice.",
+  "Agent 控制中心": "Agent control centre",
+  最多: "up to",
+  轮: "rounds",
+  档案写入授权: "Archive write approval",
+  "谨慎 · 每份签字": "Cautious · approve each",
+  "标准 · 汇总签字": "Standard · approve summary",
+  "全权 · 自动提交": "Full · auto-commit",
+  "授权只改变签字时机；全权模式会自动提交非删除提案。校验、原子事务、收据和撤销始终生效，删除人物始终单独确认。":
+    "Approval mode only changes when you sign off. Full mode auto-commits non-delete proposals; validation, atomic transactions, receipts and undo always apply, and deleting a person always needs separate approval.",
+  预算上限: "Budget limits",
+  已保存: "Saved",
+  已自动保存: "Auto-saved",
+  保存失败: "Save failed",
+  轮次: "Rounds",
+  工具调用: "Tool calls",
+  "输入 token": "Input tokens",
+  "输出 token": "Output tokens",
+  "总时限 ms": "Total time ms",
+  "修改任一字段会切换为 custom 并立即保存。":
+    "Changing any field switches to custom and saves immediately.",
+  "最近运行（最多 50 次 / 30 天）": "Recent runs (up to 50 / 30 days)",
+  清除日志: "Clear logs",
+  "保存档案正文（敏感）": "Save archive payloads (sensitive)",
+  "默认只保存轮次、工具名、耗时和 token；启用后才保存已脱敏的提示词与工具输入输出。":
+    "By default, only rounds, tool names, duration and token counts are saved. Enable this to retain redacted prompts and tool input/output.",
+  还没有持久化运行日志: "No persisted run logs yet",
+  竞赛演示数据: "Competition demo data",
+  "一键载入 50 位虚构人物、80 条关系及配套事件。所有邮箱使用 example.invalid，界面和来源均标注为合成数据，不对应真实个人。":
+    "Load 50 fictional people, 80 relationships and matching events. Email addresses use example.invalid, and every record is marked synthetic rather than representing a real person.",
+  当前已载入: "Currently loaded",
+  一键载入重置合成数据: "Load / reset synthetic data",
+  "一键载入/重置合成数据": "Load / reset synthetic data",
+  只清除合成数据: "Clear synthetic data only",
+  "只会删除带“合成演示数据”标识的记录，不影响你自己录入的资料。继续？":
+    "Only records marked as synthetic demo data will be removed. Your own data is not affected. Continue?",
+  演示前自检: "Preflight check",
+  "只做本地只读检查，不发送人物资料，也不会主动申请麦克风权限。":
+    "Runs local read-only checks without sending profile data or requesting microphone access.",
+  运行自检: "Run checks",
+  教师节: "Teachers’ Day",
+  中秋节: "Mid-Autumn Festival",
+  国庆节: "National Day",
   中文: "中文",
   English: "English",
 };

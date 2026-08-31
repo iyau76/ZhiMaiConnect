@@ -7,7 +7,14 @@ import { Input } from "@/components/ui/input";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { facesDb, type EvidenceKind, type EvidenceRecord, type PersonRecord } from "@/lib/face-db";
+import {
+  facesDb,
+  type EvidenceKind,
+  type EvidenceRecord,
+  type PersonRecord,
+  type RelationAssertionRecord,
+  type RelationEvidenceLinkRecord,
+} from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
 import { SPEECH_VARIANTS } from "@/lib/dialects";
 import { makeSource } from "@/lib/provenance";
@@ -15,7 +22,7 @@ import { SourceBadge } from "@/components/source-badge";
 import { VoiceprintPanel } from "@/components/voiceprint-panel";
 import { startRecording, transcribeAudio, type Recorder, type SttLang } from "@/lib/audio-client";
 import { askModel } from "@/lib/vision-client";
-import { inferMutual } from "@/lib/relation-kind";
+import { inferRelationSemantics } from "@/lib/relation-ontology";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 interface Props {
@@ -212,6 +219,7 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
 
       const current = await facesDb.listPersons();
       const byName = new Map(current.map((person) => [person.name, person]));
+      const pendingPeople = new Map<string, PersonRecord>();
       const linked: string[] = [];
       let created = 0;
 
@@ -221,10 +229,13 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
         const exist = byName.get(name);
         if (exist) {
           if (item.note && !exist.note.includes(item.note)) {
-            await facesDb.putPerson({
+            const updated = {
               ...exist,
               note: [exist.note, item.note].filter(Boolean).join("；"),
-            });
+              updatedAt: Date.now(),
+            };
+            pendingPeople.set(updated.id, updated);
+            byName.set(name, updated);
           }
           linked.push(exist.id);
           continue;
@@ -239,36 +250,63 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
           createdAt: Date.now(),
           source: makeSource("ai", record.title, record.id),
         };
-        await facesDb.putPerson(person);
+        pendingPeople.set(person.id, person);
         byName.set(name, person);
         linked.push(person.id);
         created += 1;
       }
 
       let links = 0;
+      const pendingAssertions: RelationAssertionRecord[] = [];
+      const pendingEvidenceLinks: RelationEvidenceLinkRecord[] = [];
       for (const item of parsed.relations ?? []) {
         const a = byName.get((item.from ?? "").trim());
         const b = byName.get((item.to ?? "").trim());
         if (!a || !b || a.id === b.id) continue;
-        await facesDb.putRelation({
+        const label = (item.label ?? "").trim() || t("认识");
+        const semantics = inferRelationSemantics(label);
+        const now = Date.now();
+        const assertion: RelationAssertionRecord = {
           id: crypto.randomUUID(),
+          recordType: "assertion",
           fromId: a.id,
           toId: b.id,
-          label: (item.label ?? "").trim() || t("认识"),
-          mutual: inferMutual((item.label ?? "").trim()),
+          predicate: semantics.predicate,
+          qualifiers: semantics.qualifiers,
+          label,
+          direction: semantics.predicate === "custom" ? "directed" : "ontology",
           note: record.title,
-          sourceId: record.id,
-          createdAt: Date.now(),
+          evidence: {
+            mode: "source_claim",
+            basis: `原文材料：${record.title}`,
+            sourceIds: [record.id],
+          },
+          validity: {
+            status:
+              semantics.qualifiers.temporalStatus === "former"
+                ? "ended"
+                : semantics.qualifiers.temporalStatus === "current"
+                  ? "active"
+                  : "unknown",
+            validFrom: semantics.qualifiers.validFrom,
+            validTo: semantics.qualifiers.validTo,
+          },
+          createdAt: now,
+          updatedAt: now,
           confirmationStatus: "pending",
-          evidenceMode: "explicit",
-          visibility: "auto",
-          recommendationPolicy: "allow",
           source: makeSource("ai", record.title, record.id),
+        };
+        pendingAssertions.push(assertion);
+        pendingEvidenceLinks.push({
+          id: `${assertion.id}\u0000${record.id}`,
+          assertionId: assertion.id,
+          evidenceId: record.id,
+          createdAt: now,
         });
         links += 1;
       }
 
-      await facesDb.putEvidence({
+      const updatedEvidence: EvidenceRecord = {
         ...record,
         entities: (parsed.entities ?? [])
           .map((entity) => ({ type: entity.type ?? "", value: entity.value ?? "" }))
@@ -276,6 +314,12 @@ export function CasefilePanel({ preset, audioPreset }: Props) {
         linkedPersonIds: linked,
         origin: record.origin,
         text: parsed.summary ? record.text : record.text,
+      };
+      await facesDb.putRelationshipBatch({
+        persons: [...pendingPeople.values()],
+        assertions: pendingAssertions,
+        evidenceLinks: pendingEvidenceLinks,
+        evidence: [updatedEvidence],
       });
       await refresh();
       toast.success(`${t("新建档案")} ${created} · ${t("新增关系")} ${links}`);

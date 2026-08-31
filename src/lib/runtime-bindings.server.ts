@@ -6,6 +6,8 @@ export type ZhimaiRuntimeBindings = {
   ZHIMAI_TRANSCRIBE_LIMITER?: DistributedRateLimiter;
   ZHIMAI_VISION_LIMITER?: DistributedRateLimiter;
   ZHIMAI_WEB_TOOLS_LIMITER?: DistributedRateLimiter;
+  /** Secret salt used only to pseudonymise edge client identifiers in limiter keys. */
+  ZHIMAI_RATE_LIMIT_SALT?: string;
 };
 
 let runtimeBindings: ZhimaiRuntimeBindings = {};

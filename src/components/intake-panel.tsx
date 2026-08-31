@@ -19,6 +19,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { DraftGraph } from "@/components/draft-graph";
+import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { Button } from "@/components/ui/button";
 
@@ -26,19 +27,26 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { startRecording, transcribeAudio, type Recorder } from "@/lib/audio-client";
+import { AGENT_PROMPT_MAX_CHARACTERS } from "@/lib/ai-request-contract";
 import { IMPORT_LIMITS, importFiles } from "@/lib/doc-import";
 import { claimIntakeJob, getIntakeJob, startIntakeJob, subscribeIntakeJob } from "@/lib/intake-job";
 import {
   facesDb,
+  type CollectionMembershipRecord,
+  type CollectionRecord,
   type EvidenceRecord,
   type LifeEventRecord,
   type PersonRecord,
+  type RelationAssertionRecord,
+  type RelationEvidenceLinkRecord,
   type RelationRecord,
   type ReminderRecord,
 } from "@/lib/face-db";
 import { matchIdentity } from "@/lib/identity-match";
+import { parseFuzzyLocal } from "@/lib/fuzzy-date";
 import { getLang, t } from "@/lib/i18n";
-import { carryManualState } from "@/lib/intake-manual-state";
+import { isSelfReference, SELF_PERSON_ID } from "@/lib/person-identity";
+import { ensureIntakeWorkspace, intakeWorkspaceView } from "@/lib/intake-workspace";
 import {
   enforceSensitiveFieldGrounding,
   isSensitivePersonField,
@@ -72,12 +80,7 @@ import {
   undoLatestIntakeBatch,
   type IntakeUndoBatch,
 } from "@/lib/intake-undo";
-import { inferMutual } from "@/lib/relation-kind";
-import {
-  findRelationDependencies,
-  normalizeRelationSemanticKind,
-  relationSemanticKey,
-} from "@/lib/relation-semantics";
+import { resolveRelationSemanticsForPeople } from "@/lib/relation-ontology";
 import {
   isInferredRelationBasis,
   KINSHIP_RULES_EN,
@@ -86,10 +89,9 @@ import {
 } from "@/lib/kinship-rules";
 import { makeSource } from "@/lib/provenance";
 import { cn } from "@/lib/utils";
-import { runIntakeAgent } from "@/lib/intake-agent";
+import { runIntakeAgent, type IntakePromptSections } from "@/lib/intake-agent";
+import type { AgentRun } from "@/lib/agent-run-log";
 import type { ProviderPreset } from "@/lib/vision-providers";
-
-const SELF_PERSON_ID = "zhimai:self";
 
 /** 一个人物档案里希望齐全的字段 */
 const REQUIRED: Array<{ key: keyof DraftPerson; zh: string; en: string }> = [
@@ -107,7 +109,7 @@ function missingOf(person: DraftPerson) {
   });
 }
 
-const SCHEMA = `{"people":[{"name":"","note":"","age":"","gender":"","relation":"","birthday":"","circle":"","closeness":null,"likes":[],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[{"platform":"","account":"","alias":"","validFrom":"","validTo":""}],"confidence":null}],"facts":[{"person":"","key":"","value":"","validFrom":"","validTo":"","confidence":null}],"relations":[{"from":"","to":"","label":"","note":"","basis":"","confidence":null}],"events":[{"title":"","detail":"","date":"","dateEnd":"","precision":"day|month|year|range","place":"","people":[],"kind":"","confidence":null}],"reminders":[{"title":"","detail":"","due":"","people":[],"kind":"birthday|festival|gift|custom","confidence":null}],"evidence":[{"kind":"note|audio|exhibit|frame","title":"","text":"","origin":"","confidence":null}],"summary":""}`;
+const SCHEMA = `{"people":[{"name":"","note":"","age":"","gender":"","relation":"","birthday":"","circle":"","closeness":null,"likes":[],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[{"platform":"","account":"","alias":"","validFrom":"","validTo":""}],"confidence":null}],"facts":[{"person":"","key":"","value":"","validFrom":"","validTo":"","confidence":null}],"relations":[{"from":"","to":"","label":"","note":"","basis":"","confidence":null}],"events":[{"title":"","detail":"","timeText":"原文时间短语","date":"","dateEnd":"","precision":"day|month|year|range","place":"","people":[],"kind":"","confidence":null}],"reminders":[{"title":"","detail":"","due":"","people":[],"kind":"birthday|festival|gift|custom","confidence":null}],"evidence":[{"kind":"note|audio|exhibit|frame","title":"","text":"","origin":"","confidence":null}],"summary":""}`;
 
 const CREATE_NEW_PERSON = "__create_new_person__";
 const CREATE_NEW_EVENT = "__create_new_event__";
@@ -118,7 +120,12 @@ function withIdentityDecision(person: DraftPerson, persons: PersonRecord[]): Dra
     person.targetPersonId !== CREATE_NEW_PERSON &&
     persons.some((existing) => existing.id === person.targetPersonId)
   ) {
-    return { ...person, _identityChecked: true };
+    return {
+      ...person,
+      _identityCandidateIds: [person.targetPersonId],
+      _identityReason: person._identityReason,
+      _identityChecked: true,
+    };
   }
   const result = matchIdentity(
     {
@@ -147,25 +154,26 @@ function prepareIdentityDecisions(
   persons: PersonRecord[],
   events: LifeEventRecord[] = [],
 ): Draft {
-  const people = (draft.people ?? []).map((person) => ({
+  const workspace = ensureIntakeWorkspace(draft);
+  const people = (workspace.people ?? []).map((person) => ({
     ...withIdentityDecision(person, persons),
-    _draftId: person._draftId ?? crypto.randomUUID(),
+    _draftId: person._draftId,
   }));
   const uniqueDraftId = (name: string) => {
     const matches = people.filter((person) => person.name.trim() === name.trim());
     return matches.length === 1 ? matches[0]._draftId : undefined;
   };
   return {
-    ...draft,
+    ...workspace,
     people,
-    facts: (draft.facts ?? []).map((fact) => ({
+    facts: (workspace.facts ?? []).map((fact) => ({
       ...fact,
       personDraftId:
         fact.personDraftId && people.some((person) => person._draftId === fact.personDraftId)
           ? fact.personDraftId
           : uniqueDraftId(fact.person),
     })),
-    relations: (draft.relations ?? []).map((relation) => ({
+    relations: (workspace.relations ?? []).map((relation) => ({
       ...relation,
       fromDraftId:
         relation.fromDraftId && people.some((person) => person._draftId === relation.fromDraftId)
@@ -176,7 +184,7 @@ function prepareIdentityDecisions(
           ? relation.toDraftId
           : uniqueDraftId(relation.to),
     })),
-    events: (draft.events ?? []).map((event) => ({
+    events: (workspace.events ?? []).map((event) => ({
       ...event,
       peopleDraftIds: (event.people ?? []).map(
         (name, index) => event.peopleDraftIds?.[index] ?? uniqueDraftId(name),
@@ -187,7 +195,7 @@ function prepareIdentityDecisions(
           : CREATE_NEW_EVENT,
       _eventChecked: true,
     })),
-    reminders: (draft.reminders ?? []).map((reminder) => ({
+    reminders: (workspace.reminders ?? []).map((reminder) => ({
       ...reminder,
       peopleDraftIds: (reminder.people ?? []).map(
         (name, index) => reminder.peopleDraftIds?.[index] ?? uniqueDraftId(name),
@@ -197,18 +205,7 @@ function prepareIdentityDecisions(
 }
 
 function serializeDraftForPrompt(draft: Draft) {
-  return JSON.stringify(draft, (key, value: unknown) => {
-    if (
-      key === "targetPersonId" ||
-      key === "targetEventId" ||
-      key === "targetRelationId" ||
-      key.includes("DraftId") ||
-      key.startsWith("_")
-    ) {
-      return undefined;
-    }
-    return value;
-  });
+  return JSON.stringify(intakeWorkspaceView(draft));
 }
 
 function decorateDraft(result: Draft, sourceSummary: string, material: string): Draft {
@@ -222,7 +219,7 @@ function decorateDraft(result: Draft, sourceSummary: string, material: string): 
           confidence: undefined,
           humanEdited: true,
         }
-      : makeExtractionAudit(sourceSummary, item.confidence, extractedAt),
+      : (item._audit ?? makeExtractionAudit(sourceSummary, item.confidence, extractedAt)),
   });
   const grounded = enforceSensitiveFieldGrounding(result, material);
   return {
@@ -236,15 +233,14 @@ function decorateDraft(result: Draft, sourceSummary: string, material: string): 
   };
 }
 
-const MAX_PROMPT_CHARACTERS = 11_800;
-
 function buildPrompt(text: string, known: string[], previous: Draft | null) {
   const zh = getLang() !== "en";
+  const today = new Date().toISOString().slice(0, 10);
   const base = zh
     ? `你是个人人脉整理助手。把下面这段自然语言材料整理成结构化 JSON，只输出 JSON，不要解释、不要 markdown。
 严格使用这个结构：${SCHEMA}
 规则：
-- 材料里没写的普通事实字段留空字符串或空数组；关系推导只按下面的亲属规则进行。
+ - 材料里没写的普通事实字段留空字符串或空数组；模型只抽取原文明说的关系，本地规则在提交后统一推导。
 - title、部门、单位、项目、地址、忌口、礼物等人物字段只保留材料明确写出的值；“喜欢摄影”不能改写成“摄影师”。
 - relation 写这个人和「我」的关系，如大学同学、表哥、前同事。
 - circle 只能是：家人 / 亲戚 / 朋友 / 同学 / 同事 / 邻居 / 其它。closeness 仅在材料明确给出 1-5 数值时填写，否则留空；不要根据关系称呼推断。
@@ -252,8 +248,8 @@ function buildPrompt(text: string, known: string[], previous: Draft | null) {
 - identities 只记录材料明确出现的平台、账号、当时昵称与生效/失效时间；不要根据姓名猜账号或时间。
 - facts 只放材料明确表达、但不属于固定人物字段的事实；person 指人物姓名，key 是短字段名，value 是原文可支持的值。validFrom/validTo 仅在材料给出有效期时填写。
 - evidence 只保留能核对抽取结果的短摘要或必要原文片段，不要复制整份聊天、文档或转写稿，text 最多 500 字。
-- relations 写人和人之间的关系。每条都填写 basis：明说关系写最短原文，推导关系写可复核依据。
-- events 放已经发生或计划发生、值得进入日历/时间线的事情；date 用 yyyy-mm-dd。只知道月份或年份时分别补为当月 01 日或当年 01-01，并把 precision 标为 month 或 year；一段时间用 range 和 dateEnd。people 写相关人物姓名。
+ - relations 写人和人之间原文明说的关系。每条 basis 都写“原文：最短支持片段”，不要输出推导关系。
+- 今天是 ${today}。events 放已经发生或计划发生、值得进入日历/时间线的事情；timeText 逐字复制原文时间短语，date 用 yyyy-mm-dd。相对时间依据今天换算；只知道月份或年份时分别补为当月 01 日或当年 01-01，并把 precision 标为 month 或 year；一段时间用 range 和 dateEnd。people 写相关人物姓名。
 - reminders 放需要用户采取行动的待办，如「给小雨回电话」；due 仅在材料明确给出日期时使用 yyyy-mm-dd，people 写相关人物姓名。不要把同一件事同时放进 events 和 reminders，除非材料同时明确表达日历事件和后续行动。
 - confidence 是你对每一条抽取准确性的自评（0 到 1），无法判断时留空；它只是提示，不能代替用户确认。
 - summary 用一两句话说明这份材料讲了什么。
@@ -261,7 +257,7 @@ ${KINSHIP_RULES_ZH}`
     : `You organise a personal contact network. Convert the text below into structured JSON. Output JSON only, no markdown, no explanation.
 Use exactly this structure: ${SCHEMA}
 Rules:
-- Leave ordinary fact fields empty when the text does not state them. Relation inference is allowed only under the auditable kinship rules below.
+ - Leave ordinary fact fields empty when the text does not state them. Extract explicit relations only; deterministic local rules derive kinship after commit.
 - Keep role, department, organisation, projects, address, dislikes and gifts only when explicitly stated. An interest in photography does not make someone a photographer.
 - relation = how this person relates to me (college roommate, cousin, ex-colleague).
 - circle is one of family / relatives / friends / classmates / colleagues / neighbours / other. Set closeness only when the material explicitly gives a 1-5 score; never infer it from a relationship label.
@@ -269,8 +265,8 @@ Rules:
 - identities contains only explicitly stated platform/account/alias and validity dates. Never guess an account or date from a name.
 - facts contains only explicit facts that do not fit a fixed person field; person is the person's name and validity dates are included only when stated.
 - evidence is a short source summary or the minimum excerpt needed for review (at most 500 characters), never a copy of the complete chat, document, or transcript.
-- relations = ties between people. Every relation includes basis: a short quote for explicit ties or a checkable inference basis.
-- events are past or planned moments worth putting on a calendar/timeline. Use yyyy-mm-dd, with precision month/year/range when needed; people contains related names.
+ - relations = explicitly stated ties between people. Every basis starts with “Original:” and quotes the shortest supporting text. Do not output inferred ties.
+- Today is ${today}. Events are past or planned moments worth putting on a calendar/timeline. Copy the exact source phrase into timeText and normalize relative time to yyyy-mm-dd; use precision month/year/range when needed. people contains related names.
 - reminders are actions the user still needs to take. Set due only when the material gives a date. Do not duplicate one fact across events and reminders unless both a calendar moment and a follow-up action are explicit.
 - confidence is the model's 0-1 self-assessment for each extracted item and never replaces user confirmation.
 - summary = one or two sentences about the material.
@@ -285,7 +281,14 @@ ${KINSHIP_RULES_EN}`;
         : `\n\nMerge and extend this previous draft:\n`) + serializeDraftForPrompt(previous)
     : "";
   const prefix = `${base}${knownLine}${prev}\n\n${zh ? "材料" : "Material"}：\n`;
-  return fitPromptMaterial(prefix, text, MAX_PROMPT_CHARACTERS);
+  const fitted = fitPromptMaterial(prefix, text, AGENT_PROMPT_MAX_CHARACTERS);
+  const sections: IntakePromptSections = {
+    instructions: base,
+    knownContext: knownLine.trim(),
+    previousDraft: previous ? JSON.parse(serializeDraftForPrompt(previous)) : undefined,
+    sourceMaterial: text.slice(0, IMPORT_LIMITS.maxExtractedCharacters),
+  };
+  return { ...fitted, sections };
 }
 
 /** 切到别的页签再回来时，未提交的录入内容不能丢 —— 存在本地，15 秒自动暂存一次 */
@@ -598,6 +601,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
+  const [latestAgentRun, setLatestAgentRun] = useState<AgentRun | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -619,7 +623,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   }, []);
 
   useEffect(() => {
-    void Promise.all([facesDb.listPersons(), facesDb.listLifeEvents(), facesDb.listRelations()])
+    void Promise.all([
+      facesDb.listPersons(),
+      facesDb.listLifeEvents(),
+      facesDb.listRelationshipViews({ includeDerived: false }),
+    ])
       .then(([people, events, relations]) => {
         setExistingPeople(people);
         setExistingEvents(events);
@@ -631,14 +639,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
 
   useEffect(() => {
     if (!peopleLoaded) return;
-    setDraft((previous) => {
-      if (
-        !previous?.people?.some((person) => !person._identityChecked) &&
-        !previous?.events?.some((event) => !event._eventChecked)
-      )
-        return previous;
-      return prepareIdentityDecisions(previous, existingPeople, existingEvents);
-    });
+    setDraft((previous) =>
+      previous ? prepareIdentityDecisions(previous, existingPeople, existingEvents) : previous,
+    );
   }, [existingEvents, existingPeople, peopleLoaded]);
 
   useEffect(() => {
@@ -816,10 +819,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       toast.error(t("先把知道的情况写下来，怎么写都行"));
       return;
     }
-    const previousJson = extra && draft ? serializeDraftForPrompt(draft) : "";
-    const canMergeDraft = previousJson.length <= 2_500;
-    const base = extra && canMergeDraft ? draft : null;
-    const materialSource = extra && canMergeDraft ? extra : fullText;
+    const base = extra && draft ? ensureIntakeWorkspace(draft) : null;
+    const materialSource = base ? (extra ?? "") : fullText;
     const builtPrompt = buildPrompt(materialSource, allowArchiveTools ? known : [], base);
     if (materialSource.length > builtPrompt.materialCharacters) {
       toast.warning(
@@ -843,24 +844,23 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         );
         const parsed = await runIntakeAgent({
           preset,
-          extractionPrompt: builtPrompt.prompt,
+          extractionPrompt: builtPrompt.sections,
           persons: allowArchiveTools ? existingPeople : [],
           events: allowArchiveTools ? existingEvents : [],
           relations: allowArchiveTools ? existingRelations : [],
+          workspace: base ?? undefined,
           includeArchive: allowArchiveTools,
+          sourceMaterial: materialSource,
           onTrace: (event) =>
             report(
               event.text,
               event.kind === "check" ? "check" : event.kind === "model" ? "model" : "status",
             ),
+          onRun: setLatestAgentRun,
         });
         report(t("模型输出完成，正在解析结构化草稿"), "check");
         report(t("正在核对人物字段与原文证据"), "check");
-        const result = decorateDraft(
-          base ? carryManualState(parsed, base) : parsed,
-          sourceSummary,
-          fullText,
-        );
+        const result = decorateDraft(parsed, sourceSummary, fullText);
         report(
           `${t("整理完成")} · ${result.people?.length ?? 0} ${t("人")} · ${result.relations?.length ?? 0} ${t("条关系")} · ${result.events?.length ?? 0} ${t("个事件")}`,
           "done",
@@ -1103,6 +1103,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           person: "",
           key: "",
           value: "",
+          _draftId: `draft:fact:${crypto.randomUUID()}`,
           _audit: makeManualAudit(t("草稿中手动添加")),
         },
       ],
@@ -1132,6 +1133,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         ...(prev?.events ?? []),
         {
           title: "",
+          _draftId: `draft:event:${crypto.randomUUID()}`,
           date: new Date().toLocaleDateString("sv-SE"),
           precision: "day",
           targetEventId: CREATE_NEW_EVENT,
@@ -1166,6 +1168,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         {
           title: "",
           kind: "custom",
+          _draftId: `draft:reminder:${crypto.randomUUID()}`,
           _audit: makeManualAudit(t("草稿中手动添加")),
         },
       ],
@@ -1183,7 +1186,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       const [nextPeople, nextEvents, nextRelations] = await Promise.all([
         facesDb.listPersons(),
         facesDb.listLifeEvents(),
-        facesDb.listRelations(),
+        facesDb.listRelationshipViews({ includeDerived: false }),
       ]);
       setExistingPeople(nextPeople);
       setExistingEvents(nextEvents);
@@ -1232,9 +1235,15 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   };
 
   const acceptAllPendingItems = () => {
-    if (!draft || !window.confirm(t("确定接受全部待确认条目吗？请先核对 AI 推断值和人物身份。"))) {
+    if (
+      !draft ||
+      !window.confirm(t("确定批量接受已对齐条目吗？证据未对齐的关系会保留待确认，可单独接受。"))
+    ) {
       return;
     }
+    const unresolvedRelationCount = (draft.relations ?? []).filter(
+      (item) => item._audit?.confirmationStatus !== "accepted" && item._relationChecked === false,
+    ).length;
     const accept = <T extends DraftAuditFields>(item: T): T => ({
       ...item,
       _audit: acceptedAudit(item._audit),
@@ -1245,14 +1254,20 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             ...previous,
             people: (previous.people ?? []).map(accept),
             facts: (previous.facts ?? []).map(accept),
-            relations: (previous.relations ?? []).map(accept),
+            relations: (previous.relations ?? []).map((item) =>
+              item._relationChecked === false ? item : accept(item),
+            ),
             events: (previous.events ?? []).map(accept),
             reminders: (previous.reminders ?? []).map(accept),
             evidence: (previous.evidence ?? []).map(accept),
           }
         : previous,
     );
-    toast.success(t("已接受全部待确认条目；确认入库前仍会检查人物身份和日期格式"));
+    toast.success(
+      unresolvedRelationCount > 0
+        ? `${t("已接受来源对齐的待确认条目")}；${unresolvedRelationCount} ${t("条证据未对齐关系仍待确认，可逐条查看或接受")}`
+        : t("已接受全部来源对齐的待确认条目"),
+    );
   };
 
   const commit = async () => {
@@ -1261,10 +1276,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     const pendingAtCommit = reviewItemsOf(commitDraft).filter(
       (item) => item._audit?.confirmationStatus !== "accepted",
     ).length;
-    if (pendingAtCommit > 0) {
-      toast.error(`${t("仍有待确认条目")}：${pendingAtCommit}`);
-      return;
-    }
     const unresolvedPerson = (commitDraft.people ?? []).find(
       (item) => item.name?.trim() && !item.targetPersonId,
     );
@@ -1272,30 +1283,17 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       toast.error(`${t("请先确认人物是新建还是更新已有档案")}：${unresolvedPerson.name}`);
       return;
     }
-    const aiRelationWithoutBasis = (commitDraft.relations ?? []).find(
+    const aiRelationsWithoutBasis = (commitDraft.relations ?? []).filter(
       (item) => !item._audit?.humanEdited && !item.basis?.trim(),
     );
-    if (aiRelationWithoutBasis) {
-      toast.error(
-        `${t("AI 关系缺少原文或推断依据")}：${aiRelationWithoutBasis.from} → ${aiRelationWithoutBasis.to}`,
+    if (pendingAtCommit > 0 || aiRelationsWithoutBasis.length > 0) {
+      toast.warning(
+        `${pendingAtCommit} ${t("条 AI 内容已带待核验标记")}${
+          aiRelationsWithoutBasis.length
+            ? `；${aiRelationsWithoutBasis.length} ${t("条关系缺少依据并保持待确认")}`
+            : ""
+        }`,
       );
-      return;
-    }
-    const inferredWithoutBasis = (commitDraft.relations ?? []).find(
-      (item) =>
-        !item._audit?.humanEdited &&
-        relationNeedsInferenceReview({
-          basis: item.basis,
-          note: item.note,
-          confidence: item._audit?.confidence,
-        }) &&
-        !isInferredRelationBasis(item.basis),
-    );
-    if (inferredWithoutBasis) {
-      toast.error(
-        `${t("推导关系缺少可核验依据")}：${inferredWithoutBasis.from} → ${inferredWithoutBasis.to}`,
-      );
-      return;
     }
     const invalidEvent = (commitDraft.events ?? []).find(
       (item) =>
@@ -1326,7 +1324,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       createdReminderIds: [],
       previousPeople: [],
       previousEvents: [],
-      previousRelations: [],
     };
     const batchHasChanges = () =>
       batch.createdPersonIds.length > 0 ||
@@ -1335,22 +1332,26 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       batch.createdEventIds.length > 0 ||
       batch.createdReminderIds.length > 0 ||
       batch.previousPeople.length > 0 ||
-      (batch.previousEvents?.length ?? 0) > 0 ||
-      (batch.previousRelations?.length ?? 0) > 0;
+      (batch.previousEvents?.length ?? 0) > 0;
     try {
-      const [current, currentEvents, currentRelations] = await Promise.all([
+      const [current, currentEvents, currentAssertions, currentCollections] = await Promise.all([
         facesDb.listPersons(),
         facesDb.listLifeEvents(),
-        facesDb.listRelations(),
+        facesDb.listRelationAssertions(),
+        facesDb.listCollections(),
       ]);
       const byId = new Map(current.map((person) => [person.id, person]));
       const eventById = new Map(currentEvents.map((event) => [event.id, event]));
       const originalById = new Map(current.map((person) => [person.id, person]));
       const pendingPeople = new Map<string, PersonRecord>();
-      const pendingRelations = new Map<string, RelationRecord>();
+      const pendingAssertions = new Map<string, RelationAssertionRecord>();
+      const pendingRelationEvidenceLinks: RelationEvidenceLinkRecord[] = [];
       const pendingEvidence: EvidenceRecord[] = [];
       const pendingEvents = new Map<string, LifeEventRecord>();
       const pendingReminders: ReminderRecord[] = [];
+      const pendingCollections = new Map<string, CollectionRecord>();
+      const pendingCollectionMemberships: CollectionMembershipRecord[] = [];
+      const circleAssignments: Array<{ personId: string; name: string }> = [];
       const exactNameBuckets = new Map<string, PersonRecord[]>();
       current.forEach((person) => {
         const key = person.name.trim();
@@ -1362,9 +1363,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         if (key) draftNameBuckets.set(key, [...(draftNameBuckets.get(key) ?? []), person]);
       }
       const draftIds = new Set((commitDraft.people ?? []).map((person) => person._draftId));
-      const ambiguousReference = (name: string, draftId?: string) => {
+      const ambiguousReference = (name: string, draftId?: string, personId?: string) => {
         const key = name.trim();
-        if (!key || key === "我" || key.toLowerCase() === "me") return false;
+        if (!key || isSelfReference(key)) return false;
+        if (personId && byId.has(personId)) return false;
         if (draftId && draftIds.has(draftId)) return false;
         const draftMatches = draftNameBuckets.get(key) ?? [];
         if (draftMatches.length) return draftMatches.length !== 1;
@@ -1372,19 +1374,27 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       };
       const ambiguous = [
         ...(commitDraft.facts ?? []).flatMap((fact) =>
-          ambiguousReference(fact.person, fact.personDraftId) ? [`事实：${fact.person}`] : [],
+          ambiguousReference(fact.person, fact.personDraftId, fact.personId)
+            ? [`事实：${fact.person}`]
+            : [],
         ),
         ...(commitDraft.relations ?? []).flatMap((relation) => [
-          ...(ambiguousReference(relation.from, relation.fromDraftId)
+          ...(ambiguousReference(relation.from, relation.fromDraftId, relation.fromPersonId)
             ? [`关系起点：${relation.from}`]
             : []),
-          ...(ambiguousReference(relation.to, relation.toDraftId)
+          ...(ambiguousReference(relation.to, relation.toDraftId, relation.toPersonId)
             ? [`关系终点：${relation.to}`]
             : []),
         ]),
         ...(commitDraft.events ?? []).flatMap((event) =>
           (event.people ?? [])
-            .filter((name, index) => ambiguousReference(name, event.peopleDraftIds?.[index]))
+            .filter((name, index) =>
+              ambiguousReference(
+                name,
+                event.peopleDraftIds?.[index],
+                event.peoplePersonIds?.[index],
+              ),
+            )
             .map((name) => `事件：${name}`),
         ),
         ...(commitDraft.reminders ?? []).flatMap((reminder) =>
@@ -1406,13 +1416,15 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       };
       const resolvePersonName = (name: string) => {
         const key = name.trim();
-        if (key === "我" || key.toLowerCase() === "me") return byId.get(SELF_PERSON_ID);
+        if (isSelfReference(key)) return byId.get(SELF_PERSON_ID);
         if (resolvedDraftNames.has(key)) return resolvedDraftNames.get(key) ?? undefined;
         const matches = exactNameBuckets.get(key) ?? [];
         return matches.length === 1 ? matches[0] : undefined;
       };
-      const resolvePersonRef = (name: string, draftId?: string) =>
-        (draftId ? resolvedDraftIds.get(draftId) : undefined) ?? resolvePersonName(name);
+      const resolvePersonRef = (name: string, draftId?: string, personId?: string) =>
+        (personId ? byId.get(personId) : undefined) ??
+        (draftId ? resolvedDraftIds.get(draftId) : undefined) ??
+        resolvePersonName(name);
       let created = 0;
       let updated = 0;
 
@@ -1422,7 +1434,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         ...(commitDraft.relations ?? []).flatMap((item) => [item.from, item.to]),
         ...(commitDraft.events ?? []).flatMap((item) => item.people ?? []),
         ...(commitDraft.reminders ?? []).flatMap((item) => item.people ?? []),
-      ].some((name) => name.trim() === "我" || name.trim().toLowerCase() === "me");
+      ].some(isSelfReference);
       if (referencesSelf && !byId.has(SELF_PERSON_ID)) {
         const self: PersonRecord = {
           id: SELF_PERSON_ID,
@@ -1431,6 +1443,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           descriptors: [],
           thumb: "",
           createdAt: Date.now(),
+          entityRole: "ego",
           source: makeSource("manual", "系统创建的本人关系锚点"),
         };
         pendingPeople.set(self.id, self);
@@ -1498,7 +1511,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           reportsTo: item.reportsTo || undefined,
           employeeId: item.employeeId || undefined,
           birthday: item.birthday || undefined,
-          circle: item.circle || undefined,
           closeness: typeof item.closeness === "number" ? item.closeness : undefined,
           likes: item.likes?.length ? item.likes : undefined,
           dislikes: item.dislikes?.length ? item.dislikes : undefined,
@@ -1512,7 +1524,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           Object.entries(profileValues).filter(([, value]) => value !== undefined),
         ) as NonNullable<PersonRecord["profile"]>;
 
-        if (name === "我" || name.toLowerCase() === "me") {
+        if (isSelfReference(name)) {
           const self = byId.get(SELF_PERSON_ID);
           if (!self) throw new Error("本人关系锚点创建失败");
           const record: PersonRecord = {
@@ -1526,6 +1538,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           byId.set(record.id, record);
           rememberDraftName(name, record);
           if (item._draftId) resolvedDraftIds.set(item._draftId, record);
+          if (item.circle?.trim())
+            circleAssignments.push({ personId: record.id, name: item.circle.trim() });
           continue;
         }
 
@@ -1575,6 +1589,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           byId.set(record.id, record);
           rememberDraftName(name, record);
           if (item._draftId) resolvedDraftIds.set(item._draftId, record);
+          if (item.circle?.trim())
+            circleAssignments.push({ personId: record.id, name: item.circle.trim() });
           updated += 1;
           continue;
         }
@@ -1597,14 +1613,46 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         exactNameBuckets.set(name, [...(exactNameBuckets.get(name) ?? []), record]);
         rememberDraftName(name, record);
         if (item._draftId) resolvedDraftIds.set(item._draftId, record);
+        if (item.circle?.trim())
+          circleAssignments.push({ personId: record.id, name: item.circle.trim() });
         created += 1;
+      }
+
+      const collectionByName = new Map(
+        currentCollections.map((collection) => [
+          collection.name.trim().toLocaleLowerCase("zh-CN"),
+          collection,
+        ]),
+      );
+      for (const assignment of circleAssignments) {
+        const key = assignment.name.toLocaleLowerCase("zh-CN");
+        let collection = collectionByName.get(key) ?? pendingCollections.get(key);
+        if (!collection) {
+          const now = Date.now();
+          collection = {
+            id: `collection:${crypto.randomUUID()}`,
+            name: assignment.name,
+            kind: "relationship_circle",
+            createdAt: now,
+            updatedAt: now,
+          };
+          pendingCollections.set(key, collection);
+          collectionByName.set(key, collection);
+        }
+        pendingCollectionMemberships.push({
+          id: `${collection.id}\u0000${assignment.personId}`,
+          collectionId: collection.id,
+          personId: assignment.personId,
+          source: "ai_approved",
+          createdAt: Date.now(),
+        });
       }
 
       let facts = 0;
       for (const item of commitDraft.facts ?? []) {
         const key = item.key?.trim();
         const value = item.value?.trim();
-        const person = resolvePersonRef(item.person ?? "", item.personDraftId);
+        const person = resolvePersonRef(item.person ?? "", item.personDraftId, item.personId);
         if (!key || !value) continue;
         if (!person) throw new Error(`${t("事实关联人物无法唯一确定")}：${item.person}`);
         if (
@@ -1686,89 +1734,78 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       }
 
       let links = 0;
-      const committedRelations = [...currentRelations];
-      const relationDrafts = [...(commitDraft.relations ?? [])].sort(
-        (left, right) =>
-          Number(isInferredRelationBasis(left.basis)) -
-          Number(isInferredRelationBasis(right.basis)),
+      const currentAssertionById = new Map(
+        currentAssertions.map((assertion) => [assertion.id, assertion]),
       );
+      const relationDrafts = [...(commitDraft.relations ?? [])];
       for (const item of relationDrafts) {
-        const a = resolvePersonRef(item.from ?? "", item.fromDraftId);
-        const b = resolvePersonRef(item.to ?? "", item.toDraftId);
+        const a = resolvePersonRef(item.from ?? "", item.fromDraftId, item.fromPersonId);
+        const b = resolvePersonRef(item.to ?? "", item.toDraftId, item.toPersonId);
         if (!a || !b) throw new Error(`关系端点无法确定：${item.from} → ${item.to}`);
         if (a.id === b.id) throw new Error(`关系不能连接同一人物：${item.from}`);
         const now = Date.now();
         const label = (item.label ?? "").trim() || t("认识");
-        const mutual = inferMutual(label);
-        const semanticKind = normalizeRelationSemanticKind(label);
-        const semanticKey = relationSemanticKey({
-          fromId: a.id,
-          toId: b.id,
+        const semantics = resolveRelationSemanticsForPeople({
           label,
-          mutual,
-          semanticKind,
+          fromGender: a.profile?.gender,
+          toGender: b.profile?.gender,
         });
         const target = item.targetRelationId
-          ? committedRelations.find((relation) => relation.id === item.targetRelationId)
-          : committedRelations.find((relation) => relationSemanticKey(relation) === semanticKey);
+          ? currentAssertionById.get(item.targetRelationId)
+          : undefined;
         if (item.targetRelationId && !target) {
           throw new Error(`${t("要更新的关系已不存在")}：${item.from} → ${item.to}`);
         }
-        if (
-          target &&
-          !batch.createdRelationIds.includes(target.id) &&
-          !batch.previousRelations?.some((relation) => relation.id === target.id)
-        ) {
-          batch.previousRelations?.push(structuredClone(target));
-        }
-        const relationId = target?.id ?? crypto.randomUUID();
-        const inferred = isInferredRelationBasis(item.basis);
-        const dependencies = inferred
-          ? findRelationDependencies(
-              a.id,
-              b.id,
-              committedRelations.filter((r) => r.id !== relationId),
-            )
-          : [];
-        const record: RelationRecord = {
-          ...target,
+        // Every accepted source statement is an assertion. Updates supersede the
+        // old assertion instead of overwriting its evidence/history in place.
+        const relationId = crypto.randomUUID();
+        const sourceIds = [...evidenceIds];
+        const record: RelationAssertionRecord = {
           id: relationId,
+          recordType: "assertion",
           fromId: a.id,
           toId: b.id,
+          predicate: semantics.predicate,
+          qualifiers: semantics.qualifiers,
           label,
-          mutual,
+          direction: semantics.predicate === "custom" ? "directed" : "ontology",
           note: item.note,
-          basis: item.basis?.trim() || undefined,
-          sourceId: evidenceIds[0] ?? target?.sourceId,
-          createdAt: target?.createdAt ?? now,
+          evidence: {
+            mode: item._audit?.humanEdited ? "manual" : "source_claim",
+            basis: item.basis?.trim() || undefined,
+            sourceIds,
+          },
+          validity: {
+            status: semantics.qualifiers.temporalStatus === "former" ? "ended" : "active",
+            validFrom: semantics.qualifiers.validFrom,
+            validTo: semantics.qualifiers.validTo,
+          },
+          createdAt: now,
           updatedAt: now,
-          confirmationStatus: "confirmed",
-          evidenceMode: inferred ? "inferred" : "explicit",
+          confirmationStatus:
+            item._audit?.humanEdited ||
+            (item._audit?.confirmationStatus === "accepted" && Boolean(item.basis?.trim()))
+              ? "confirmed"
+              : "pending",
           confidence: item._audit?.confidence,
-          visibility: target?.visibility ?? "auto",
-          recommendationPolicy: target?.recommendationPolicy ?? "allow",
-          semanticKind,
-          derivedFromRelationIds: dependencies.length ? dependencies : undefined,
+          supersedesAssertionId: target?.id,
           source: makeSource(
             item._audit?.humanEdited ? "manual" : "ai",
-            item._audit?.humanEdited
-              ? t("草稿中人工编辑")
-              : relationNeedsInferenceReview({
-                    basis: item.basis,
-                    note: item.note,
-                    confidence: item._audit?.confidence,
-                  })
-                ? t("AI 推断，经人工确认")
-                : t("资料整理"),
+            item._audit?.humanEdited ? t("草稿中人工编辑") : t("资料整理"),
           ),
         };
-        pendingRelations.set(record.id, record);
-        const previousIndex = committedRelations.findIndex(
-          (relation) => relation.id === relationId,
-        );
-        if (previousIndex >= 0) committedRelations[previousIndex] = record;
-        else committedRelations.push(record);
-        if (!target) batch.createdRelationIds.push(relationId);
+        pendingAssertions.set(record.id, record);
+        currentAssertionById.set(record.id, record);
+        for (const evidenceId of sourceIds) {
+          pendingRelationEvidenceLinks.push({
+            id: `${record.id}\u0000${evidenceId}`,
+            assertionId: record.id,
+            evidenceId,
+            excerpt: item.basis?.trim(),
+            createdAt: now,
+          });
+        }
+        batch.createdRelationIds.push(relationId);
         links += 1;
       }
 
@@ -1805,7 +1842,14 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           personIds:
             item.people !== undefined
               ? item.people
-                  .map((name, index) => resolvePersonRef(name, item.peopleDraftIds?.[index])?.id)
+                  .map(
+                    (name, index) =>
+                      resolvePersonRef(
+                        name,
+                        item.peopleDraftIds?.[index],
+                        item.peoplePersonIds?.[index],
+                      )?.id,
+                  )
                   .filter((id): id is string => Boolean(id))
               : previous?.personIds,
           kind: item.kind !== undefined ? item.kind || undefined : previous?.kind,
@@ -1841,7 +1885,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           detail: item.detail || undefined,
           due: item.due || undefined,
           personIds: (item.people ?? [])
-            .map((name, index) => resolvePersonRef(name, item.peopleDraftIds?.[index])?.id)
+            .map(
+              (name, index) =>
+                resolvePersonRef(name, item.peopleDraftIds?.[index], item.peoplePersonIds?.[index])
+                  ?.id,
+            )
             .filter((id): id is string => Boolean(id)),
           kind,
           done: false,
@@ -1856,12 +1904,15 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         reminders += 1;
       }
 
-      await facesDb.putBatch({
+      await facesDb.applyArchiveMutationBatch({
         persons: [...pendingPeople.values()],
-        relations: [...pendingRelations.values()],
+        assertions: [...pendingAssertions.values()],
         evidence: pendingEvidence,
+        evidenceLinks: pendingRelationEvidenceLinks,
         lifeEvents: [...pendingEvents.values()],
         reminders: pendingReminders,
+        collections: [...pendingCollections.values()],
+        collectionMemberships: pendingCollectionMemberships,
       });
 
       setDraft(null);
@@ -1877,7 +1928,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       const nextPeople = [...byId.values()];
       const [nextEvents, nextRelations] = await Promise.all([
         facesDb.listLifeEvents(),
-        facesDb.listRelations(),
+        facesDb.listRelationshipViews(),
       ]);
       setExistingPeople(nextPeople);
       setExistingEvents(nextEvents);
@@ -1910,10 +1961,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     }
   };
 
-  const gaps = (draft?.people ?? []).flatMap((person) =>
-    missingOf(person).map(
-      (field) => `${person.name || t("未命名")} · ${getLang() === "en" ? field.en : field.zh}`,
-    ),
+  const gaps = (draft?.people ?? []).flatMap((person, personIndex) =>
+    missingOf(person).map((field) => ({
+      key: `${person._draftId ?? `person-${personIndex}`}:${String(field.key)}`,
+      text: `${person.name || t("未命名")} · ${getLang() === "en" ? field.en : field.zh}`,
+    })),
   );
   const reviewItems = reviewItemsOf(draft);
   const pendingReviewCount = reviewItems.filter(
@@ -2152,6 +2204,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             />
           </div>
         )}
+        {latestAgentRun && !job.busy && (
+          <div className="mt-3">
+            <AgentRunInspector run={latestAgentRun} />
+          </div>
+        )}
       </div>
 
       {draft && (
@@ -2263,7 +2320,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               </div>
             )}
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
-              <span>{t("每个顶层草稿条目都要接受或拒绝；编辑已接受条目后会重新变为待确认。")}</span>
+              <span>
+                {t("待确认是软提醒；可逐条接受，也可直接入库，AI 内容会保留待核验标记。")}
+              </span>
               <span className="rounded-full border border-border px-2 py-0.5">
                 {t("待确认")} {pendingReviewCount}
               </span>
@@ -2289,7 +2348,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     onClick={acceptAllPendingItems}
                   >
                     <Check className="size-3" aria-hidden="true" />
-                    {t("一键接受全部待确认")} · {pendingReviewCount}
+                    {t("一键接受已对齐项")} · {pendingReviewCount}
                   </Button>
                 )}
               </span>
@@ -2305,10 +2364,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {gaps.map((gap) => (
                   <span
-                    key={gap}
+                    key={gap.key}
                     className="rounded-full border border-border px-2 py-0.5 text-[10px]"
                   >
-                    {gap}
+                    {gap.text}
                   </span>
                 ))}
               </div>
@@ -2643,7 +2702,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             )}
             {(draft.facts ?? []).map((item, index) => (
               <div
-                key={index}
+                key={item._draftId ?? `fact-${index}`}
                 className="space-y-2 rounded-xl border border-border p-3"
                 data-draft-kind="fact"
                 data-draft-index={index}
@@ -2717,7 +2776,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                 const person = withIdentityDecision(
                   {
                     name,
-                    _draftId: crypto.randomUUID(),
+                    _draftId: `draft:person:${crypto.randomUUID()}`,
                     _fieldGrounding: { name: { status: "manual" } },
                     _audit: makeManualAudit(t("草稿关系图中手动添加")),
                   },
@@ -2735,6 +2794,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     from,
                     to,
                     label,
+                    _draftId: `draft:relation:${crypto.randomUUID()}`,
                     _audit: makeManualAudit(t("草稿关系图中手动添加")),
                   },
                 ],
@@ -2748,7 +2808,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             <div className="space-y-2">
               {(draft.relations ?? []).map((relation, index) => (
                 <div
-                  key={index}
+                  key={relation._draftId ?? `relation-${index}`}
                   className="flex flex-wrap items-center gap-2 rounded-xl border border-border p-2"
                   data-draft-kind="relation"
                   data-draft-index={index}
@@ -2766,7 +2826,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     name={relation.from ?? ""}
                     draftId={relation.fromDraftId}
                     people={draft.people ?? []}
-                    onChange={(from, fromDraftId) => patchRelation(index, { from, fromDraftId })}
+                    onChange={(from, fromDraftId) =>
+                      patchRelation(index, { from, fromDraftId, fromPersonId: undefined })
+                    }
                     className="h-8 w-28 text-xs"
                     placeholder={t("谁")}
                   />
@@ -2782,7 +2844,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     name={relation.to ?? ""}
                     draftId={relation.toDraftId}
                     people={draft.people ?? []}
-                    onChange={(to, toDraftId) => patchRelation(index, { to, toDraftId })}
+                    onChange={(to, toDraftId) =>
+                      patchRelation(index, { to, toDraftId, toPersonId: undefined })
+                    }
                     className="h-8 w-28 text-xs"
                     placeholder={t("对谁")}
                   />
@@ -2832,6 +2896,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                         <span className="text-muted-foreground">{relation.note}</span>
                       )}
                     </div>
+                    {relation._relationChecked === false && relation._relationReason && (
+                      <p className="text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
+                        {relation._relationReason}
+                      </p>
+                    )}
                     <Input
                       value={relation.basis ?? ""}
                       onChange={(event) => patchRelation(index, { basis: event.target.value })}
@@ -2868,7 +2937,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             )}
             {(draft.events ?? []).map((item, index) => (
               <div
-                key={index}
+                key={item._draftId ?? `event-${index}`}
                 className="space-y-2 rounded-xl border border-border p-3"
                 data-draft-kind="event"
                 data-draft-index={index}
@@ -2924,20 +2993,59 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                   </button>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <Input
-                    type="date"
-                    value={item.date ?? ""}
-                    onChange={(event) => patchEvent(index, { date: event.target.value })}
-                    className="h-8 text-xs"
-                    aria-label={t("事件日期")}
-                  />
+                  {item.precision === "year" ? (
+                    <Input
+                      type="number"
+                      min={1900}
+                      max={2200}
+                      value={item.date?.slice(0, 4) ?? ""}
+                      onChange={(event) =>
+                        patchEvent(index, {
+                          date: /^\d{4}$/.test(event.target.value)
+                            ? `${event.target.value}-01-01`
+                            : "",
+                        })
+                      }
+                      className="h-8 text-xs"
+                      placeholder={t("年份")}
+                      aria-label={t("事件年份")}
+                    />
+                  ) : (
+                    <Input
+                      type={item.precision === "month" ? "month" : "date"}
+                      value={
+                        item.precision === "month"
+                          ? (item.date?.slice(0, 7) ?? "")
+                          : (item.date ?? "")
+                      }
+                      onChange={(event) =>
+                        patchEvent(index, {
+                          date:
+                            item.precision === "month" && event.target.value
+                              ? `${event.target.value}-01`
+                              : event.target.value,
+                        })
+                      }
+                      className="h-8 text-xs"
+                      aria-label={item.precision === "month" ? t("事件月份") : t("事件日期")}
+                    />
+                  )}
                   <select
                     value={item.precision ?? "day"}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const precision = event.target.value as DraftEvent["precision"];
+                      const current = item.date ?? "";
                       patchEvent(index, {
-                        precision: event.target.value as DraftEvent["precision"],
-                      })
-                    }
+                        precision,
+                        date:
+                          precision === "year" && current
+                            ? `${current.slice(0, 4)}-01-01`
+                            : precision === "month" && current
+                              ? `${current.slice(0, 7)}-01`
+                              : current,
+                        dateEnd: precision === "range" ? item.dateEnd : undefined,
+                      });
+                    }}
                     className="h-8 rounded-md border border-input bg-background px-3 text-xs"
                     aria-label={t("日期精度")}
                   >
@@ -2956,6 +3064,17 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                     />
                   )}
                   <Input
+                    value={item.timeText ?? ""}
+                    onChange={(event) => patchEvent(index, { timeText: event.target.value })}
+                    onBlur={(event) => {
+                      const parsed = parseFuzzyLocal(event.target.value);
+                      if (parsed) patchEvent(index, parsed);
+                    }}
+                    className="h-8 text-xs"
+                    placeholder={t("原始时间表述，如：去年夏天")}
+                    aria-label={t("原始时间表述")}
+                  />
+                  <Input
                     value={item.place ?? ""}
                     onChange={(event) => patchEvent(index, { place: event.target.value })}
                     className="h-8 text-xs"
@@ -2971,6 +3090,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                             .map((name) => name.trim())
                             .filter(Boolean),
                           peopleDraftIds: undefined,
+                          peoplePersonIds: undefined,
                         })
                       }
                       className="h-8 text-xs"
@@ -2980,7 +3100,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                       names={item.people ?? []}
                       draftIds={item.peopleDraftIds}
                       people={draft.people ?? []}
-                      onChange={(peopleDraftIds) => patchEvent(index, { peopleDraftIds })}
+                      onChange={(peopleDraftIds) =>
+                        patchEvent(index, { peopleDraftIds, peoplePersonIds: undefined })
+                      }
                     />
                   </div>
                   <Input
@@ -3024,7 +3146,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             )}
             {(draft.reminders ?? []).map((item, index) => (
               <div
-                key={index}
+                key={item._draftId ?? `reminder-${index}`}
                 className="space-y-2 rounded-xl border border-border p-3"
                 data-draft-kind="reminder"
                 data-draft-index={index}
@@ -3111,7 +3233,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             <div className="space-y-2">
               {(draft.evidence ?? []).map((item, index) => (
                 <div
-                  key={index}
+                  key={item._draftId ?? `evidence-${index}`}
                   className="space-y-2 rounded-xl border border-dashed border-border p-3"
                   data-draft-kind="evidence"
                   data-draft-index={index}
