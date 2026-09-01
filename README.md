@@ -159,11 +159,11 @@ src/
   routes/           TanStack 页面与服务端 API 路由
   server.ts         SSR 服务入口与错误处理
 public/             静态资源
-doc/                产品背景、调研材料与升级计划
+doc/                产品规范、质量记录、研究资料与历史档案
 .lovable/           Lovable 项目配置和原始产品计划
 ```
 
-详细升级顺序与验收项见 `doc/UPGRADE_TODO.md`。
+文档边界和现行资料入口见 [`doc/README.md`](doc/README.md)。已完成的升级与验收记录归档在 `doc/history/`。
 
 ## Lovable 协作
 

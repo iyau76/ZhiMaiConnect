@@ -268,6 +268,7 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
               <button
                 key={summary.id}
                 type="button"
+                data-agent-run-summary-id={summary.id}
                 className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
                 onClick={() => openStoredRun(summary.id)}
               >

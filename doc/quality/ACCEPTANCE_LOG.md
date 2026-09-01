@@ -8,6 +8,8 @@
 | 2026-08-26 | Track A 第一批工作树 | 通过 | 通过（0 warning） | 待全仓格式化 | 107 passed、1 todo（随后已修） | 通过 | Wrangler 首页 200 | 0 vulnerabilities | 待执行 | 录入/图谱并行升级中，E2E 与多宽度人工验收未完成 |
 | 2026-08-26 18:44 +08:00 | Track A 最新工作树 | 通过 | 通过（0 warning） | 通过 | 149/149 | 通过；仅余 508 KB 路由分包提示 | Wrangler：首页/状态 200、非法 JSON 400、缺密钥 503、匿名 AI 401；会话 Cookie 与 `no-store` 正常 | 0 vulnerabilities | Chrome 13/13；Edge 13/13 | 录屏/部署/信息表/邮件待队长完成；低风险批量确认与模型防编造仍未闭环；全量加密备份和旧模块拆分属 Track B |
 | 2026-08-26 21:02 +08:00 | Track A 录入证据门禁与材料收尾工作树 | 通过 | 通过（0 warning） | 通过 | 172/172 | 通过；非阻断提示为 534 KB `routes` 分包，以及上游配置的 `vite-tsconfig-paths` / `inlineDynamicImports` 兼容提示 | Wrangler：首页/状态 200、非法 JSON 400、缺密钥 503、匿名 AI 401；会话 Cookie、令牌形状与 `no-store` 正常 | 0 vulnerabilities | Chrome 17/17；Edge 17/17；人工字段重排/改名定向流程 Chrome、Edge 各 3/3 | 录屏、真实部署、产品信息表基础信息、统一命名和邮件仍需队长/外部环境；证据绑定当前为保守句级启发式，持久化证据区间、跨段指代与实体级归属验证属 Track B |
+| 2026-08-29 00:08 +08:00 | 重构验收 `36942b0`（工作树干净） | 通过 | 通过（0 warning） | 通过 | 518/518（56 个测试文件） | 通过；Cloudflare Workers 产物与 rate-limit bindings 正常生成 | 未执行 | 未执行 | Chrome 26/26（1.4 分钟） | 日志默认仍只存结构（savePrivatePayload=false，三档未做）；历史轮次图片不重发与 8 轮静默遗忘未验证；Edge/audit/preview 未跑；真实 DeepSeek 全矩阵与云部署待执行 |
+| 2026-09-02 00:40 +08:00 | 后初评发布工作树 | 通过 | 通过（0 warning） | 通过 | 546/546（58 个测试文件） | 通过；Cloudflare Workers 产物与三组 rate-limit bindings 正常生成 | 由 Playwright WebServer 验证 | 0 vulnerabilities | Chrome 32/32（2.0 分钟） | `routes` 产物约 937 KB，仍需在后续性能迭代中拆包；本轮部署后再核对线上静态资源指纹 |
 
 ## 固定验收命令
 

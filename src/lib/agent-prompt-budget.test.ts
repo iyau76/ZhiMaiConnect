@@ -45,6 +45,18 @@ describe("shared Agent prompt contract", () => {
     ).toThrow(AgentPromptContractError);
   });
 
+  it("leaves working context room after a production-sized immutable instruction block", () => {
+    const result = composeAgentPrompt({
+      render: (context, history) => `${"R".repeat(12_000)}${context}${history}`,
+      fitContext: (maximum) => "C".repeat(Math.min(4_000, maximum)),
+      toolHistory: [],
+      minimumContextCharacters: 2_500,
+    });
+
+    expect(result.contextCharacters).toBe(4_000);
+    expect(result.prompt.length).toBeLessThanOrEqual(AGENT_PROMPT_MAX_CHARACTERS);
+  });
+
   it("keeps a contiguous newest history suffix and marks omitted earlier calls", () => {
     const history = [
       { call: { index: 0 }, result: { value: "small" } },

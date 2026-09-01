@@ -389,6 +389,16 @@ export const test = base.extend<{ mockNetwork: MockNetworkState }>({
           localStorage.clear();
           sessionStorage.clear();
           sessionStorage.setItem("zhimai.playwright.initialized", "1");
+          sessionStorage.setItem(
+            "openglass.cloud-transfer-consents",
+            JSON.stringify([
+              "builtin-lovable:文字内容",
+              "builtin-lovable:人物关系上下文|文字内容",
+              "builtin-lovable:图片|文字内容",
+              "builtin-lovable:人物关系上下文|图片|文字内容",
+              "lovable-transcription:音频",
+            ]),
+          );
           localStorage.setItem("openglass.welcomeSeen", "1");
           localStorage.setItem("openglass.lang", "zh");
         }

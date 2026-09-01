@@ -1,5 +1,10 @@
 export const VISION_TEXT_LIMITS = {
-  promptCharacters: 12_000,
+  // Agent instructions, typed tool contracts, and task material share this
+  // envelope. The previous 12k boundary was already smaller than intake's
+  // immutable instruction set, so a valid request could never reach the model.
+  // 32k characters still sits well below the runtime's 12k-token input budget
+  // while leaving real room for source material and complete tool history.
+  promptCharacters: 32_000,
   historyTurns: 8,
   historyTurnCharacters: 6_000,
   historyTotalCharacters: 24_000,

@@ -724,18 +724,31 @@ describe("competition demo data", () => {
     );
     expect(demoPeople).toHaveLength(50);
     expect(demoPeople.every((item) => item.profile?.circle === undefined)).toBe(true);
-    expect(demoCollections.map((item) => [item.name, item.kind])).toEqual([
-      ["大学同学", "context"],
-      ["家人", "relationship_circle"],
-      ["科研", "context"],
-      ["亲戚", "relationship_circle"],
-      ["摄影社", "context"],
-      ["校友社群", "context"],
-    ]);
+    expect(demoCollections).toHaveLength(6);
+    expect(demoCollections.map((item) => [item.name, item.kind])).toEqual(
+      expect.arrayContaining([
+        ["大学同学", "relationship_circle"],
+        ["家人", "relationship_circle"],
+        ["知行实验室", "relationship_circle"],
+        ["亲戚", "relationship_circle"],
+        ["校园摄影社", "relationship_circle"],
+        ["校友社群", "relationship_circle"],
+      ]),
+    );
     expect(demoMemberships).toHaveLength(50);
     expect(new Set(demoMemberships.map((item) => item.personId))).toEqual(
       new Set(demoPeople.map((item) => item.id)),
     );
+    const relationshipCircleIds = new Set(
+      demoCollections.filter((item) => item.kind === "relationship_circle").map((item) => item.id),
+    );
+    expect(
+      new Set(
+        demoMemberships
+          .filter((item) => relationshipCircleIds.has(item.collectionId))
+          .map((item) => item.personId),
+      ),
+    ).toEqual(new Set(demoPeople.map((item) => item.id)));
     expect(demoRelations).toHaveLength(80);
     expect(demoRelations.map((item) => item.label)).not.toContain("同圈伙伴");
     expect([...new Set(demoRelations.map((item) => item.predicate))]).toEqual(

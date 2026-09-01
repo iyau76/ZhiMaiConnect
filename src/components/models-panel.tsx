@@ -505,7 +505,10 @@ export function ModelsPanel({
   return (
     <div className="min-w-0 space-y-6">
       {/* 配置编辑 */}
-      <div className="rounded-2xl border border-border bg-card/40 p-4">
+      <div
+        className="rounded-2xl border border-border bg-card/40 p-4"
+        data-testid="model-config-panel"
+      >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm font-medium">{t("模型配置")}</span>
           <div className="flex flex-wrap gap-1.5">
@@ -523,6 +526,7 @@ export function ModelsPanel({
           {presets.map((item) => (
             <div
               key={item.id}
+              data-provider-preset-id={item.id}
               className={cn(
                 "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm transition-colors",
                 item.id === editing.id

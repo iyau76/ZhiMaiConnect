@@ -20,7 +20,6 @@ describe("browser-side vision SSE decoding", () => {
   beforeEach(() => {
     resetApiSessionForRetry();
     clearCloudTransferConsents();
-    vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
   it("decodes split SSE chunks after the Worker forwards raw bytes", async () => {
@@ -51,7 +50,7 @@ describe("browser-side vision SSE decoding", () => {
     });
     const chunks: string[] = [];
 
-    await askModel(
+    const request = askModel(
       preset,
       "整理这段材料",
       null,
@@ -60,6 +59,11 @@ describe("browser-side vision SSE decoding", () => {
       new AbortController().signal,
       { temperature: 0 },
     );
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="cloud-transfer-consent"]')).not.toBeNull();
+    });
+    document.querySelector<HTMLButtonElement>("[data-cloud-consent-continue]")!.click();
+    await request;
 
     expect(chunks).toEqual(["整理", "完成"]);
     expect(fetchMock).toHaveBeenCalledTimes(2);

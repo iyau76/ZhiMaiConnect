@@ -23,9 +23,14 @@ coverage/
 playwright-report/
 test-results/
 
-# Generated release bundles and video-production workspaces stay local.
+# Generated release bundles stay local.
 release/
-videos/
+
+# Private source material and locally produced video assets are not part of the
+# public application repository.
+/doc/background/
+/videos/
+/doc.zip
 
 # Wrangler / Cloudflare
 .wrangler/

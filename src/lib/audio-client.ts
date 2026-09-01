@@ -74,7 +74,7 @@ export async function transcribeAudio(
   const variant = findVariant(options.language ?? "auto");
   const hint = [variant.prompt, options.hint].filter(Boolean).join(" ").slice(0, 600) || undefined;
 
-  confirmCloudTransfer(useCustom ? preset : undefined, ["音频"]);
+  await confirmCloudTransfer(useCustom ? preset : undefined, ["音频"]);
 
   const response = await fetch("/api/transcribe", {
     method: "POST",
