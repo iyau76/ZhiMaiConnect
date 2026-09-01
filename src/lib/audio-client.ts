@@ -3,7 +3,7 @@
 import { findVariant } from "./dialects";
 import { confirmCloudTransfer } from "./cloud-consent";
 import { apiSessionHeaders } from "./api-session";
-import { assertAudio, supportsAudio, type ProviderPreset } from "./vision-providers";
+import { assertAudio, type ProviderPreset } from "./vision-providers";
 
 export function fileToDataUrl(file: Blob) {
   return new Promise<string>((resolve, reject) => {
@@ -58,8 +58,7 @@ export async function startRecording(): Promise<Recorder> {
 }
 
 /**
- * 把音频送去转写。默认走 Lovable AI；如果当前预设是自定义 OpenAI 兼容接口
- * （例如自建 Whisper / faster-whisper 服务），就用同一套 baseUrl + key。
+ * 把音频送到当前 OpenAI 兼容接口的 `/audio/transcriptions` 端点。
  * language 传方言 id（见 dialects.ts），方言会转成 ISO 码 + 引导提示。
  */
 export async function transcribeAudio(
@@ -69,12 +68,12 @@ export async function transcribeAudio(
   const dataUrl = typeof audio === "string" ? audio : await fileToDataUrl(audio);
   const mime = typeof audio === "string" ? undefined : audio.type;
   const preset = options.preset;
-  if (preset) assertAudio(preset);
-  const useCustom = Boolean(preset && preset.kind === "openai" && supportsAudio(preset));
+  if (!preset) throw new Error("请先选择一套支持语音转写的 OpenAI 兼容接口");
+  assertAudio(preset);
   const variant = findVariant(options.language ?? "auto");
   const hint = [variant.prompt, options.hint].filter(Boolean).join(" ").slice(0, 600) || undefined;
 
-  await confirmCloudTransfer(useCustom ? preset : undefined, ["音频"]);
+  await confirmCloudTransfer(preset, ["音频"]);
 
   const response = await fetch("/api/transcribe", {
     method: "POST",
@@ -85,9 +84,10 @@ export async function transcribeAudio(
       filename: options.filename,
       hint,
       language: variant.iso,
-      ...(useCustom
-        ? { kind: "openai", baseUrl: preset!.baseUrl, apiKey: preset!.apiKey }
-        : { kind: "lovable" }),
+      kind: "openai",
+      baseUrl: preset.baseUrl,
+      apiKey: preset.apiKey,
+      model: preset.model,
     }),
   });
 

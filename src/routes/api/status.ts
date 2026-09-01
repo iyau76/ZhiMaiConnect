@@ -8,7 +8,6 @@ export function handleStatusGet(request: Request) {
     {
       ok: true,
       sessionToken: session.token,
-      lovableConfigured: Boolean(process.env.LOVABLE_API_KEY?.trim()),
       customProxyHostsConfigured: Boolean(process.env.AI_PROXY_ALLOWED_HOSTS?.trim()),
     },
     { headers: { "Set-Cookie": session.cookie } },

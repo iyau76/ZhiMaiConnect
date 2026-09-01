@@ -177,8 +177,8 @@ const EN: Record<string, string> = {
   张人脸: "faces",
   "张人脸，给每个人填上名字即可入库": "faces — name each one to save them",
   归属部门: "Group",
-  "当前选中的这套配置会用于全部任务：文字整理、图片和录音。":
-    "The selected setup is used for every task: text, images and audio.",
+  "当前选中的配置用于文字整理和图片任务；录音需使用支持语音转写的 OpenAI 兼容接口。":
+    "The selected setup handles text and images; recording requires an OpenAI-compatible transcription endpoint.",
   待启动: "Not started",
   "忌口 / 不喜欢": "Dislikes",
   怎么用: "How to use",
@@ -528,8 +528,8 @@ const EN: Record<string, string> = {
   清除: "Clear",
   "✅ 确认能识别图片：": "✅ Vision confirmed: ",
   "❌ 这个模型读不了图片：": "❌ This model cannot read images: ",
-  "这个模型看起来是纯文本模型，读不了摄像头画面，只能纯文字问答。想看图请用 Lovable AI 或本地 llava。":
-    "This looks like a text-only model — it cannot read camera frames. Use Lovable AI or a local llava model for vision.",
+  "这个模型看起来是纯文本模型，读不了摄像头画面，只能纯文字问答。想看图请使用 Gemini 兼容接口或本地多模态模型。":
+    "This looks like a text-only model. Use Gemini or a local multimodal model for vision.",
   "连不上本地 Ollama。请设置环境变量 OLLAMA_ORIGINS=* 后重启 Ollama，再确认地址正确。":
     "Cannot reach local Ollama. Set OLLAMA_ORIGINS=*, restart Ollama, and check the address.",
 
@@ -1118,8 +1118,8 @@ const EN: Record<string, string> = {
     "Choose a day and record what happened with whom.",
   挑一个顺手的: "Choose the right",
   "这一页：选模型、问建议": "On this page: choose a model and ask for advice",
-  "自定义接口要填 API Key，否则会返回 401。":
-    "Custom endpoints require an API key or will return 401.",
+  "OpenAI / Gemini 兼容接口需要填写 API Key。":
+    "OpenAI and Gemini compatible endpoints require an API key.",
   "可以带上人物和关系数据，直接问 AI 该怎么处理某段关系。":
     "You can include profile and relationship data when asking AI for advice.",
   "Agent 控制中心": "Agent control centre",

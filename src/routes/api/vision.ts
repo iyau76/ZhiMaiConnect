@@ -19,8 +19,6 @@ import {
   type VisionBody,
 } from "../../lib/api-security.server";
 
-const LOVABLE_BASE = "https://ai.gateway.lovable.dev/v1";
-
 const SYSTEM_PROMPT = [
   "你是「知脉 Connect」的内置助手：一个本地优先、证据可追溯的人际关系记忆与行动助手。",
   "你帮助用户整理其主动提供的人物档案、关系、互动记录、重要日期和行动事项，并生成可核对、可编辑的建议或草稿。",
@@ -53,27 +51,12 @@ function buildMessages(history: VisionBody["history"], prompt: string, image?: s
 }
 
 function resolveTarget(body: VisionBody) {
-  if (body.kind === "openai") {
-    const baseUrl = validateCustomBaseUrl(body.baseUrl ?? "");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (body.apiKey) headers.Authorization = `Bearer ${body.apiKey}`;
-    return { url: appendApiPath(baseUrl, "chat/completions"), headers };
-  }
-
-  const key = process.env.LOVABLE_API_KEY;
-  if (!key) {
-    throw new SafeApiError(
-      503,
-      "SERVER_MISCONFIGURED",
-      "内置 AI 尚未配置；请改用已获许可的自定义接口",
-    );
-  }
+  const baseUrl = validateCustomBaseUrl(body.baseUrl ?? "");
   return {
-    url: `${LOVABLE_BASE}/chat/completions`,
+    url: appendApiPath(baseUrl, "chat/completions"),
     headers: {
       "Content-Type": "application/json",
-      "Lovable-API-Key": key,
-      "X-Lovable-AIG-SDK": "lovable-fetch",
+      Authorization: `Bearer ${body.apiKey}`,
     } as Record<string, string>,
   };
 }

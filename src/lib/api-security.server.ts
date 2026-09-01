@@ -26,7 +26,11 @@ const SAFE_HEADERS = {
   "Referrer-Policy": "no-referrer",
 } as const;
 
-const DEFAULT_CUSTOM_AI_HOSTS = new Set(["api.openai.com", "api.deepseek.com"]);
+const DEFAULT_CUSTOM_AI_HOSTS = new Set([
+  "api.openai.com",
+  "api.deepseek.com",
+  "generativelanguage.googleapis.com",
+]);
 const METADATA_HOSTS = new Set([
   "metadata.google.internal",
   "metadata.google.com",
@@ -157,7 +161,7 @@ const historyTurnSchema = z
   .transform(({ role, text }) => ({ role, text }));
 
 const baseBodyShape = {
-  kind: z.enum(["lovable", "openai"]).default("lovable"),
+  kind: z.enum(["openai", "gemini"]),
   baseUrl: optionalTrimmedString(2_048),
   apiKey: optionalTrimmedString(1_024),
 };
@@ -195,18 +199,18 @@ export const visionBodySchema = z
         message: "缺少问题",
       });
     }
-    if (body.kind === "openai" && !body.baseUrl) {
+    if (!body.baseUrl) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["baseUrl"],
         message: "缺少接口地址",
       });
     }
-    if (body.kind === "openai" && !body.apiKey) {
+    if (!body.apiKey) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["apiKey"],
-        message: "自定义接口必须使用调用者自己的 API Key",
+        message: "云模型接口必须使用调用者自己的 API Key",
       });
     }
   });
@@ -240,7 +244,9 @@ function isSafeFilename(value: string): boolean {
 
 export const transcribeBodySchema = z
   .object({
-    ...baseBodyShape,
+    kind: z.literal("openai"),
+    baseUrl: optionalTrimmedString(2_048),
+    apiKey: optionalTrimmedString(1_024),
     model: z.string().trim().min(1).max(200).optional(),
     audio: audioSchema,
     mime: optionalTrimmedString(100).refine(
@@ -260,18 +266,18 @@ export const transcribeBodySchema = z
   })
   .strict()
   .superRefine((body, context) => {
-    if (body.kind === "openai" && !body.baseUrl) {
+    if (!body.baseUrl) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["baseUrl"],
         message: "缺少接口地址",
       });
     }
-    if (body.kind === "openai" && !body.apiKey) {
+    if (!body.apiKey) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["apiKey"],
-        message: "自定义接口必须使用调用者自己的 API Key",
+        message: "语音转写接口必须使用调用者自己的 API Key",
       });
     }
   });
@@ -396,13 +402,13 @@ export function validateCustomBaseUrl(raw: string): URL {
   }
 
   if (url.protocol !== "https:") {
-    throw new SafeApiError(400, "CUSTOM_HOST_DENIED", "自定义接口只允许 HTTPS");
+    throw new SafeApiError(400, "CUSTOM_HOST_DENIED", "云模型接口只允许 HTTPS");
   }
   if (url.username || url.password) {
     throw new SafeApiError(400, "CUSTOM_HOST_DENIED", "接口地址不能包含用户名或密码");
   }
   if (url.port && url.port !== "443") {
-    throw new SafeApiError(400, "CUSTOM_HOST_DENIED", "自定义接口只允许 443 端口");
+    throw new SafeApiError(400, "CUSTOM_HOST_DENIED", "云模型接口只允许 443 端口");
   }
   if (url.search || url.hash) {
     throw new SafeApiError(400, "CUSTOM_HOST_DENIED", "接口地址不能包含查询参数或片段");

@@ -29,6 +29,12 @@ function jsonRequest(body: string, headers?: HeadersInit): Request {
   });
 }
 
+const cloudFields = {
+  kind: "openai" as const,
+  baseUrl: "https://api.openai.com/v1",
+  apiKey: "caller-key",
+};
+
 test("parseJsonRequest rejects malformed JSON and unknown fields", async () => {
   await assert.rejects(
     parseJsonRequest(jsonRequest("{"), visionBodySchema, API_LIMITS.visionRequestBytes),
@@ -68,6 +74,7 @@ test("parseJsonRequest enforces content type and declared request size", async (
 test("vision schema caps prompt, processed history, and image bytes", () => {
   assert.equal(
     visionBodySchema.safeParse({
+      ...cloudFields,
       model: "model",
       prompt: "x".repeat(API_LIMITS.promptCharacters + 1),
     }).success,
@@ -78,7 +85,12 @@ test("vision schema caps prompt, processed history, and image bytes", () => {
     role: index % 2 ? ("assistant" as const) : ("user" as const),
     text: String(index),
   }));
-  const parsed = visionBodySchema.parse({ model: "model", prompt: "hello", history });
+  const parsed = visionBodySchema.parse({
+    ...cloudFields,
+    model: "model",
+    prompt: "hello",
+    history,
+  });
   assert.equal(parsed.history.length, API_LIMITS.historyTurns);
   assert.equal(parsed.history[0]?.text, "4");
 
@@ -86,7 +98,12 @@ test("vision schema caps prompt, processed history, and image bytes", () => {
     Math.ceil((API_LIMITS.imageBytes + 1) / 3) * 4,
   )}`;
   assert.equal(
-    visionBodySchema.safeParse({ model: "model", prompt: "hello", image: oversizedImage }).success,
+    visionBodySchema.safeParse({
+      ...cloudFields,
+      model: "model",
+      prompt: "hello",
+      image: oversizedImage,
+    }).success,
     false,
   );
 });
@@ -118,6 +135,21 @@ test("custom proxy requests require the caller's own upstream credential", () =>
     visionBodySchema.safeParse({ ...common, apiKey: "caller-key", model: "model", prompt: "hello" })
       .success,
     true,
+  );
+});
+
+test("Gemini OpenAI compatibility endpoint is accepted with caller credentials", () => {
+  const parsed = visionBodySchema.safeParse({
+    kind: "gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiKey: "caller-key",
+    model: "gemini-3.7-flash",
+    prompt: "hello",
+  });
+  assert.equal(parsed.success, true);
+  assert.equal(
+    validateCustomBaseUrl("https://generativelanguage.googleapis.com/v1beta/openai").hostname,
+    "generativelanguage.googleapis.com",
   );
 });
 

@@ -19,36 +19,14 @@ import {
   type UpstreamRequest,
 } from "../../lib/api-security.server";
 
-const LOVABLE_BASE = "https://ai.gateway.lovable.dev/v1";
-const DEFAULT_MODEL = "openai/gpt-4o-mini-transcribe";
-
 function resolveTarget(body: TranscribeBody) {
-  if (body.kind === "openai") {
-    const baseUrl = validateCustomBaseUrl(body.baseUrl ?? "");
-    const headers: Record<string, string> = {};
-    if (body.apiKey) headers.Authorization = `Bearer ${body.apiKey}`;
-    return {
-      url: appendApiPath(baseUrl, "audio/transcriptions"),
-      headers,
-      model: body.model ?? "whisper-1",
-    };
-  }
-
-  const key = process.env.LOVABLE_API_KEY;
-  if (!key) {
-    throw new SafeApiError(
-      503,
-      "SERVER_MISCONFIGURED",
-      "内置语音转写尚未配置；请改用已获许可的自定义接口",
-    );
-  }
+  const baseUrl = validateCustomBaseUrl(body.baseUrl ?? "");
   return {
-    url: `${LOVABLE_BASE}/audio/transcriptions`,
+    url: appendApiPath(baseUrl, "audio/transcriptions"),
     headers: {
-      "Lovable-API-Key": key,
-      "X-Lovable-AIG-SDK": "lovable-fetch",
+      Authorization: `Bearer ${body.apiKey}`,
     } as Record<string, string>,
-    model: body.model ?? DEFAULT_MODEL,
+    model: body.model ?? "whisper-1",
   };
 }
 

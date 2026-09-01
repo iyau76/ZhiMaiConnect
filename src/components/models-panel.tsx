@@ -19,13 +19,6 @@ import { Button } from "@/components/ui/button";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
   runAssistantAgent,
@@ -50,7 +43,6 @@ import { cn } from "@/lib/utils";
 import { auditVision, testConnection } from "@/lib/vision-client";
 import {
   KIND_LABEL,
-  LOVABLE_MODELS,
   createPreset,
   supportsAudio,
   supportsVision,
@@ -512,7 +504,7 @@ export function ModelsPanel({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm font-medium">{t("模型配置")}</span>
           <div className="flex flex-wrap gap-1.5">
-            {(["lovable", "openai", "ollama"] as ProviderKind[]).map((kind) => (
+            {(["openai", "gemini", "ollama"] as ProviderKind[]).map((kind) => (
               <Button key={kind} size="sm" variant="outline" onClick={() => addPreset(kind)}>
                 <Plus className="size-3.5" aria-hidden="true" />
                 {KIND_LABEL[kind].split("（")[0]}
@@ -582,40 +574,33 @@ export function ModelsPanel({
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">{t("模型")}</Label>
-            {editing.kind === "lovable" ? (
-              <Select value={editing.model} onValueChange={(model) => patch({ model })}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {LOVABLE_MODELS.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input
-                value={editing.model}
-                placeholder={
-                  editing.kind === "ollama" ? "llava / qwen2.5vl" : "gpt-4o-mini / deepseek-chat"
-                }
-                onChange={(e) => patch({ model: e.target.value, visionVerified: false })}
-              />
-            )}
+            <Input
+              value={editing.model}
+              placeholder={
+                editing.kind === "ollama"
+                  ? "llava / qwen2.5vl"
+                  : editing.kind === "gemini"
+                    ? "gemini-3.7-flash"
+                    : "gpt-4o-mini / deepseek-chat"
+              }
+              onChange={(e) => patch({ model: e.target.value, visionVerified: false })}
+            />
           </div>
-          {editing.kind !== "lovable" && (
-            <div className="space-y-1.5">
-              <Label className="text-xs">{t("接口地址")}</Label>
-              <Input
-                value={editing.baseUrl}
-                placeholder="https://api.deepseek.com/v1"
-                onChange={(e) => patch({ baseUrl: e.target.value, visionVerified: false })}
-              />
-            </div>
-          )}
-          {editing.kind === "openai" && (
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t("接口地址")}</Label>
+            <Input
+              value={editing.baseUrl}
+              placeholder={
+                editing.kind === "gemini"
+                  ? "https://generativelanguage.googleapis.com/v1beta/openai"
+                  : editing.kind === "ollama"
+                    ? "http://localhost:11434"
+                    : "https://api.deepseek.com/v1"
+              }
+              onChange={(e) => patch({ baseUrl: e.target.value, visionVerified: false })}
+            />
+          </div>
+          {editing.kind !== "ollama" && (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-2">
                 <Label className="text-xs">{t("API Key")}</Label>
@@ -699,7 +684,7 @@ export function ModelsPanel({
           </p>
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          {t("当前选中的这套配置会用于全部任务：文字整理、图片和录音。")}
+          {t("当前选中的配置用于文字整理和图片任务；录音需使用支持语音转写的 OpenAI 兼容接口。")}
           {editing.visionCheckedAt
             ? ` ${t("上次审查")}：${new Date(editing.visionCheckedAt).toLocaleString()}`
             : ""}

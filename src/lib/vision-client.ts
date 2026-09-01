@@ -222,16 +222,14 @@ async function streamServer(
   }
 }
 
-/** 自定义接口必须填 Key，否则会拿到看不懂的 401 */
+/** 云端兼容接口必须填地址和 Key，否则请求没有明确的接收方。 */
 function assertConfigured(preset: ProviderPreset) {
-  if (preset.kind !== "openai") return;
+  if (preset.kind === "ollama") return;
   if (!preset.baseUrl.trim()) {
     throw new Error(`「${preset.name}」还没填接口地址，请到「模型」里补上。`);
   }
   if (!preset.apiKey.trim()) {
-    throw new Error(
-      `「${preset.name}」还没填 API Key，接口会返回 401。请到「模型」里填入 Key，或切换到内置的 Lovable AI（免配置）。`,
-    );
+    throw new Error(`「${preset.name}」还没填 API Key。请到「模型配置」中填写后再试。`);
   }
 }
 

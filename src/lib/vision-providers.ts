@@ -1,61 +1,68 @@
-export type ProviderKind = "lovable" | "ollama" | "openai";
+export type ProviderKind = "openai" | "gemini" | "ollama";
 
 export interface ProviderPreset {
   id: string;
   name: string;
   kind: ProviderKind;
-  /** Ollama: http://localhost:11434 · OpenAI 兼容: https://api.deepseek.com/v1 */
+  /** Ollama 或 OpenAI 兼容接口的 API 基址。 */
   baseUrl: string;
   model: string;
   apiKey: string;
-  /** 通过「看图审查」验证过能读图 */
+  /** 通过“看图审查”验证过能够读取图片。 */
   visionVerified?: boolean;
   visionCheckedAt?: number;
-  /** 这个接口带语音转写（/audio/transcriptions），可用于录音 */
+  /** 接口实现了 OpenAI `/audio/transcriptions` 协议。 */
   audioCapable?: boolean;
 }
 
-/** 能不能读图：Lovable 内置模型都支持；其它必须通过审查才算数 */
-export function supportsVision(preset: ProviderPreset) {
-  if (preset.kind === "lovable") return true;
-  return preset.visionVerified === true;
+export const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
+export const GEMINI_DEFAULT_MODEL = "gemini-3.7-flash";
+
+export const KIND_LABEL: Record<ProviderKind, string> = {
+  openai: "OpenAI 兼容接口",
+  gemini: "Gemini 兼容接口",
+  ollama: "Ollama（本地）",
+};
+
+export function isCloudProvider(preset: ProviderPreset) {
+  return preset.kind === "openai" || preset.kind === "gemini";
 }
 
-/** 能不能转写音频：Lovable 内置支持；自定义接口需手动标记 */
+function isOfficialGeminiPreset(preset: ProviderPreset) {
+  if (preset.kind !== "gemini") return false;
+  try {
+    return (
+      new URL(preset.baseUrl).toString().replace(/\/+$/, "") === GEMINI_OPENAI_BASE_URL &&
+      preset.model.trim() === GEMINI_DEFAULT_MODEL
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function supportsVision(preset: ProviderPreset) {
+  return isOfficialGeminiPreset(preset) || preset.visionVerified === true;
+}
+
 export function supportsAudio(preset: ProviderPreset) {
-  if (preset.kind === "lovable") return true;
   return preset.kind === "openai" && Boolean(preset.baseUrl) && preset.audioCapable === true;
 }
 
 export function assertVision(preset: ProviderPreset) {
   if (supportsVision(preset)) return;
   throw new Error(
-    `辅助模型「${preset.name}」还没有通过看图审查，不能用来分析图片。请到「模型」里点“审查看图能力”，或换一个多模态模型。`,
+    `辅助模型“${preset.name}”还没有通过看图审查，不能用来分析图片。请到“模型配置”里点击“审查看图能力”，或换一个多模态模型。`,
   );
 }
 
 export function assertAudio(preset: ProviderPreset) {
   if (supportsAudio(preset)) return;
   throw new Error(
-    `辅助模型「${preset.name}」没有标记为支持语音转写，不能用来处理录音。请到「模型」里勾选“支持语音转写”，或改用 Lovable AI。`,
+    `模型配置“${preset.name}”未启用 OpenAI 兼容语音转写。请换用支持 /audio/transcriptions 的接口并启用语音转写。`,
   );
 }
 
-export const LOVABLE_MODELS = [
-  { id: "google/gemini-3.6-flash", label: "Gemini 3.6 Flash（推荐，快且看图强）" },
-  { id: "google/gemini-3.1-pro-preview", label: "Gemini 3.1 Pro（更强推理，较慢）" },
-  { id: "google/gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite（最省）" },
-  { id: "openai/gpt-5.4", label: "GPT-5.4" },
-  { id: "openai/gpt-5.4-mini", label: "GPT-5.4 Mini" },
-] as const;
-
-export const KIND_LABEL: Record<ProviderKind, string> = {
-  lovable: "Lovable AI（内置，免配置）",
-  ollama: "Ollama（本地）",
-  openai: "OpenAI 兼容接口",
-};
-
-/** 这些接口是纯文本模型，看不了图 —— 界面上要提示用户 */
+/** 这些常见模型通常只处理文本；界面据此提醒用户先做看图审查。 */
 export const TEXT_ONLY_HINTS = ["deepseek", "moonshot", "qwen-plus", "qwen-turbo"];
 
 export function looksTextOnly(preset: ProviderPreset) {
@@ -73,12 +80,23 @@ export function createPreset(kind: ProviderKind): ProviderPreset {
     model: "",
     apiKey: "",
   };
-  if (kind === "lovable") return { ...base, name: "Lovable AI", model: LOVABLE_MODELS[0].id };
-  if (kind === "ollama")
-    return { ...base, name: "本地 Ollama", baseUrl: "http://localhost:11434", model: "llava" };
+  if (kind === "gemini") {
+    return {
+      ...base,
+      baseUrl: GEMINI_OPENAI_BASE_URL,
+      model: GEMINI_DEFAULT_MODEL,
+    };
+  }
+  if (kind === "ollama") {
+    return {
+      ...base,
+      name: "本地 Ollama",
+      baseUrl: "http://localhost:11434",
+      model: "llava",
+    };
+  }
   return {
     ...base,
-    name: "自定义接口",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-chat",
   };
@@ -86,11 +104,19 @@ export function createPreset(kind: ProviderKind): ProviderPreset {
 
 export const DEFAULT_PRESETS: ProviderPreset[] = [
   {
-    id: "builtin-lovable",
-    name: "Lovable AI",
-    kind: "lovable",
-    baseUrl: "",
-    model: LOVABLE_MODELS[0].id,
+    id: "builtin-openai",
+    name: "OpenAI 兼容接口",
+    kind: "openai",
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-chat",
+    apiKey: "",
+  },
+  {
+    id: "builtin-gemini",
+    name: "Gemini 兼容接口",
+    kind: "gemini",
+    baseUrl: GEMINI_OPENAI_BASE_URL,
+    model: GEMINI_DEFAULT_MODEL,
     apiKey: "",
   },
   {
@@ -102,6 +128,34 @@ export const DEFAULT_PRESETS: ProviderPreset[] = [
     apiKey: "",
   },
 ];
+
+function cloneDefault(kind: ProviderKind): ProviderPreset {
+  const preset = DEFAULT_PRESETS.find((item) => item.kind === kind);
+  if (!preset) throw new Error(`缺少 ${kind} 默认配置`);
+  return { ...preset };
+}
+
+/**
+ * 将旧版 Lovable 模型配置一次性迁移到新的 provider 契约。
+ * 只在配置版本升级时调用，避免用户主动删除的配置在下次启动时重新出现。
+ */
+export function migrateLegacyProviderPresets(value: unknown): ProviderPreset[] {
+  const source = Array.isArray(value) ? value : [];
+  const retained = source.filter((item): item is ProviderPreset => {
+    if (!item || typeof item !== "object") return false;
+    const kind = (item as { kind?: unknown }).kind;
+    return kind === "openai" || kind === "gemini" || kind === "ollama";
+  });
+
+  const openai = retained.filter((item) => item.kind === "openai");
+  const gemini = retained.filter((item) => item.kind === "gemini");
+  const ollama = retained.filter((item) => item.kind === "ollama");
+  return [
+    ...(openai.length ? openai : [cloneDefault("openai")]),
+    ...(gemini.length ? gemini : [cloneDefault("gemini")]),
+    ...ollama,
+  ];
+}
 
 export interface ChatTurn {
   role: "user" | "assistant";

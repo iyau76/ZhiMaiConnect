@@ -10,10 +10,10 @@ vi.mock("./vision-client", () => ({ askModel: askModelMock }));
 const preset = {
   id: "test",
   name: "测试模型",
-  kind: "lovable" as const,
-  baseUrl: "",
+  kind: "openai" as const,
+  baseUrl: "https://api.example.com/v1",
   model: "test-model",
-  apiKey: "",
+  apiKey: "test-key",
 };
 
 describe("intake agent", () => {

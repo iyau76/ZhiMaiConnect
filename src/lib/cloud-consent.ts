@@ -20,9 +20,8 @@ function readConsents(): Set<string> {
   }
 }
 
-function providerName(preset: ProviderPreset | undefined) {
-  if (!preset || preset.kind === "lovable") return "Lovable AI";
-  return preset.name || "自定义云模型";
+function providerName(preset: ProviderPreset) {
+  return preset.name || "云模型";
 }
 
 function showCloudTransferConsent(provider: string, dataTypes: CloudDataType[]) {
@@ -108,14 +107,11 @@ function showCloudTransferConsent(provider: string, dataTypes: CloudDataType[]) 
  * 云模型在当前会话第一次接收某类数据前，明确告知服务商和数据类型。
  * 本地 Ollama 不经过此确认；新增数据类型时会再次确认。
  */
-export async function confirmCloudTransfer(
-  preset: ProviderPreset | undefined,
-  dataTypes: CloudDataType[],
-) {
-  if (preset?.kind === "ollama") return;
+export async function confirmCloudTransfer(preset: ProviderPreset, dataTypes: CloudDataType[]) {
+  if (preset.kind === "ollama") return;
 
   const types = [...new Set(dataTypes)];
-  const id = consentId(preset?.id ?? "lovable-transcription", types);
+  const id = consentId(preset.id, types);
   const accepted = readConsents();
   if (accepted.has(id)) return;
 

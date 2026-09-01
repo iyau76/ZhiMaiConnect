@@ -298,7 +298,6 @@ async function handleRoute(route: Route, state: MockNetworkState) {
       body: JSON.stringify({
         ok: true,
         sessionToken: "playwright-session-token",
-        lovableConfigured: true,
         customProxyHostsConfigured: false,
       }),
     });
@@ -392,12 +391,16 @@ export const test = base.extend<{ mockNetwork: MockNetworkState }>({
           sessionStorage.setItem(
             "openglass.cloud-transfer-consents",
             JSON.stringify([
-              "builtin-lovable:文字内容",
-              "builtin-lovable:人物关系上下文|文字内容",
-              "builtin-lovable:图片|文字内容",
-              "builtin-lovable:人物关系上下文|图片|文字内容",
-              "lovable-transcription:音频",
+              "builtin-openai:文字内容",
+              "builtin-openai:人物关系上下文|文字内容",
+              "builtin-openai:图片|文字内容",
+              "builtin-openai:人物关系上下文|图片|文字内容",
+              "builtin-openai:音频",
             ]),
+          );
+          sessionStorage.setItem(
+            "openglass.session-api-keys",
+            JSON.stringify({ "builtin-openai": "playwright-test-key" }),
           );
           localStorage.setItem("openglass.welcomeSeen", "1");
           localStorage.setItem("openglass.lang", "zh");

@@ -39,14 +39,6 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
     setRunning(true);
     const en = getLang() === "en";
     const next: CheckResult[] = [];
-    let lovableConfigured: boolean | null = null;
-    try {
-      const response = await fetch("/api/status", { headers: { Accept: "application/json" } });
-      const status = (await response.json()) as { lovableConfigured?: boolean };
-      lovableConfigured = response.ok && status.lovableConfigured === true;
-    } catch {
-      lovableConfigured = null;
-    }
     try {
       const [people, relations, events, reminders, demo] = await Promise.all([
         facesDb.listPersons(),
@@ -89,9 +81,7 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
 
     const modelReady =
       Boolean(preset.model.trim()) &&
-      (preset.kind === "lovable"
-        ? lovableConfigured === true
-        : preset.kind !== "openai" || Boolean(preset.baseUrl.trim() && preset.apiKey.trim()));
+      (preset.kind === "ollama" || Boolean(preset.baseUrl.trim() && preset.apiKey.trim()));
     next.push({
       name: en ? "Current model setup" : "当前模型配置",
       ok: modelReady,
@@ -99,17 +89,9 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
         ? en
           ? `${preset.name} · ${preset.model} (test connectivity separately on the AI assistant page)`
           : `${preset.name} · ${preset.model}（联网能力请在“AI 助理”页另点测试连接）`
-        : preset.kind === "lovable" && lovableConfigured === false
-          ? en
-            ? "LOVABLE_API_KEY is missing on the server; use local Ollama or a custom endpoint. Local features remain available."
-            : "服务端缺少 LOVABLE_API_KEY；请改用本地 Ollama/自定义接口，基础功能仍可演示"
-          : lovableConfigured === null && preset.kind === "lovable"
-            ? en
-              ? "Could not read server setup status; test connectivity on the AI assistant page."
-              : "无法读取服务端配置状态；请在“AI 助理”页测试连接"
-            : en
-              ? "The model, endpoint or session key is incomplete; local features remain available."
-              : "模型、接口地址或会话密钥不完整；本地功能仍可演示",
+        : en
+          ? "The model, endpoint or session key is incomplete; local features remain available."
+          : "模型、接口地址或会话密钥不完整；本地功能仍可演示",
     });
     const microphoneReady =
       Reflect.has(navigator, "mediaDevices") && Reflect.has(globalThis, "MediaRecorder");
@@ -139,8 +121,8 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
           ? "A key from an older version remains in localStorage; resave or clear it on the AI assistant page."
           : "发现旧版本遗留的 localStorage 密钥；请在 AI 助理页重新保存或清除"
         : en
-          ? "No persisted API key found; custom keys stay in the current session only."
-          : "未发现持久化 API Key；自定义密钥仅保存在当前会话",
+          ? "No persisted API key found; cloud model keys stay in the current session only."
+          : "未发现持久化 API Key；云模型密钥仅保存在当前会话",
     });
     next.push({
       name: en ? "Language and version" : "语言与版本",

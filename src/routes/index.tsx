@@ -18,11 +18,17 @@ import { WelcomeCover } from "@/components/welcome-cover";
 import { t, useLang, initLang } from "@/lib/i18n";
 import { initTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
-import { DEFAULT_PRESETS, type ProviderPreset } from "@/lib/vision-providers";
+import {
+  DEFAULT_PRESETS,
+  migrateLegacyProviderPresets,
+  type ProviderPreset,
+} from "@/lib/vision-providers";
 
 const PRESETS_KEY = "openglass.presets";
 const ACTIVE_KEY = "openglass.active";
 const SESSION_KEYS_KEY = "openglass.session-api-keys";
+const PRESETS_VERSION_KEY = "openglass.presets-version";
+const PRESETS_VERSION = "2";
 
 function readSessionKeys(): Record<string, string> {
   try {
@@ -138,7 +144,7 @@ const HEADINGS: Record<
     b: "模型",
     guide: "这一页：选模型、问建议",
     points: [
-      "自定义接口要填 API Key，否则会返回 401。",
+      "OpenAI / Gemini 兼容接口需要填写 API Key。",
       "可以带上人物和关系数据，直接问 AI 该怎么处理某段关系。",
     ],
   },
@@ -157,20 +163,25 @@ function Index() {
     initTheme();
     try {
       const storedPresets = localStorage.getItem(PRESETS_KEY);
-      if (storedPresets) {
-        const parsed = JSON.parse(storedPresets) as ProviderPreset[];
-        if (Array.isArray(parsed) && parsed.length) {
-          const sessionKeys = readSessionKeys();
-          setPresets(
-            parsed.map((preset) => ({
-              ...preset,
-              apiKey: sessionKeys[preset.id] ?? preset.apiKey ?? "",
-            })),
-          );
-        }
-      }
+      const parsed = storedPresets ? (JSON.parse(storedPresets) as unknown) : DEFAULT_PRESETS;
+      const configured =
+        localStorage.getItem(PRESETS_VERSION_KEY) === PRESETS_VERSION
+          ? Array.isArray(parsed) && parsed.length
+            ? (parsed as ProviderPreset[])
+            : DEFAULT_PRESETS
+          : migrateLegacyProviderPresets(parsed);
+      const sessionKeys = readSessionKeys();
+      const nextPresets = configured.map((preset) => ({
+        ...preset,
+        apiKey: sessionKeys[preset.id] ?? preset.apiKey ?? "",
+      }));
+      setPresets(nextPresets);
       const storedActive = localStorage.getItem(ACTIVE_KEY);
-      if (storedActive) setActiveId(storedActive);
+      setActiveId(
+        storedActive && nextPresets.some((preset) => preset.id === storedActive)
+          ? storedActive
+          : nextPresets[0].id,
+      );
     } catch {
       /* 读取失败就用默认值 */
     }
@@ -181,6 +192,7 @@ function Index() {
     if (!hydrated) return;
     try {
       localStorage.setItem(PRESETS_KEY, JSON.stringify(withoutPersistentKeys(presets)));
+      localStorage.setItem(PRESETS_VERSION_KEY, PRESETS_VERSION);
       localStorage.setItem(ACTIVE_KEY, activeId);
       sessionStorage.setItem(
         SESSION_KEYS_KEY,
