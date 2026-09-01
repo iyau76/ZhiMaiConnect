@@ -129,18 +129,48 @@ test("待确认条目是软提醒，直接入库后关系仍保留 pending 状�
 
 test("批量接受只确认来源对齐关系，名称子串误配保持可见且可单独处理", async ({ page }) => {
   await openApp(page);
+  await page.evaluate(() => sessionStorage.removeItem("openglass.cloud-transfer-consents"));
   await page
     .getByRole("heading", { name: /随手写，AI 来整理/ })
     .locator("..")
     .getByRole("textbox")
     .fill("尤二姐是尤氏继母的女儿。");
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  const cloudConsent = page.getByRole("dialog").filter({ hasText: "发送给云模型" });
+  await expect(cloudConsent).toBeVisible();
+  await cloudConsent.getByRole("button", { name: "继续" }).click();
+
+  const intakePanel = page.getByTestId("intake-panel");
+  const relationCardsBeforeReload = page.locator('[data-draft-kind="relation"]');
+  await expect(relationCardsBeforeReload).toHaveCount(2);
+  await expect(relationCardsBeforeReload.first()).toContainText("同时包含关系两端");
+  await expect(intakePanel).toHaveAttribute("data-intake-draft-persisted", "true");
+
+  const persistedDraft = await page.evaluate(() => {
+    const raw = localStorage.getItem("zhimai.intake.draft.v1");
+    if (!raw) return null;
+    const stash = JSON.parse(raw) as { draft?: { relations?: unknown[] } };
+    return stash.draft ?? null;
+  });
+  expect(persistedDraft).not.toBeNull();
+  expect(persistedDraft?.relations?.length ?? 0).toBeGreaterThan(0);
+
+  await page.reload();
+  await expect(page.getByTestId("intake-panel")).toHaveAttribute(
+    "data-intake-draft-persisted",
+    "true",
+  );
+  await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
 
   const relationCards = page.locator('[data-draft-kind="relation"]');
   await expect(relationCards).toHaveCount(2);
   await expect(relationCards.first()).toContainText("同时包含关系两端");
 
   await page.getByRole("button", { name: /一键接受已对齐项/ }).click();
+  const acceptAllDialog = page.getByTestId("intake-accept-all-dialog");
+  await expect(acceptAllDialog).toBeVisible();
+  await acceptAllDialog.getByTestId("intake-accept-all-confirm").click();
+  await expect(acceptAllDialog).toHaveCount(0);
   await expect(page.getByText("待确认 1", { exact: true })).toBeVisible();
   await expect(relationCards.first().getByRole("button", { name: "接受此项" })).toBeVisible();
   await expect(relationCards.nth(1).getByRole("button", { name: "已接受" })).toBeDisabled();

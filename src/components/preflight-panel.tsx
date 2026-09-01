@@ -152,7 +152,7 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
   };
 
   return (
-    <section className="space-y-3 border-t border-border pt-5">
+    <section className="space-y-3 border-t border-border pt-5" data-testid="preflight-panel">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="flex items-center gap-2 text-sm font-medium">
@@ -160,7 +160,7 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
             {t("演示前自检")}
           </h2>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            {t("只做本地只读检查，不发送人物资料，也不会主动申请麦克风权限。")}
+            {t("检查本地数据、模型与浏览器能力。")}
           </p>
         </div>
         <Button variant="outline" onClick={() => void run()} disabled={running}>

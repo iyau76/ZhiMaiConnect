@@ -815,6 +815,8 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
           label: relation.label,
           mutual: isMutualRelation(relation),
           evidenceMode: relationEvidenceMode(relation),
+          supportingRelationIds:
+            relation.supportingRelationIds ?? relation.derivedFromRelationIds ?? [],
           confirmationStatus: relation.confirmationStatus ?? "confirmed",
           visibility: relation.visibility ?? "auto",
           /** 跨圈层的连线用虚线标出来 */
@@ -2503,6 +2505,9 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                         key={edge.id}
                         role="button"
                         tabIndex={0}
+                        data-relation-id={edge.id}
+                        data-evidence-mode={edge.evidenceMode}
+                        data-supporting-relation-ids={edge.supportingRelationIds.join(",")}
                         opacity={relationComposerOpen ? 0.18 : active ? 1 : 0.12}
                         className="cursor-pointer outline-none"
                         aria-label={`${t("查看关系详情")}：${edge.a!.name} ${edge.mutual ? "⇄" : "→"} ${edge.b!.name} · ${edge.label}`}
@@ -2518,6 +2523,14 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                         }}
                       >
                         <title>{`${edge.label} · ${t("点击查看来源、时间与确认状态")}`}</title>
+                        <path
+                          d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
+                          fill="none"
+                          stroke="transparent"
+                          strokeWidth={20}
+                          pointerEvents="stroke"
+                          aria-hidden="true"
+                        />
                         <path
                           d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
                           fill="none"
@@ -2583,6 +2596,13 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                         key={node.id}
                         role="button"
                         tabIndex={0}
+                        data-person-id={node.id}
+                        data-person-name={node.name}
+                        aria-label={`${node.name} · ${t(
+                          relationComposerOpen
+                            ? "点击选择为关系起点或终点"
+                            : "单击聚焦，拖动可移动，双击开人物卡",
+                        )}`}
                         opacity={linked ? 1 : 0.25}
                         className={cn(
                           "group outline-none",

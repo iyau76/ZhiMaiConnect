@@ -350,6 +350,7 @@ export function AgentRunInspector({
       <DialogTrigger asChild>
         <button
           type="button"
+          data-agent-run-details-id={run.id}
           className={cn(
             "flex w-full min-w-0 items-center gap-2 rounded-lg border border-border bg-card/50 px-3 py-2 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
             className,
@@ -374,6 +375,7 @@ export function AgentRunInspector({
       <DialogContent
         className="flex max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-3xl grid-cols-none flex-col gap-0 overflow-hidden p-0 sm:rounded-2xl"
         data-testid="agent-run-details"
+        data-agent-run-dialog-id={run.id}
       >
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-14 text-left">
           <div className="flex min-w-0 flex-wrap items-center gap-2">

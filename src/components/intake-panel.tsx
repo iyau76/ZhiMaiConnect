@@ -15,13 +15,23 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { DraftGraph } from "@/components/draft-graph";
 import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
@@ -109,7 +119,7 @@ function missingOf(person: DraftPerson) {
   });
 }
 
-const SCHEMA = `{"people":[{"name":"","note":"","age":"","gender":"","relation":"","birthday":"","circle":"","closeness":null,"likes":[],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[{"platform":"","account":"","alias":"","validFrom":"","validTo":""}],"confidence":null}],"facts":[{"person":"","key":"","value":"","validFrom":"","validTo":"","confidence":null}],"relations":[{"from":"","to":"","label":"","note":"","basis":"","confidence":null}],"events":[{"title":"","detail":"","timeText":"原文时间短语","date":"","dateEnd":"","precision":"day|month|year|range","place":"","people":[],"kind":"","confidence":null}],"reminders":[{"title":"","detail":"","due":"","people":[],"kind":"birthday|festival|gift|custom","confidence":null}],"evidence":[{"kind":"note|audio|exhibit|frame","title":"","text":"","origin":"","confidence":null}],"summary":""}`;
+const SCHEMA = `{"people":[{"name":"","note":"","age":"","gender":"","birthday":"","circle":"","closeness":null,"likes":[],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[{"platform":"","account":"","alias":"","validFrom":"","validTo":""}],"confidence":null}],"facts":[{"person":"","key":"","value":"","validFrom":"","validTo":"","confidence":null}],"relations":[{"from":"","to":"","label":"","note":"","basis":"","confidence":null}],"events":[{"title":"","detail":"","timeText":"原文时间短语","date":"","dateEnd":"","precision":"day|month|year|range","place":"","people":[],"kind":"","confidence":null}],"reminders":[{"title":"","detail":"","due":"","people":[],"kind":"birthday|festival|gift|custom","confidence":null}],"evidence":[{"kind":"note|audio|exhibit|frame","title":"","text":"","origin":"","confidence":null}],"summary":""}`;
 
 const CREATE_NEW_PERSON = "__create_new_person__";
 const CREATE_NEW_EVENT = "__create_new_event__";
@@ -242,13 +252,14 @@ function buildPrompt(text: string, known: string[], previous: Draft | null) {
 规则：
  - 材料里没写的普通事实字段留空字符串或空数组；模型只抽取原文明说的关系，本地规则在提交后统一推导。
 - title、部门、单位、项目、地址、忌口、礼物等人物字段只保留材料明确写出的值；“喜欢摄影”不能改写成“摄影师”。
-- relation 写这个人和「我」的关系，如大学同学、表哥、前同事。
+- people 只承载人物自身属性，不承载人与人的关系。任何关系称谓都统一写进 relations；与用户本人的关系以「我」作为其中一个端点。
+- 所属、称谓或主谓结构指向两个具体人物时，必须建立独立关系。例如“甲的学妹乙”“甲和乙是前同事”都不能只写进人物 note，也不能只把两人列进同一个事件。
 - circle 只能是：家人 / 亲戚 / 朋友 / 同学 / 同事 / 邻居 / 其它。closeness 仅在材料明确给出 1-5 数值时填写，否则留空；不要根据关系称呼推断。
 - birthday 用 MM-DD 或 YYYY-MM-DD。likes 喜好、dislikes 忌口或不喜欢、gifts 送过的礼物。
 - identities 只记录材料明确出现的平台、账号、当时昵称与生效/失效时间；不要根据姓名猜账号或时间。
 - facts 只放材料明确表达、但不属于固定人物字段的事实；person 指人物姓名，key 是短字段名，value 是原文可支持的值。validFrom/validTo 仅在材料给出有效期时填写。
 - evidence 只保留能核对抽取结果的短摘要或必要原文片段，不要复制整份聊天、文档或转写稿，text 最多 500 字。
- - relations 写人和人之间原文明说的关系。每条 basis 都写“原文：最短支持片段”，不要输出推导关系。
+ - relations 写人和人之间原文明说的关系。每条 basis 都写“原文：最短支持片段”，不要输出推导关系。材料同时给出关系两端时，不得遗漏这条关系。
 - 今天是 ${today}。events 放已经发生或计划发生、值得进入日历/时间线的事情；timeText 逐字复制原文时间短语，date 用 yyyy-mm-dd。相对时间依据今天换算；只知道月份或年份时分别补为当月 01 日或当年 01-01，并把 precision 标为 month 或 year；一段时间用 range 和 dateEnd。people 写相关人物姓名。
 - reminders 放需要用户采取行动的待办，如「给小雨回电话」；due 仅在材料明确给出日期时使用 yyyy-mm-dd，people 写相关人物姓名。不要把同一件事同时放进 events 和 reminders，除非材料同时明确表达日历事件和后续行动。
 - confidence 是你对每一条抽取准确性的自评（0 到 1），无法判断时留空；它只是提示，不能代替用户确认。
@@ -259,13 +270,14 @@ Use exactly this structure: ${SCHEMA}
 Rules:
  - Leave ordinary fact fields empty when the text does not state them. Extract explicit relations only; deterministic local rules derive kinship after commit.
 - Keep role, department, organisation, projects, address, dislikes and gifts only when explicitly stated. An interest in photography does not make someone a photographer.
-- relation = how this person relates to me (college roommate, cousin, ex-colleague).
+- people contains attributes of the person only. Put every interpersonal tie in relations, including ties to the user, using “me” as one endpoint.
+- A possessive, kinship title, or subject-predicate phrase that identifies two people requires a separate relation. Do not hide it only in a person's note or merely list both people on an event.
 - circle is one of family / relatives / friends / classmates / colleagues / neighbours / other. Set closeness only when the material explicitly gives a 1-5 score; never infer it from a relationship label.
 - birthday as MM-DD or YYYY-MM-DD. likes, dislikes, gifts are short arrays.
 - identities contains only explicitly stated platform/account/alias and validity dates. Never guess an account or date from a name.
 - facts contains only explicit facts that do not fit a fixed person field; person is the person's name and validity dates are included only when stated.
 - evidence is a short source summary or the minimum excerpt needed for review (at most 500 characters), never a copy of the complete chat, document, or transcript.
- - relations = explicitly stated ties between people. Every basis starts with “Original:” and quotes the shortest supporting text. Do not output inferred ties.
+ - relations = explicitly stated ties between people. Every basis starts with “Original:” and quotes the shortest supporting text. Do not output inferred ties. Never omit a tie when the material supplies both endpoints.
 - Today is ${today}. Events are past or planned moments worth putting on a calendar/timeline. Copy the exact source phrase into timeText and normalize relative time to yyyy-mm-dd; use precision month/year/range when needed. people contains related names.
 - reminders are actions the user still needs to take. Set due only when the material gives a date. Do not duplicate one fact across events and reminders unless both a calendar moment and a follow-up action are explicit.
 - confidence is the model's 0-1 self-assessment for each extracted item and never replaces user confirmation.
@@ -291,7 +303,7 @@ ${KINSHIP_RULES_EN}`;
   return { ...fitted, sections };
 }
 
-/** 切到别的页签再回来时，未提交的录入内容不能丢 —— 存在本地，15 秒自动暂存一次 */
+/** 未提交的录入内容随状态变化写入本地，切换页签后可以继续。 */
 const DRAFT_KEY = "zhimai.intake.draft.v1";
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -598,6 +610,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   const [attached, setAttached] = useState<{ name: string; block: string }[]>([]);
   const [progress, setProgress] = useState(0);
   const [stashedAt, setStashedAt] = useState<number | null>(null);
+  const [draftPersisted, setDraftPersisted] = useState(false);
+  const [acceptAllOpen, setAcceptAllOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
@@ -620,6 +634,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     );
     setAttached(stored.attached);
     setStashedAt(stored.at);
+    setDraftPersisted(Boolean(stored.draft));
   }, []);
 
   useEffect(() => {
@@ -658,32 +673,39 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     [],
   );
 
-  /** 暂存：15 秒一次 + 离开页面时再存一次，回来接着改 */
+  /** 草稿状态变化后立即短暂防抖写入；15 秒仅作为静态页面兜底。 */
   const snapshot = useRef({ raw, supplement, draft, attached });
   snapshot.current = { raw, supplement, draft, attached };
+  const persistSnapshot = useCallback(() => {
+    const now = snapshot.current;
+    const empty = !now.raw.trim() && !now.supplement.trim() && !now.draft && !now.attached.length;
+    if (empty) {
+      window.localStorage.removeItem(DRAFT_KEY);
+      setDraftPersisted(false);
+      setStashedAt(null);
+      return;
+    }
+    const at = Date.now();
+    window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...now, at }));
+    setDraftPersisted(Boolean(now.draft));
+    setStashedAt(at);
+  }, []);
+
   useEffect(() => {
-    const write = () => {
-      const now = snapshot.current;
-      const empty = !now.raw.trim() && !now.supplement.trim() && !now.draft && !now.attached.length;
-      try {
-        if (empty) {
-          window.localStorage.removeItem(DRAFT_KEY);
-          return;
-        }
-        window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...now, at: Date.now() }));
-        setStashedAt(Date.now());
-      } catch {
-        /* 存不下就算了，不打扰用户 */
-      }
-    };
-    const timer = window.setInterval(write, 15000);
-    window.addEventListener("beforeunload", write);
+    setDraftPersisted(false);
+    const timer = window.setTimeout(persistSnapshot, 250);
+    return () => window.clearTimeout(timer);
+  }, [attached, draft, persistSnapshot, raw, supplement]);
+
+  useEffect(() => {
+    const timer = window.setInterval(persistSnapshot, 15000);
+    window.addEventListener("pagehide", persistSnapshot);
     return () => {
       window.clearInterval(timer);
-      window.removeEventListener("beforeunload", write);
-      write();
+      window.removeEventListener("pagehide", persistSnapshot);
+      persistSnapshot();
     };
-  }, []);
+  }, [persistSnapshot]);
 
   /** 传错了可以撤掉：把这份文件抽出来的文字从输入框里删掉 */
   const removeAttached = (index: number) => {
@@ -1235,12 +1257,12 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   };
 
   const acceptAllPendingItems = () => {
-    if (
-      !draft ||
-      !window.confirm(t("确定批量接受已对齐条目吗？证据未对齐的关系会保留待确认，可单独接受。"))
-    ) {
-      return;
-    }
+    if (!draft) return;
+    setAcceptAllOpen(true);
+  };
+
+  const confirmAcceptAllPendingItems = () => {
+    if (!draft) return;
     const unresolvedRelationCount = (draft.relations ?? []).filter(
       (item) => item._audit?.confirmationStatus !== "accepted" && item._relationChecked === false,
     ).length;
@@ -1268,6 +1290,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         ? `${t("已接受来源对齐的待确认条目")}；${unresolvedRelationCount} ${t("条证据未对齐关系仍待确认，可逐条查看或接受")}`
         : t("已接受全部来源对齐的待确认条目"),
     );
+    setAcceptAllOpen(false);
   };
 
   const commit = async () => {
@@ -1995,7 +2018,30 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   );
 
   return (
-    <section className="flex min-w-0 flex-col gap-5">
+    <section
+      className="flex min-w-0 flex-col gap-5"
+      data-testid="intake-panel"
+      data-intake-draft-persisted={draft && draftPersisted ? "true" : "false"}
+    >
+      <AlertDialog open={acceptAllOpen} onOpenChange={setAcceptAllOpen}>
+        <AlertDialogContent data-testid="intake-accept-all-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("接受已对齐项")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("接受来源已对齐的条目。证据未对齐的关系继续留在待确认。")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("取消")}</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="intake-accept-all-confirm"
+              onClick={confirmAcceptAllPendingItems}
+            >
+              {t("确认接受")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="rounded-2xl border border-border bg-card/60 p-5">
         <h2 className="flex items-baseline gap-2.5">
           <span className="font-display text-xl leading-none tracking-tight">
@@ -2029,7 +2075,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         <p className="mt-1.5 text-[10px] text-muted-foreground">
           {stashedAt
             ? `${t("已自动暂存")} · ${new Date(stashedAt).toLocaleTimeString()} · ${t("24 小时后自动过期")}`
-            : t("每 15 秒自动暂存，仅保留在本浏览器并于 24 小时后过期")}
+            : t("内容会自动暂存在本浏览器，并于 24 小时后过期")}
         </p>
 
         {attached.length > 0 && (

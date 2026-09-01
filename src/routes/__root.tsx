@@ -11,6 +11,7 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { THEME_BOOTSTRAP_SCRIPT } from "../lib/theme";
 
 function NotFoundComponent() {
   return (
@@ -122,6 +123,10 @@ function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
+        <script
+          id="openglass-theme-bootstrap"
+          dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }}
+        />
         <HeadContent />
       </head>
       <body>

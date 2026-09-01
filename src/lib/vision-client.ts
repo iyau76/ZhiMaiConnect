@@ -268,7 +268,7 @@ export async function askModel(
   const dataTypes: CloudDataType[] = ["文字内容"];
   if (/人物档案|人物关系|人脉库|关系网/.test(prompt)) dataTypes.push("人物关系上下文");
   if (image || boundedHistory.some((turn) => turn.image)) dataTypes.push("图片");
-  confirmCloudTransfer(preset, dataTypes);
+  await confirmCloudTransfer(preset, dataTypes);
   return streamServer(
     preset,
     effectivePrompt,

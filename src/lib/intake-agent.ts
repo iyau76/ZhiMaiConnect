@@ -1032,7 +1032,7 @@ ${archiveIndex}`
 {"id":"evidence-1","domain":"evidence","intent":"create","target":{"title":"本次材料摘要"},"changes":{"kind":"note","text":"只保留核对所需的最短原文或摘要","origin":"用户输入"}},
 {"id":"summary-1","domain":"summary","intent":"create","target":{"title":"本次材料概要"},"changes":{"text":"给用户浏览草稿用的一句话概要"}}
 ]}
-人物 target 必须有 name，更新时附 personId；事实 target 必须有 person/key，更新工作区事实时附 factId；关系 target 必须有 from/to，更新时附端点引用与 relationId，create 时 label 可放 target.label 或 changes.label；事件 target 必须有 title，更新时附 eventId；提醒和材料更新时分别附 reminderId/evidenceId；概要最多一项。材料已经给出姓名时，禁止再为同一人创建“某人的妹妹（未具名）”之类称谓占位人物。create 与 update 必须按用户语义明确选择。`
+人物 target 必须有 name，更新时附 personId；事实 target 必须有 person/key，更新工作区事实时附 factId；关系 target 必须有 from/to，更新时附端点引用与 relationId，create 时 label 可放 target.label 或 changes.label；事件 target 必须有 title，更新时附 eventId；提醒和材料更新时分别附 reminderId/evidenceId；概要最多一项。人物 changes 只写人物自身属性；任何连接两个人（包括“我”）的称谓、所属或主谓关系都必须单独声明 relation task，不能只塞进 changes.relation、changes.note，或仅把两人列入 event/reminder.people。材料已经给出姓名时，禁止再为同一人创建“某人的妹妹（未具名）”之类称谓占位人物。create 与 update 必须按用户语义明确选择。`
       : taskState
         ? "typed plan 由本地执行，不再请求模型复述草稿。"
         : `${toolResponseGuide}

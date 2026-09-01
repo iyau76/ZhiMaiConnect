@@ -68,6 +68,28 @@ const A11Y_CLASSES: Record<A11yMode, string[]> = {
   contrast: ["a11y-contrast"],
 };
 
+const DARK_THEMES = new Set<ThemeId>(["noir", "midnight", "forest", "ink"]);
+
+/**
+ * Runs in <head> before the stylesheet and React hydration. The app previously
+ * painted the light defaults once and only applied the saved theme in an
+ * effect, which produced a visible flash on cold loads and recordings.
+ */
+export const THEME_BOOTSTRAP_SCRIPT = `(() => {
+  const root = document.documentElement;
+  const themeClasses = ${JSON.stringify(CLASSES)};
+  const a11yClasses = ${JSON.stringify(A11Y_CLASSES)};
+  const darkThemes = ${JSON.stringify([...DARK_THEMES])};
+  const theme = localStorage.getItem("${THEME_KEY}") || "violet";
+  const a11y = localStorage.getItem("${A11Y_KEY}") || "none";
+  root.classList.add(...(themeClasses[theme] || themeClasses.violet));
+  root.classList.add(...(a11yClasses[a11y] || a11yClasses.none));
+  if (localStorage.getItem("${A11Y_TEXT_KEY}") === "1") root.classList.add("a11y-bigtext");
+  const dark = darkThemes.includes(theme);
+  root.style.colorScheme = dark ? "dark" : "light";
+  root.style.backgroundColor = dark ? "#07101f" : "#f8f7fa";
+})();`;
+
 const ALL_CLASSES = [
   ...new Set([...Object.values(CLASSES).flat(), ...Object.values(A11Y_CLASSES).flat()]),
 ];
@@ -77,6 +99,8 @@ function apply(theme: ThemeId, a11y: A11yMode, bigText: boolean) {
   ALL_CLASSES.forEach((cls) => root.classList.remove(cls));
   [...CLASSES[theme], ...A11Y_CLASSES[a11y]].forEach((cls) => root.classList.add(cls));
   root.classList.toggle("a11y-bigtext", bigText);
+  root.style.colorScheme = DARK_THEMES.has(theme) ? "dark" : "light";
+  root.style.removeProperty("background-color");
 }
 
 export function applyTheme(id: ThemeId) {

@@ -467,6 +467,7 @@ async function acceptAndCommit(page) {
   const acceptAll = page.getByRole("button", { name: /一键接受已对齐项/ });
   if (await acceptAll.isVisible().catch(() => false)) {
     await acceptAll.click();
+    await page.getByTestId("intake-accept-all-confirm").click();
   } else {
     for (;;) {
       const button = page.getByRole("button", { name: "接受此项" }).first();

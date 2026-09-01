@@ -216,6 +216,8 @@ const EN: Record<string, string> = {
     "Auto-saves every 15s, so your text survives tab switches",
   "每 15 秒自动暂存，仅保留在本浏览器并于 24 小时后过期":
     "Auto-saves every 15s in this browser only and expires after 24 hours",
+  "内容会自动暂存在本浏览器，并于 24 小时后过期":
+    "Automatically saved in this browser and expires after 24 hours",
   "24 小时后自动过期": "expires after 24 hours",
   清除本地录入材料: "Clear local intake material",
   "每个顶层草稿条目都要接受或拒绝；编辑已接受条目后会重新变为待确认。":
@@ -226,6 +228,10 @@ const EN: Record<string, string> = {
   条关系缺少依据并保持待确认: "relationships have no source basis and remain pending",
   批量接受低风险高置信事件: "Batch-accept low-risk, high-confidence events",
   一键接受已对齐项: "Accept all aligned items",
+  接受已对齐项: "Accept aligned items",
+  "接受来源已对齐的条目。证据未对齐的关系继续留在待确认。":
+    "Accept source-aligned items. Relations with unmatched evidence stay pending.",
+  确认接受: "Accept",
   "确定批量接受已对齐条目吗？证据未对齐的关系会保留待确认，可单独接受。":
     "Accept all source-aligned items? Relations whose evidence is not aligned will remain pending and can be accepted individually.",
   已接受来源对齐的待确认条目: "Accepted the source-aligned pending items",
@@ -1152,6 +1158,8 @@ const EN: Record<string, string> = {
   "只会删除带“合成演示数据”标识的记录，不影响你自己录入的资料。继续？":
     "Only records marked as synthetic demo data will be removed. Your own data is not affected. Continue?",
   演示前自检: "Preflight check",
+  "检查本地数据、模型与浏览器能力。":
+    "Check local data, model configuration, and browser capabilities.",
   "只做本地只读检查，不发送人物资料，也不会主动申请麦克风权限。":
     "Runs local read-only checks without sending profile data or requesting microphone access.",
   运行自检: "Run checks",

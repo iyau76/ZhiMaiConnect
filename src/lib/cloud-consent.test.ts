@@ -35,76 +35,80 @@ afterEach(() => {
 });
 
 describe("confirmCloudTransfer", () => {
-  it("does not ask for consent when all processing stays in local Ollama", () => {
+  it("does not ask for consent when all processing stays in local Ollama", async () => {
     vi.stubGlobal("window", undefined);
     vi.stubGlobal("sessionStorage", undefined);
 
-    expect(() =>
+    await expect(
       confirmCloudTransfer(preset({ kind: "ollama" }), ["文字内容", "人物关系上下文"]),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 
-  it("refuses cloud transfer when an interactive browser confirmation is unavailable", () => {
+  it("refuses cloud transfer when an interactive browser confirmation is unavailable", async () => {
     vi.stubGlobal("window", undefined);
 
-    expect(() => confirmCloudTransfer(preset(), ["文字内容"])).toThrow(
+    await expect(confirmCloudTransfer(preset(), ["文字内容"])).rejects.toThrow(
       "云模型调用只能在浏览器中经用户确认后进行",
     );
   });
 
-  it("names the provider and every distinct data type in the confirmation", () => {
+  it("names the provider and every distinct data type in the confirmation", async () => {
     const confirm = vi.fn((_message: string) => true);
     vi.stubGlobal("window", { confirm });
     vi.stubGlobal("sessionStorage", memoryStorage());
 
-    confirmCloudTransfer(preset({ name: "校园私有模型" }), ["图片", "文字内容", "图片"]);
+    await confirmCloudTransfer(preset({ name: "校园私有模型" }), ["图片", "文字内容", "图片"]);
 
     expect(confirm).toHaveBeenCalledOnce();
     expect(confirm.mock.calls[0][0]).toContain("图片、文字内容");
     expect(confirm.mock.calls[0][0]).toContain("校园私有模型");
-    expect(confirm.mock.calls[0][0]).toContain("不会被整库上传");
+    expect(confirm.mock.calls[0][0]).toContain("本次发送");
   });
 
-  it("remembers equivalent consent regardless of data-type order within the session", () => {
+  it("remembers equivalent consent regardless of data-type order within the session", async () => {
     const confirm = vi.fn((_message: string) => true);
     vi.stubGlobal("window", { confirm });
     vi.stubGlobal("sessionStorage", memoryStorage());
 
-    confirmCloudTransfer(preset(), ["图片", "文字内容", "图片"]);
-    confirmCloudTransfer(preset(), ["文字内容", "图片"]);
+    await confirmCloudTransfer(preset(), ["图片", "文字内容", "图片"]);
+    await confirmCloudTransfer(preset(), ["文字内容", "图片"]);
 
     expect(confirm).toHaveBeenCalledOnce();
   });
 
-  it("asks again when a new data type is sent", () => {
+  it("asks again when a new data type is sent", async () => {
     const confirm = vi.fn((_message: string) => true);
     vi.stubGlobal("window", { confirm });
     vi.stubGlobal("sessionStorage", memoryStorage());
 
-    confirmCloudTransfer(preset(), ["文字内容"]);
-    confirmCloudTransfer(preset(), ["文字内容", "人物关系上下文"]);
+    await confirmCloudTransfer(preset(), ["文字内容"]);
+    await confirmCloudTransfer(preset(), ["文字内容", "人物关系上下文"]);
 
     expect(confirm).toHaveBeenCalledTimes(2);
   });
 
-  it("does not persist rejected consent", () => {
+  it("does not persist rejected consent", async () => {
     const confirm = vi.fn((_message: string) => false);
     vi.stubGlobal("window", { confirm });
     vi.stubGlobal("sessionStorage", memoryStorage());
 
-    expect(() => confirmCloudTransfer(preset(), ["音频"])).toThrow("已取消向云模型发送数据");
-    expect(() => confirmCloudTransfer(preset(), ["音频"])).toThrow("已取消向云模型发送数据");
+    await expect(confirmCloudTransfer(preset(), ["音频"])).rejects.toThrow(
+      "已取消向云模型发送数据",
+    );
+    await expect(confirmCloudTransfer(preset(), ["音频"])).rejects.toThrow(
+      "已取消向云模型发送数据",
+    );
     expect(confirm).toHaveBeenCalledTimes(2);
   });
 
-  it("can clear all remembered cloud-transfer consent", () => {
+  it("can clear all remembered cloud-transfer consent", async () => {
     const confirm = vi.fn((_message: string) => true);
     vi.stubGlobal("window", { confirm });
     vi.stubGlobal("sessionStorage", memoryStorage());
 
-    confirmCloudTransfer(preset(), ["文字内容"]);
+    await confirmCloudTransfer(preset(), ["文字内容"]);
     clearCloudTransferConsents();
-    confirmCloudTransfer(preset(), ["文字内容"]);
+    await confirmCloudTransfer(preset(), ["文字内容"]);
 
     expect(confirm).toHaveBeenCalledTimes(2);
   });
