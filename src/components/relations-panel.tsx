@@ -2803,6 +2803,8 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
       <PersonProfileDialog
         person={editing}
         preset={preset}
+        collections={collections}
+        collectionMemberships={collectionMemberships}
         onClose={() => setEditing(null)}
         onSaved={refresh}
       />

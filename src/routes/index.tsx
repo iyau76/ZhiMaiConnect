@@ -16,37 +16,16 @@ import { Toaster } from "@/components/ui/sonner";
 import { WelcomeCover } from "@/components/welcome-cover";
 
 import { t, useLang, initLang } from "@/lib/i18n";
+import {
+  ACTIVE_MODEL_PRESET_KEY,
+  applySessionApiKeys,
+  loadSavedModelPresets,
+  saveModelPresets,
+  saveSessionApiKeys,
+} from "@/lib/model-preset-storage";
 import { initTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
-import {
-  DEFAULT_PRESETS,
-  migrateLegacyProviderPresets,
-  type ProviderPreset,
-} from "@/lib/vision-providers";
-
-const PRESETS_KEY = "openglass.presets";
-const ACTIVE_KEY = "openglass.active";
-const SESSION_KEYS_KEY = "openglass.session-api-keys";
-const PRESETS_VERSION_KEY = "openglass.presets-version";
-const PRESETS_VERSION = "2";
-
-function readSessionKeys(): Record<string, string> {
-  try {
-    const parsed = JSON.parse(sessionStorage.getItem(SESSION_KEYS_KEY) ?? "{}") as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        (entry): entry is [string, string] => typeof entry[1] === "string",
-      ),
-    );
-  } catch {
-    return {};
-  }
-}
-
-function withoutPersistentKeys(presets: ProviderPreset[]) {
-  return presets.map((preset) => ({ ...preset, apiKey: "" }));
-}
+import { DEFAULT_PRESETS, type ProviderPreset } from "@/lib/vision-providers";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -162,21 +141,9 @@ function Index() {
     initLang();
     initTheme();
     try {
-      const storedPresets = localStorage.getItem(PRESETS_KEY);
-      const parsed = storedPresets ? (JSON.parse(storedPresets) as unknown) : DEFAULT_PRESETS;
-      const configured =
-        localStorage.getItem(PRESETS_VERSION_KEY) === PRESETS_VERSION
-          ? Array.isArray(parsed) && parsed.length
-            ? (parsed as ProviderPreset[])
-            : DEFAULT_PRESETS
-          : migrateLegacyProviderPresets(parsed);
-      const sessionKeys = readSessionKeys();
-      const nextPresets = configured.map((preset) => ({
-        ...preset,
-        apiKey: sessionKeys[preset.id] ?? preset.apiKey ?? "",
-      }));
+      const nextPresets = applySessionApiKeys(loadSavedModelPresets(localStorage), sessionStorage);
       setPresets(nextPresets);
-      const storedActive = localStorage.getItem(ACTIVE_KEY);
+      const storedActive = localStorage.getItem(ACTIVE_MODEL_PRESET_KEY);
       setActiveId(
         storedActive && nextPresets.some((preset) => preset.id === storedActive)
           ? storedActive
@@ -191,21 +158,17 @@ function Index() {
   useEffect(() => {
     if (!hydrated) return;
     try {
-      localStorage.setItem(PRESETS_KEY, JSON.stringify(withoutPersistentKeys(presets)));
-      localStorage.setItem(PRESETS_VERSION_KEY, PRESETS_VERSION);
-      localStorage.setItem(ACTIVE_KEY, activeId);
-      sessionStorage.setItem(
-        SESSION_KEYS_KEY,
-        JSON.stringify(
-          Object.fromEntries(
-            presets.filter((preset) => preset.apiKey).map((preset) => [preset.id, preset.apiKey]),
-          ),
-        ),
-      );
+      localStorage.setItem(ACTIVE_MODEL_PRESET_KEY, activeId);
+      saveSessionApiKeys(sessionStorage, presets);
     } catch {
       /* 隐私模式或存储空间不足时，仅保留当前内存状态 */
     }
   }, [hydrated, presets, activeId]);
+
+  const persistModelPresets = () => {
+    saveModelPresets(localStorage, presets);
+    localStorage.setItem(ACTIVE_MODEL_PRESET_KEY, activeId);
+  };
 
   const resolvedActiveId = presets.some((preset) => preset.id === activeId)
     ? activeId
@@ -333,6 +296,7 @@ function Index() {
               <ModelsPanel
                 presets={presets}
                 onPresetsChange={setPresets}
+                onSavePresets={persistModelPresets}
                 activeId={resolvedActiveId}
                 onActiveIdChange={setActiveId}
                 frame={null}

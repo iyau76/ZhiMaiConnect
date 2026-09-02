@@ -1,5 +1,5 @@
 import { Loader2, Plus, Sparkles, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,8 @@ import { SourceBadge } from "@/components/source-badge";
 import {
   facesDb,
   personRecordRevision,
+  type CollectionMembershipRecord,
+  type CollectionRecord,
   type PersonProfile,
   type PersonRecord,
   type PhotoNote,
@@ -38,6 +40,8 @@ import { PRESET_TAGS } from "@/lib/circle-tags";
 interface Props {
   person: PersonRecord | null;
   preset: ProviderPreset;
+  collections: CollectionRecord[];
+  collectionMemberships: CollectionMembershipRecord[];
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }
@@ -60,7 +64,14 @@ function parseJson(text: string) {
 const toList = (value: unknown) =>
   Array.isArray(value) ? value.map(String).filter(Boolean) : undefined;
 
-export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props) {
+export function PersonProfileDialog({
+  person,
+  preset,
+  collections,
+  collectionMemberships,
+  onClose,
+  onSaved,
+}: Props) {
   const [raw, setRaw] = useState("");
   const [profile, setProfile] = useState<PersonProfile>({});
   const [note, setNote] = useState("");
@@ -70,6 +81,14 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
   const [template, setTemplate] = useState<CustomField[]>([]);
   const [newField, setNewField] = useState("");
   const [photos, setPhotos] = useState<PhotoNote[]>([]);
+  const [selectedCircleIds, setSelectedCircleIds] = useState<string[]>([]);
+  const [newCircleName, setNewCircleName] = useState("");
+  const [pendingCircleNames, setPendingCircleNames] = useState<string[]>([]);
+
+  const relationshipCircles = useMemo(
+    () => collections.filter((collection) => collection.kind === "relationship_circle"),
+    [collections],
+  );
 
   useEffect(() => {
     if (!person) return;
@@ -79,7 +98,20 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
     setName(person.name);
     setPhotos(person.photos ?? []);
     setTemplate(loadTemplate());
-  }, [person]);
+    const circleIds = new Set(relationshipCircles.map((collection) => collection.id));
+    setSelectedCircleIds(
+      collectionMemberships
+        .filter(
+          (membership) =>
+            membership.personId === person.id &&
+            membership.source !== "computed" &&
+            circleIds.has(membership.collectionId),
+        )
+        .map((membership) => membership.collectionId),
+    );
+    setNewCircleName("");
+    setPendingCircleNames([]);
+  }, [person, relationshipCircles, collectionMemberships]);
 
   const organize = async () => {
     const text = raw.trim();
@@ -143,6 +175,14 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
     try {
       let base = person;
       while (true) {
+        const now = Date.now();
+        const newCircles = pendingCircleNames.map((circleName) => ({
+          id: `collection:${crypto.randomUUID()}`,
+          name: circleName,
+          kind: "relationship_circle" as const,
+          createdAt: now,
+          updatedAt: now,
+        }));
         const result = await facesDb.compareAndSwapPerson(
           {
             ...base,
@@ -151,9 +191,13 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
             profile: { ...profile, closeness: normalizeCloseness(profile.closeness) },
             rawProfileText: raw,
             photos,
-            updatedAt: Date.now(),
+            updatedAt: now,
           },
           personRecordRevision(base),
+          {
+            selectedCircleIds: [...selectedCircleIds, ...newCircles.map((circle) => circle.id)],
+            newCircles,
+          },
         );
         if (result.status === "saved") break;
         if (result.status === "missing") {
@@ -187,6 +231,35 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
       const on = list.includes(label);
       return { ...prev, tags: on ? list.filter((tag) => tag !== label) : [...list, label] };
     });
+  };
+
+  const toggleCircle = (collectionId: string) => {
+    setSelectedCircleIds((current) =>
+      current.includes(collectionId)
+        ? current.filter((id) => id !== collectionId)
+        : [...current, collectionId],
+    );
+  };
+
+  const addCircle = () => {
+    const name = newCircleName.trim();
+    if (!name) return;
+    const existing = relationshipCircles.find(
+      (collection) =>
+        collection.name.trim().toLocaleLowerCase("zh-CN") === name.toLocaleLowerCase("zh-CN"),
+    );
+    if (existing) {
+      setSelectedCircleIds((current) =>
+        current.includes(existing.id) ? current : [...current, existing.id],
+      );
+    } else if (
+      !pendingCircleNames.some(
+        (item) => item.toLocaleLowerCase("zh-CN") === name.toLocaleLowerCase("zh-CN"),
+      )
+    ) {
+      setPendingCircleNames((current) => [...current, name]);
+    }
+    setNewCircleName("");
   };
 
   const field = (key: keyof PersonProfile, label: string) => (
@@ -254,7 +327,7 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
           <DialogTitle>{t("编辑人员资料")}</DialogTitle>
           <DialogDescription>
             {t(
-              "写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、关系、喜好、送礼记录等字段。集合请在关系网中单独管理。",
+              "写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、关系、喜好、送礼记录等字段；圈层也可以在人物卡中手动选择或新建。",
             )}
           </DialogDescription>
         </DialogHeader>
@@ -322,6 +395,87 @@ export function PersonProfileDialog({ person, preset, onClose, onSaved }: Props)
             {listField("likes", t("喜好"))}
             {listField("dislikes", t("忌口 / 不喜欢"))}
             {listField("gifts", t("送礼记录"))}
+          </div>
+
+          <div className="space-y-2 rounded-lg border border-border p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <Label className="text-xs text-muted-foreground">{t("圈层")}</Label>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {t("人物可以属于多个圈层；保存后会立即用于关系网的圈层布局。")}
+                </p>
+              </div>
+              {selectedCircleIds.length === 0 && pendingCircleNames.length === 0 && (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                  {t("未分圈层")}
+                </span>
+              )}
+            </div>
+            {relationshipCircles.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {relationshipCircles.map((circle) => {
+                  const selected = selectedCircleIds.includes(circle.id);
+                  return (
+                    <button
+                      key={circle.id}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => toggleCircle(circle.id)}
+                      className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                        selected
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border text-muted-foreground hover:bg-accent/50"
+                      }`}
+                    >
+                      {circle.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {pendingCircleNames.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {pendingCircleNames.map((circleName) => (
+                  <button
+                    key={circleName}
+                    type="button"
+                    title={t("取消新建圈层")}
+                    onClick={() =>
+                      setPendingCircleNames((current) =>
+                        current.filter((item) => item !== circleName),
+                      )
+                    }
+                    className="inline-flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-[11px] text-foreground"
+                  >
+                    {circleName}
+                    <X className="size-3" aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input
+                value={newCircleName}
+                onChange={(event) => setNewCircleName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  addCircle();
+                }}
+                placeholder={t("新圈层名称，如：同学、家人、项目伙伴")}
+                className="h-8 text-xs"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!newCircleName.trim()}
+                onClick={addCircle}
+              >
+                <Plus className="size-3.5" aria-hidden="true" />
+                {t("新建并加入")}
+              </Button>
+            </div>
           </div>
 
           <div className="space-y-2 rounded-lg border border-border p-2.5">

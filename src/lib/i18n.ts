@@ -123,6 +123,8 @@ const EN: Record<string, string> = {
   再点一个人: "Now pick another person",
   "写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、圈子、喜好、送礼记录等字段。":
     "Write a free description and hit AI organise to split it into birthday, circle, likes and gift history.",
+  "写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、关系、喜好、送礼记录等字段；圈层也可以在人物卡中手动选择或新建。":
+    "Write a free description and tap AI organise to extract birthdays, relationships, preferences and gift history; circles can also be selected or created manually here.",
   加一条事务: "Add a matter",
   "加个人，输名字回车": "Add a person: type a name and press Enter",
   加人物: "Add person",
@@ -471,6 +473,11 @@ const EN: Record<string, string> = {
   清除密钥: "Clear key",
   "密钥仅保存在当前浏览器会话，关闭标签页后清除。":
     "The key is kept only for this browser session and cleared when the tab closes.",
+  "未保存的密钥只在当前会话使用；点击“保存模型配置”后会保存在这个浏览器。":
+    "Unsaved keys are used only in this session. Save the model configuration to keep them in this browser.",
+  保存模型配置: "Save model configuration",
+  模型配置已保存到这个浏览器: "Model configuration saved in this browser",
+  浏览器无法保存模型配置: "This browser could not save the model configuration",
   "建档后可继续补充昵称、联系方式、关系与共同经历。":
     "After creating a profile, add aliases, contact details, relationships, and shared experiences.",
   点击只看这个圈层: "Show only this circle",
@@ -497,6 +504,12 @@ const EN: Record<string, string> = {
   按圈层布局: "Group by circles",
   按拓扑社区布局: "Group by topology communities",
   未分圈层: "No confirmed circle",
+  圈层: "Circles",
+  "人物可以属于多个圈层；保存后会立即用于关系网的圈层布局。":
+    "A person may belong to several circles. Saved memberships immediately affect the relationship graph layout.",
+  取消新建圈层: "Cancel new circle",
+  "新圈层名称，如：同学、家人、项目伙伴": "New circle, e.g. classmates, family, project partners",
+  新建并加入: "Create and join",
   圈层图例: "Circle legend",
   拓扑社区图例: "Topology community legend",
   "圈层布局（仅使用已确认成员关系）": "Circle layout (confirmed memberships only)",

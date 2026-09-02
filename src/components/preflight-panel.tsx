@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { getDemoDataStatus } from "@/lib/demo-data";
 import { facesDb } from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
+import { hasSavedApiKey } from "@/lib/model-preset-storage";
 import { cn } from "@/lib/utils";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
@@ -12,23 +13,6 @@ interface CheckResult {
   name: string;
   ok: boolean;
   detail: string;
-}
-
-function persistedKeyRisk() {
-  try {
-    const presets = JSON.parse(localStorage.getItem("openglass.presets") ?? "[]") as unknown;
-    if (!Array.isArray(presets)) return false;
-    return presets.some(
-      (item) =>
-        item &&
-        typeof item === "object" &&
-        "apiKey" in item &&
-        typeof item.apiKey === "string" &&
-        Boolean(item.apiKey),
-    );
-  } catch {
-    return false;
-  }
 }
 
 export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
@@ -113,16 +97,17 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
         ? "Supports TXT / MD / CSV / JSON, PDF, DOCX and common image formats; images are compressed first."
         : "支持 TXT / MD / CSV / JSON、PDF、DOCX 和常见图片；图片会先压缩",
     });
+    const keySaved = hasSavedApiKey(localStorage);
     next.push({
       name: en ? "Key storage" : "密钥存储",
-      ok: !persistedKeyRisk(),
-      detail: persistedKeyRisk()
+      ok: true,
+      detail: keySaved
         ? en
-          ? "A key from an older version remains in localStorage; resave or clear it on the AI assistant page."
-          : "发现旧版本遗留的 localStorage 密钥；请在 AI 助理页重新保存或清除"
+          ? "The API key was explicitly saved in this browser. Clear it before using a shared device."
+          : "API Key 已由用户明确保存在这个浏览器；使用共享设备前请清除"
         : en
-          ? "No persisted API key found; cloud model keys stay in the current session only."
-          : "未发现持久化 API Key；云模型密钥仅保存在当前会话",
+          ? "No saved API key; the current key is available only in this browser session."
+          : "尚未保存 API Key；当前密钥只在本次浏览器会话中可用",
     });
     next.push({
       name: en ? "Language and version" : "语言与版本",

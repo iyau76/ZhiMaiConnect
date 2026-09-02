@@ -6,6 +6,7 @@ import {
   Mic,
   Plug,
   Plus,
+  Save,
   Send,
   Trash2,
   TriangleAlert,
@@ -54,6 +55,7 @@ import {
 interface Props {
   presets: ProviderPreset[];
   onPresetsChange: (presets: ProviderPreset[]) => void;
+  onSavePresets: () => void;
   activeId: string;
   onActiveIdChange: (id: string) => void;
   frame: string | null;
@@ -120,6 +122,7 @@ const assistantMutationCoordinator = new MutationCommitCoordinator();
 export function ModelsPanel({
   presets,
   onPresetsChange,
+  onSavePresets,
   activeId,
   onActiveIdChange,
   frame,
@@ -187,6 +190,15 @@ export function ModelsPanel({
     const preset = createPreset(kind);
     onPresetsChange([...presets, preset]);
     setEditId(preset.id);
+  };
+
+  const handleSavePresets = () => {
+    try {
+      onSavePresets();
+      toast.success(t("模型配置已保存到这个浏览器"));
+    } catch {
+      toast.error(t("浏览器无法保存模型配置"));
+    }
   };
 
   const handleTest = async () => {
@@ -535,10 +547,14 @@ export function ModelsPanel({
                 }}
               >
                 <span className="truncate font-medium">{item.name || t("未命名")}</span>
-                <span className="ml-1.5 text-[11px] text-muted-foreground">
-                  {KIND_LABEL[item.kind].split("（")[0]}
-                  {item.model ? ` · ${item.model}` : ""}
-                </span>
+                {(item.name.trim() !== KIND_LABEL[item.kind].split("（")[0] || item.model) && (
+                  <span className="ml-1.5 text-[11px] text-muted-foreground">
+                    {item.name.trim() !== KIND_LABEL[item.kind].split("（")[0]
+                      ? KIND_LABEL[item.kind].split("（")[0]
+                      : ""}
+                    {item.model ? ` · ${item.model}` : ""}
+                  </span>
+                )}
               </button>
               {item.id === activeId && (
                 <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">
@@ -622,13 +638,17 @@ export function ModelsPanel({
                 onChange={(e) => patch({ apiKey: e.target.value })}
               />
               <p id="api-key-storage-note" className="text-[11px] text-muted-foreground">
-                {t("密钥仅保存在当前浏览器会话，关闭标签页后清除。")}
+                {t("未保存的密钥只在当前会话使用；点击“保存模型配置”后会保存在这个浏览器。")}
               </p>
             </div>
           )}
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={handleSavePresets}>
+            <Save className="size-3.5" aria-hidden="true" />
+            {t("保存模型配置")}
+          </Button>
           <Button size="sm" variant="outline" onClick={handleTest} disabled={testing}>
             {testing ? (
               <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />

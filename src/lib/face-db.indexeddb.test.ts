@@ -254,6 +254,72 @@ describe("facesDb people and relations", () => {
     await expect(facesDb.listPersons()).resolves.toEqual([]);
   });
 
+  it("saves a person's profile and relationship-circle memberships atomically", async () => {
+    const { facesDb, personRecordRevision } = await import("./face-db");
+    const original = { ...person("circle-person"), note: "未分圈层" };
+    await facesDb.putPerson(original);
+    await facesDb.putCollection({
+      id: "old-circle",
+      name: "旧圈层",
+      kind: "relationship_circle",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await facesDb.putCollection({
+      id: "context-list",
+      name: "临时名单",
+      kind: "context",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await facesDb.putCollectionMembership({
+      id: "old-circle\u0000circle-person",
+      collectionId: "old-circle",
+      personId: "circle-person",
+      source: "manual",
+      createdAt: 1,
+    });
+    await facesDb.putCollectionMembership({
+      id: "context-list\u0000circle-person",
+      collectionId: "context-list",
+      personId: "circle-person",
+      source: "manual",
+      createdAt: 1,
+    });
+
+    await expect(
+      facesDb.compareAndSwapPerson(
+        { ...original, note: "已整理", updatedAt: 2 },
+        personRecordRevision(original),
+        {
+          selectedCircleIds: ["new-circle"],
+          newCircles: [
+            {
+              id: "new-circle",
+              name: "项目伙伴",
+              kind: "relationship_circle",
+              createdAt: 2,
+              updatedAt: 2,
+            },
+          ],
+        },
+      ),
+    ).resolves.toMatchObject({ status: "saved", person: { note: "已整理" } });
+
+    await expect(facesDb.listCollectionMemberships()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "new-circle\u0000circle-person",
+          source: "manual",
+        }),
+        expect.objectContaining({ id: "context-list\u0000circle-person" }),
+      ]),
+    );
+    await expect(facesDb.listCollectionMemberships()).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "old-circle\u0000circle-person" })]),
+    );
+  });
+
   it("deletes a selected sighting set in one batch without touching unselected rows", async () => {
     const { facesDb } = await import("./face-db");
     for (const id of ["first", "second", "keep"]) {

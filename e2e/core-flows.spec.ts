@@ -341,6 +341,77 @@ test("补充并重新整理会保留人工字段及其来源", async ({ page, mo
   expect(mockNetwork.visionRequests).toHaveLength(2);
 });
 
+test("人物卡可以手动新建圈层并把未分圈层人物加入其中", async ({ page }) => {
+  await openApp(page);
+  await seedIndexedDb(page, {
+    persons: [
+      {
+        id: "manual-circle-person",
+        name: "小雨",
+        note: "待手动整理圈层",
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW,
+      },
+    ],
+  });
+  await openApp(page);
+
+  await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
+  const personCard = page.getByText("小雨", { exact: true }).locator("../..");
+  await personCard.getByRole("button", { name: "编辑" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("未分圈层", { exact: true })).toBeVisible();
+  await dialog.getByPlaceholder("新圈层名称，如：同学、家人、项目伙伴").fill("同学");
+  await dialog.getByRole("button", { name: "新建并加入" }).click();
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect(dialog).toHaveCount(0);
+  const circles = await readIndexedDbStore<{ id: string; name: string; kind: string }>(
+    page,
+    "collections",
+  );
+  const memberships = await readIndexedDbStore<{
+    collectionId: string;
+    personId: string;
+    source: string;
+  }>(page, "collectionMemberships");
+  expect(circles).toEqual([expect.objectContaining({ name: "同学", kind: "relationship_circle" })]);
+  expect(memberships).toEqual([
+    expect.objectContaining({
+      collectionId: circles[0].id,
+      personId: "manual-circle-person",
+      source: "manual",
+    }),
+  ]);
+});
+
+test("模型配置名称不重复，并可由用户显式保存到当前浏览器", async ({ page }) => {
+  await openApp(page);
+  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  const panel = page.getByTestId("model-config-panel");
+  const openaiPreset = panel.locator('[data-provider-preset-id="builtin-openai"]');
+  const geminiPreset = panel.locator('[data-provider-preset-id="builtin-gemini"]');
+
+  await expect(openaiPreset).toContainText("OpenAI 兼容接口 · deepseek-chat");
+  await expect(geminiPreset).toContainText("Gemini 兼容接口 · gemini-3.7-flash");
+  expect(((await openaiPreset.innerText()).match(/OpenAI 兼容接口/gu) ?? []).length).toBe(1);
+  expect(((await geminiPreset.innerText()).match(/Gemini 兼容接口/gu) ?? []).length).toBe(1);
+
+  await panel.getByRole("button", { name: "保存模型配置" }).click();
+  await expect(page.getByText("模型配置已保存到这个浏览器")).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("openglass.saved-api-keys"))).toContain(
+    "playwright-test-key",
+  );
+
+  await page.evaluate(() => sessionStorage.removeItem("openglass.session-api-keys"));
+  await openApp(page);
+  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await expect(
+    page.getByTestId("model-config-panel").locator('input[type="password"]'),
+  ).toHaveValue("playwright-test-key");
+});
+
 test("关系网单击只淡化无关节点，双击开人物卡，并可在图上新建自定义关系", async ({ page }) => {
   await openApp(page);
   await seedIndexedDb(page, {

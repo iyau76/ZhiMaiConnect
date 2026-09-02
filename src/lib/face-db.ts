@@ -1599,6 +1599,13 @@ export type PersonCompareAndSwapResult =
   | { status: "missing" }
   | { status: "conflict"; current: PersonRecord };
 
+export interface PersonCircleEdit {
+  /** Existing relationship-circle IDs that should contain this person after the save. */
+  selectedCircleIds: string[];
+  /** New user-authored circles created by the same save transaction. */
+  newCircles?: CollectionRecord[];
+}
+
 async function putPersons(persons: PersonRecord[]): Promise<void> {
   const normalizedPersons = persons.map(normalizePersonRecord);
   for (const person of normalizedPersons) assertValidPersonName(person.name);
@@ -1622,20 +1629,34 @@ async function putPersons(persons: PersonRecord[]): Promise<void> {
 async function compareAndSwapPerson(
   person: PersonRecord,
   expectedRevision: string,
+  circleEdit?: PersonCircleEdit,
 ): Promise<PersonCompareAndSwapResult> {
   assertValidPersonName(person.name);
   const normalized = normalizePersonRecord(person);
   const db = await openDb();
   return new Promise<PersonCompareAndSwapResult>((resolve, reject) => {
-    const tx = db.transaction(PERSONS, "readwrite");
-    const store = tx.objectStore(PERSONS);
+    const stores = circleEdit ? [PERSONS, COLLECTIONS, COLLECTION_MEMBERSHIPS] : [PERSONS];
+    const tx = db.transaction(stores, "readwrite");
+    const personStore = tx.objectStore(PERSONS);
     let outcome: PersonCompareAndSwapResult | undefined;
     tx.onerror = () => reject(tx.error ?? new Error("人物条件写入失败"));
     tx.onabort = () => reject(tx.error ?? new Error("人物条件写入已中止"));
     tx.oncomplete = () => resolve(outcome ?? { status: "missing" });
-    const request = store.get(person.id);
-    request.onsuccess = () => {
-      const current = request.result as PersonRecord | undefined;
+
+    const personRequest = personStore.get(person.id);
+    const collectionRequest = circleEdit ? tx.objectStore(COLLECTIONS).getAll() : undefined;
+    const membershipRequest = circleEdit
+      ? tx.objectStore(COLLECTION_MEMBERSHIPS).getAll()
+      : undefined;
+    let current: PersonRecord | undefined;
+    let personLoaded = false;
+    let currentCollections: CollectionRecord[] | undefined = circleEdit ? undefined : [];
+    let currentMemberships: CollectionMembershipRecord[] | undefined = circleEdit ? undefined : [];
+    let applied = false;
+
+    const apply = () => {
+      if (applied || !personLoaded || !currentCollections || !currentMemberships) return;
+      applied = true;
       if (!current) {
         outcome = { status: "missing" };
         return;
@@ -1645,9 +1666,74 @@ async function compareAndSwapPerson(
         outcome = { status: "conflict", current: canonicalCurrent };
         return;
       }
+
+      if (circleEdit) {
+        const collectionStore = tx.objectStore(COLLECTIONS);
+        const membershipStore = tx.objectStore(COLLECTION_MEMBERSHIPS);
+        const collectionById = new Map(currentCollections.map((row) => [row.id, row]));
+        for (const collection of circleEdit.newCircles ?? []) {
+          if (collection.kind !== "relationship_circle") {
+            tx.abort();
+            return;
+          }
+          collectionById.set(collection.id, collection);
+          collectionStore.put(collection);
+        }
+
+        const selectedIds = new Set(circleEdit.selectedCircleIds);
+        for (const collectionId of selectedIds) {
+          if (collectionById.get(collectionId)?.kind !== "relationship_circle") {
+            tx.abort();
+            return;
+          }
+        }
+
+        const currentCircleMemberships = currentMemberships.filter(
+          (membership) =>
+            membership.personId === person.id &&
+            collectionById.get(membership.collectionId)?.kind === "relationship_circle" &&
+            membership.source !== "computed",
+        );
+        const currentCircleIds = new Set(
+          currentCircleMemberships.map((membership) => membership.collectionId),
+        );
+        for (const membership of currentCircleMemberships) {
+          if (!selectedIds.has(membership.collectionId)) membershipStore.delete(membership.id);
+        }
+        const now = Date.now();
+        for (const collectionId of selectedIds) {
+          if (currentCircleIds.has(collectionId)) continue;
+          membershipStore.put({
+            id: `${collectionId}\u0000${person.id}`,
+            collectionId,
+            personId: person.id,
+            source: "manual",
+            createdAt: now,
+          } satisfies CollectionMembershipRecord);
+        }
+      }
+
       outcome = { status: "saved", person: normalized };
-      store.put(normalized);
+      personStore.put(normalized);
     };
+
+    personRequest.onsuccess = () => {
+      current = personRequest.result as PersonRecord | undefined;
+      personLoaded = true;
+      apply();
+    };
+    if (collectionRequest) {
+      collectionRequest.onsuccess = () => {
+        currentCollections = collectionRequest.result as CollectionRecord[];
+        apply();
+      };
+    }
+    if (membershipRequest) {
+      membershipRequest.onsuccess = () => {
+        currentMemberships = membershipRequest.result as CollectionMembershipRecord[];
+        apply();
+      };
+    }
   });
 }
 

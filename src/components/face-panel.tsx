@@ -34,7 +34,13 @@ import {
   personDeletionImpactText,
   previewPersonDeletion,
 } from "@/lib/person-deletion";
-import { facesDb, type PersonRecord, type SightingRecord } from "@/lib/face-db";
+import {
+  facesDb,
+  type CollectionMembershipRecord,
+  type CollectionRecord,
+  type PersonRecord,
+  type SightingRecord,
+} from "@/lib/face-db";
 import { detectFaces, findMatch, loadFaceEngine, type DetectedFace } from "@/lib/face-engine";
 import {
   faceEngineFailurePolicy,
@@ -68,6 +74,10 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
   const [faces, setFaces] = useState<Annotated[]>([]);
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [sightings, setSightings] = useState<SightingRecord[]>([]);
+  const [collections, setCollections] = useState<CollectionRecord[]>([]);
+  const [collectionMemberships, setCollectionMemberships] = useState<CollectionMembershipRecord[]>(
+    [],
+  );
   const [nameDrafts, setNameDrafts] = useState<Record<number, string>>({});
   const [selectedFace, setSelectedFace] = useState(0);
 
@@ -93,12 +103,16 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
   autoRef.current = auto;
 
   const refresh = useCallback(async () => {
-    const [nextPeople, nextSightings] = await Promise.all([
+    const [nextPeople, nextSightings, nextCollections, nextMemberships] = await Promise.all([
       facesDb.listPersons(),
       facesDb.listSightings(),
+      facesDb.listCollections(),
+      facesDb.listCollectionMemberships(),
     ]);
     setPeople(nextPeople);
     setSightings(nextSightings);
+    setCollections(nextCollections);
+    setCollectionMemberships(nextMemberships);
   }, []);
 
   useEffect(() => {
@@ -936,6 +950,8 @@ export function FacePanel({ host, preset, onUseFrame }: FacePanelProps) {
       <PersonProfileDialog
         person={editingPerson}
         preset={preset}
+        collections={collections}
+        collectionMemberships={collectionMemberships}
         onClose={() => setEditingPerson(null)}
         onSaved={refresh}
       />

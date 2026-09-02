@@ -38,4 +38,18 @@ describe("vision provider presets", () => {
     expect(migrated.some((preset) => preset.kind === "gemini")).toBe(true);
     expect(migrated.some((preset) => preset.kind === "ollama")).toBe(true);
   });
+
+  it("normalizes former default provider names without overwriting custom names", () => {
+    const migrated = migrateLegacyProviderPresets([
+      { ...DEFAULT_PRESETS[0], name: "自定义接口" },
+      { ...DEFAULT_PRESETS[1], name: "Gemini兼容接口" },
+      { ...DEFAULT_PRESETS[2], name: "办公室 Ollama" },
+    ]);
+
+    expect(migrated.map((preset) => preset.name)).toEqual([
+      "OpenAI 兼容接口",
+      "Gemini 兼容接口",
+      "办公室 Ollama",
+    ]);
+  });
 });

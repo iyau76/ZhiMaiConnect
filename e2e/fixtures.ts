@@ -522,6 +522,8 @@ export interface IndexedDbSeed {
   evidence?: SeedRecord[];
   lifeEvents?: SeedRecord[];
   reminders?: SeedRecord[];
+  collections?: SeedRecord[];
+  collectionMemberships?: SeedRecord[];
 }
 
 export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {

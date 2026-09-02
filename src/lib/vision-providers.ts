@@ -141,11 +141,22 @@ function cloneDefault(kind: ProviderKind): ProviderPreset {
  */
 export function migrateLegacyProviderPresets(value: unknown): ProviderPreset[] {
   const source = Array.isArray(value) ? value : [];
-  const retained = source.filter((item): item is ProviderPreset => {
-    if (!item || typeof item !== "object") return false;
-    const kind = (item as { kind?: unknown }).kind;
-    return kind === "openai" || kind === "gemini" || kind === "ollama";
-  });
+  const retained = source
+    .filter((item): item is ProviderPreset => {
+      if (!item || typeof item !== "object") return false;
+      const kind = (item as { kind?: unknown }).kind;
+      return kind === "openai" || kind === "gemini" || kind === "ollama";
+    })
+    .map((preset) => {
+      const name = preset.name.trim();
+      if (preset.kind === "openai" && (name === "自定义接口" || name === "OpenAI兼容接口")) {
+        return { ...preset, name: KIND_LABEL.openai };
+      }
+      if (preset.kind === "gemini" && name.replace(/\s+/gu, "") === "Gemini兼容接口") {
+        return { ...preset, name: KIND_LABEL.gemini };
+      }
+      return preset;
+    });
 
   const openai = retained.filter((item) => item.kind === "openai");
   const gemini = retained.filter((item) => item.kind === "gemini");
