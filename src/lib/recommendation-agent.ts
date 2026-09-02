@@ -30,14 +30,12 @@ import {
 } from "./recommendation";
 import { askModel } from "./vision-client";
 import type { ProviderPreset } from "./vision-providers";
+import type { AgentTraceEvent } from "./agent-trace";
+
+export type { AgentTraceEvent, AgentTraceKind } from "./agent-trace";
 
 const DEFAULT_ARCHIVE_CONTEXT_CHARACTERS = 6_200;
 const PREFERRED_TOOL_HISTORY_CHARACTERS = 5_000;
-
-export interface AgentTraceEvent {
-  kind: "status" | "model" | "tool" | "done";
-  text: string;
-}
 
 export interface ArchiveDisclosurePlan {
   mode: "full" | "progressive";
@@ -801,7 +799,7 @@ export async function runRecommendationAgent(options: {
           );
         }
         formatCorrection = true;
-        trace({ kind: "status", text: "返回格式不完整，正在自动要求模型修正" });
+        trace({ kind: "check", text: "返回格式不完整，正在自动要求模型修正" });
         continue;
       }
 
@@ -819,7 +817,7 @@ export async function runRecommendationAgent(options: {
                 "最终 decision 必须逐字复述 rankingLocked 的 mode、orderedPersonIds 和 accessVerified",
             },
           });
-          trace({ kind: "status", text: "模型结论与本地锁定结果不一致，正在要求修正" });
+          trace({ kind: "check", text: "模型结论与本地锁定结果不一致，正在要求修正" });
           continue;
         }
         const groundedAnswer = renderGroundedRecommendation({
@@ -835,7 +833,7 @@ export async function runRecommendationAgent(options: {
           ? `${capabilityCoverageText(capabilityPlan, candidates)}\n\n${groundedAnswer}`
           : groundedAnswer;
         const completedRounds = runtime.contextBudget.snapshot().rounds;
-        trace({ kind: "model", text: "模型说明已通过本地决策一致性校验" });
+        trace({ kind: "check", text: "模型说明已通过本地决策一致性校验" });
         trace({ kind: "done", text: `分析完成，共核对 ${completedRounds} 轮` });
         runtime.finalize("completed");
         const run = projectAgentRun(runtime.recorder.events(), {
@@ -858,7 +856,7 @@ export async function runRecommendationAgent(options: {
 
       if (response.type !== "tool" || typeof response.tool !== "string") {
         formatCorrection = true;
-        trace({ kind: "status", text: "工具请求格式有误，正在让模型修正" });
+        trace({ kind: "check", text: "工具请求格式有误，正在让模型修正" });
         continue;
       }
       trace({
@@ -873,7 +871,7 @@ export async function runRecommendationAgent(options: {
           call: { tool: response.tool, args: response.args },
           result: { error: "相同工具调用已重复，必须换一种检索方式或给出结论" },
         });
-        trace({ kind: "status", text: "检测到重复查询，已要求模型换路径" });
+        trace({ kind: "check", text: "检测到重复查询，已要求模型换路径" });
         continue;
       }
       trace({ kind: "tool", text: `${archiveToolLabel(response.tool)}…` });
@@ -889,7 +887,7 @@ export async function runRecommendationAgent(options: {
       } catch (error) {
         result = { error: error instanceof Error ? error.message : "工具执行失败" };
         trace({
-          kind: "tool",
+          kind: "error",
           text: `${archiveToolLabel(response.tool)}失败，模型将使用现有证据继续`,
         });
       }

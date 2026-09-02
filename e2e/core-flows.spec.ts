@@ -945,6 +945,58 @@ test("日历中的既有事件可以原位编辑而不是重复新建", async ({
   ]);
 });
 
+test("行动规划先生成可编辑草案，批准后才原子写入任务", async ({ page }) => {
+  await openApp(page);
+  await seedIndexedDb(page, {
+    persons: [
+      {
+        id: "plan-photographer",
+        name: "唐悦",
+        note: "愿意参与校园记忆展",
+        profile: { title: "摄影师", tags: ["活动摄影"] },
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW,
+      },
+    ],
+  });
+  await openApp(page);
+
+  await clickVisible(page, page.getByRole("button", { name: /^计划/ }));
+  await page.getByPlaceholder("目标，例如：筹备校园记忆展开幕活动").fill("筹备校园记忆展开幕活动");
+  await page.getByRole("button", { name: "智能体拆解任务" }).click();
+
+  const drafts = page.getByRole("region", { name: "待批准行动草案" });
+  const draftTitles = drafts.getByRole("textbox", { name: "行动项标题" });
+  await expect(draftTitles.nth(0)).toHaveValue("联系唐悦确认开幕活动拍摄清单");
+  await expect(draftTitles.nth(1)).toHaveValue("整理开幕流程与负责人名单");
+  await expect(drafts).toContainText("唐悦");
+  expect(await readIndexedDbStore(page, "tasks")).toEqual([]);
+
+  await draftTitles.first().fill("确认唐悦的拍摄档期");
+  await drafts.getByRole("checkbox", { name: "选择此行动项" }).nth(1).uncheck();
+  await drafts.getByRole("button", { name: /批准并加入计划/ }).click();
+  await expect(page.getByText(/本次批准已作为一个事务写入/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "撤销本次批准" })).toBeVisible();
+
+  const stored = await readIndexedDbStore<{
+    title: string;
+    personIds?: string[];
+    source?: { kind?: string };
+  }>(page, "tasks");
+  expect(stored).toEqual([
+    expect.objectContaining({
+      title: "确认唐悦的拍摄档期",
+      personIds: ["plan-photographer"],
+      source: expect.objectContaining({ kind: "ai" }),
+    }),
+  ]);
+
+  await openApp(page);
+  await clickVisible(page, page.getByRole("button", { name: /^计划/ }));
+  await expect(page.getByText("确认唐悦的拍摄档期", { exact: true })).toBeVisible();
+});
+
 test("带日期的待办会进入月历和时间轴，并可在日历中完成", async ({ page }) => {
   await openApp(page);
   const due = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());

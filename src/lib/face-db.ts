@@ -313,14 +313,14 @@ export interface CaseEventRecord {
   source?: Provenance;
 }
 
-/** 探案计划里的一条行动项 */
+/** 行动计划里的一条可执行任务 */
 export interface TaskRecord {
   id: string;
-  /** 要做什么，如「走访保姆李姐核对 07:30 报警经过」 */
+  /** 要做什么，如「联系唐悦确认活动拍摄档期」 */
   title: string;
-  /** 为什么做 / 想验证什么 */
+  /** 为什么做、交付结果与注意事项 */
   detail?: string;
-  /** 负责人（办案人姓名或警号） */
+  /** 负责人显示名 */
   assignee?: string;
   /** 涉及的人物 id */
   personIds?: string[];

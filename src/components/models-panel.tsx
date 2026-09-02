@@ -38,7 +38,7 @@ import {
   type MutationCommitReceipt,
   type MutationProposalEntry,
 } from "@/lib/mutation-commit-coordinator";
-import type { AgentTraceEvent } from "@/lib/recommendation-agent";
+import type { AgentTraceEvent } from "@/lib/agent-trace";
 
 import { cn } from "@/lib/utils";
 import { auditVision, testConnection } from "@/lib/vision-client";
@@ -373,7 +373,7 @@ export function ModelsPanel({
       toast.error((error as Error).message);
       setAssistantTrace((prev) => [
         ...prev.slice(-23),
-        { kind: "done", text: (error as Error).message || t("请求失败") },
+        { kind: "error", text: (error as Error).message || t("请求失败") },
       ]);
       setTurns((prev) => {
         const next = [...prev];
@@ -429,7 +429,7 @@ export function ModelsPanel({
       toast.error((error as Error).message);
       setAssistantTrace((prev) => [
         ...prev.slice(-23),
-        { kind: "done", text: (error as Error).message || t("请求失败") },
+        { kind: "error", text: (error as Error).message || t("请求失败") },
       ]);
     } finally {
       setBusy(false);
@@ -821,7 +821,7 @@ export function ModelsPanel({
               current={assistantTrace.at(-1)?.text ?? t("正在准备回答")}
               steps={assistantTrace.length}
               running={busy}
-              history={assistantTrace.map((item) => item.text)}
+              events={assistantTrace}
               stepLabel={t("步")}
             />
           </div>

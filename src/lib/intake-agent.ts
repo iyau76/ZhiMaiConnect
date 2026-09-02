@@ -33,6 +33,7 @@ import {
 import { isSelfReference, SELF_PERSON_ID } from "./person-identity";
 import { ensureIntakeWorkspace, intakeWorkspaceView } from "./intake-workspace";
 import { inferRelationSemantics, type RelationPredicate } from "./relation-ontology";
+import type { AgentTraceEvent } from "./agent-trace";
 
 const MAX_HISTORY = 8_000;
 const MAX_VALIDATION_REPAIRS = 2;
@@ -66,10 +67,8 @@ interface IntakeToolBatch {
 type IntakeResponse =
   IntakeToolCall | IntakeToolBatch | IntakeFinal | IntakeMutationPlan | IngestCandidate;
 
-export interface IntakeAgentTrace {
-  kind: "status" | "model" | "tool" | "check";
-  text: string;
-}
+/** @deprecated Import AgentTraceEvent from agent-trace for new integrations. */
+export type IntakeAgentTrace = AgentTraceEvent;
 
 function clipped(value: unknown, max: number) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -1104,7 +1103,7 @@ export async function runIntakeAgent(options: {
   /** Raw user material, used only for completion invariants rather than prompting. */
   sourceMaterial?: string;
   signal?: AbortSignal;
-  onTrace?: (event: IntakeAgentTrace) => void;
+  onTrace?: (event: AgentTraceEvent) => void;
   budget?: AgentBudgetPreset | AgentBudget;
   recorder?: AgentRunRecorder;
   onRun?: (run: AgentRun) => void;
@@ -1448,16 +1447,23 @@ export async function runIntakeAgent(options: {
           const tool = clipped(item.tool, 100);
           const args = record(item.args);
           let result: unknown;
+          let failed = false;
           try {
             result = await executeTool(tool, args);
           } catch (error) {
+            failed = true;
             result = { error: error instanceof Error ? error.message : "工具调用失败" };
           }
           history.push({
             call: { tool, args },
             result: archiveAgentToolRegistry.modelResult(tool, result),
           });
-          trace({ kind: "tool", text: `${archiveToolLabel(tool)}已返回` });
+          trace({
+            kind: failed ? "error" : "tool",
+            text: failed
+              ? `${archiveToolLabel(tool)}失败，继续使用已有材料`
+              : `${archiveToolLabel(tool)}已返回`,
+          });
         }
         continue;
       }
@@ -1470,12 +1476,19 @@ export async function runIntakeAgent(options: {
       const args = record(response.args);
       const call = { tool: response.tool, args };
       let result: unknown;
+      let failed = false;
       try {
         result = await executeTool(response.tool, args);
       } catch (error) {
+        failed = true;
         result = { error: error instanceof Error ? error.message : "工具调用失败" };
       }
-      trace({ kind: "tool", text: `${archiveToolLabel(response.tool)}已返回，继续整理` });
+      trace({
+        kind: failed ? "error" : "tool",
+        text: failed
+          ? `${archiveToolLabel(response.tool)}失败，继续使用已有材料`
+          : `${archiveToolLabel(response.tool)}已返回，继续整理`,
+      });
       history.push({
         call,
         result: archiveAgentToolRegistry.modelResult(response.tool, result),

@@ -1,7 +1,7 @@
 import { clickVisible, expect, openApp, test } from "./fixtures";
 
 for (const width of [390, 768, 1440]) {
-  test(`${width}px 下六项核心操作可完成且页面无整体横向溢出`, async ({ page }) => {
+  test(`${width}px 下七项核心操作可完成且页面无整体横向溢出`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await openApp(page);
 
@@ -43,6 +43,10 @@ for (const width of [390, 768, 1440]) {
       .fill(eventTitle);
     await page.getByRole("button", { name: "记下来" }).click();
     await expect(page.getByText(eventTitle, { exact: true }).first()).toBeVisible();
+
+    await clickVisible(page, page.getByRole("button", { name: /^计划/ }));
+    await expect(page.getByTestId("plan-board")).toBeVisible();
+    await expect(page.getByPlaceholder("目标，例如：筹备校园记忆展开幕活动")).toBeVisible();
 
     await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
     await expect(page.getByText("模型配置", { exact: true })).toBeVisible();

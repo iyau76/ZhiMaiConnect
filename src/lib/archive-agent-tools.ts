@@ -809,6 +809,10 @@ export const ARCHIVE_AGENT_TOOL_SCOPES = {
     permissions: ["public_read", "private_read", "network"],
     toolNames: [...ARCHIVE_READ_TOOL_NAMES, ...RECOMMENDATION_TOOL_NAMES, ...PUBLIC_TOOL_NAMES],
   },
+  planning: {
+    permissions: ["public_read", "private_read"],
+    toolNames: [...ARCHIVE_READ_TOOL_NAMES, "get_datetime"],
+  },
 } as const satisfies Record<string, ArchiveAgentToolScope>;
 
 export function archiveToolLabel(name: string) {

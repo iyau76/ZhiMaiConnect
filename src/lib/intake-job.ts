@@ -1,3 +1,5 @@
+import type { AgentTraceEvent } from "./agent-trace";
+
 /** 「AI 整理」跑在模块层，切到别的页签也不会中断；回到录入页再认领结果 */
 
 export interface IntakeJobState {
@@ -13,9 +15,7 @@ export interface IntakeJobState {
   text: string | null;
 }
 
-export interface IntakeJobTrace {
-  kind: "status" | "model" | "check" | "done" | "error";
-  text: string;
+export interface IntakeJobTrace extends AgentTraceEvent {
   at: number;
 }
 

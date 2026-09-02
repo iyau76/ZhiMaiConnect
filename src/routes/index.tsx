@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, CalendarDays, Cpu, PenLine, Settings, Users } from "lucide-react";
+import { Bell, CalendarDays, ClipboardList, Cpu, PenLine, Settings, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AppearanceControls, LanguageToggle } from "@/components/appearance-controls";
@@ -8,6 +8,7 @@ import { DemoDataControls } from "@/components/demo-data-controls";
 import { IntakePanel } from "@/components/intake-panel";
 import { ModelsPanel } from "@/components/models-panel";
 import { PageGuide } from "@/components/page-guide";
+import { PlanBoard } from "@/components/plan-board";
 import { PreflightPanel } from "@/components/preflight-panel";
 import { RemindersPanel } from "@/components/reminders-panel";
 
@@ -48,7 +49,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-type View = "intake" | "people" | "reminders" | "calendar" | "models" | "settings";
+type View = "intake" | "people" | "reminders" | "calendar" | "plan" | "models" | "settings";
 
 function getNav(): Array<{ id: View; label: string; hint: string; icon: typeof Users }> {
   return [
@@ -56,6 +57,7 @@ function getNav(): Array<{ id: View; label: string; hint: string; icon: typeof U
     { id: "people", label: t("人物关系"), hint: t("档案与关系网"), icon: Users },
     { id: "reminders", label: t("提醒"), hint: t("生日、节日与待办"), icon: Bell },
     { id: "calendar", label: t("日历"), hint: t("哪天和谁做了什么"), icon: CalendarDays },
+    { id: "plan", label: t("计划"), hint: t("目标拆解与行动项"), icon: ClipboardList },
     { id: "models", label: t("AI 助理"), hint: t("模型设置与建议"), icon: Cpu },
     { id: "settings", label: t("设置"), hint: t("主题、无障碍与语言"), icon: Settings },
   ];
@@ -105,6 +107,17 @@ const HEADINGS: Record<
     points: [
       "紫点是生日，黄点是节日，灰点是你自己的记录。",
       "点某一天写下和谁做了什么，以后翻回来一目了然。",
+    ],
+  },
+  plan: {
+    kicker: "Plan · Action",
+    a: "把目标变成",
+    b: "下一步行动",
+    guide: "这一页：拆解目标、核对草案、推进任务",
+    points: [
+      "写下一个真实目标，智能体会按需读取相关人物、关系与事件。",
+      "生成结果先成为可编辑草案，只有你批准的内容才会进入行动计划。",
+      "任务可以继续分配负责人、调整状态和截止日期。",
     ],
   },
   settings: {
@@ -292,6 +305,8 @@ function Index() {
               </div>
             ) : view === "calendar" ? (
               <CalendarPanel preset={activePreset} />
+            ) : view === "plan" ? (
+              <PlanBoard preset={activePreset} />
             ) : view === "models" ? (
               <ModelsPanel
                 presets={presets}

@@ -218,6 +218,35 @@ function visionReply(body: Record<string, unknown>) {
       outreachDraft: "陈安你好，方便时能否帮我看一下租房合同中的违约条款？",
     });
   }
+  if (prompt.includes("行动规划智能体")) {
+    if (!prompt.includes('"call":{"tool":"search_profiles"')) {
+      return JSON.stringify({
+        type: "tool",
+        summary: "先查找适合负责活动拍摄的人",
+        tool: "search_profiles",
+        args: { query: "摄影 活动", limit: 8 },
+      });
+    }
+    return JSON.stringify({
+      type: "final",
+      summary: "形成两条开幕活动行动草案",
+      tasks: [
+        {
+          title: "联系唐悦确认开幕活动拍摄清单",
+          detail: "确认机位、交付格式和现场时间",
+          priority: "high",
+          due: "2026-09-08",
+          personIds: ["plan-photographer"],
+        },
+        {
+          title: "整理开幕流程与负责人名单",
+          detail: "补齐尚未确认的环节负责人",
+          priority: "normal",
+          personIds: [],
+        },
+      ],
+    });
+  }
   if (prompt.includes("通用问答智能体")) {
     if (prompt.includes("把甲和乙的关系改成前同事")) {
       if (!prompt.includes('"tool":"get_relation"')) {

@@ -289,6 +289,28 @@ const updateEventOperationSchema = z
   })
   .strict();
 
+const taskReplacementSchema = z
+  .object({
+    title: z.string().trim().min(1).max(160),
+    detail: z.string().trim().max(600).nullable(),
+    assignee: z.string().trim().max(100).nullable(),
+    personIds: z.array(targetIdSchema).max(100),
+    priority: z.enum(["high", "normal", "low"]),
+    due: isoDateSchema.nullable(),
+  })
+  .strict();
+
+const createTaskOperationSchema = z
+  .object({
+    id: targetIdSchema,
+    kind: z.literal("create_task"),
+    targetId: targetIdSchema,
+    reason: reasonSchema,
+    expectedRevision: z.null(),
+    replacement: taskReplacementSchema,
+  })
+  .strict();
+
 const collectionReplacementSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
@@ -408,6 +430,7 @@ export const archiveMutationOperationSchema = z.union([
   updatePersonOperationSchema,
   supersedeRelationOperationSchema,
   updateEventOperationSchema,
+  createTaskOperationSchema,
   organizeCollectionOperationSchema,
   deletePersonOperationSchema,
 ]);
@@ -485,6 +508,7 @@ export const archiveMutationPlanSchema = z
 export type PersonMutationPatch = z.infer<typeof personMutationPatchSchema>;
 export type RelationReplacement = z.infer<typeof relationReplacementSchema>;
 export type EventMutationPatch = z.infer<typeof eventMutationPatchSchema>;
+export type TaskReplacement = z.infer<typeof taskReplacementSchema>;
 export type ArchiveMutationOperation = z.infer<typeof archiveMutationOperationSchema>;
 export type ArchiveMutationPlan = z.infer<typeof archiveMutationPlanSchema>;
 export type DeleteResolution = z.infer<typeof deleteResolutionSchema>;
@@ -724,6 +748,22 @@ export function createUpdateEventOperation(
     reason: input.reason,
     precondition: { expectedRevision: archiveRecordRevision(event) },
     changes: input.changes,
+  });
+}
+
+export function createTaskOperation(input: {
+  taskId?: string;
+  reason: string;
+  replacement: TaskReplacement;
+  id?: string;
+}) {
+  return createTaskOperationSchema.parse({
+    id: input.id ?? operationId("create-task"),
+    kind: "create_task",
+    targetId: input.taskId ?? operationId("task"),
+    reason: input.reason,
+    expectedRevision: null,
+    replacement: input.replacement,
   });
 }
 
@@ -1094,6 +1134,12 @@ function mutationDiffTargetLabel(
   if (row.field.startsWith("event.") || row.field === "delete.life_event") {
     return snapshot.lifeEvents.find((record) => record.id === row.targetId)?.title ?? row.targetId;
   }
+  if (row.field === "task") {
+    return (
+      [...snapshot.tasks, ...(batch.tasks ?? [])].find((record) => record.id === row.targetId)
+        ?.title ?? row.targetId
+    );
+  }
   if (row.field.startsWith("collection.")) {
     return collections.get(row.targetId)?.name ?? row.targetId;
   }
@@ -1311,6 +1357,43 @@ export function prepareArchiveMutationPlan(
           });
         }
       }
+      continue;
+    }
+
+    if (operation.kind === "create_task") {
+      if (taskById.has(operation.targetId)) {
+        throw new Error(`任务 ${operation.targetId} 已存在，请重新生成计划`);
+      }
+      const missingPersonId = operation.replacement.personIds.find(
+        (personId) => !personById.has(personId) || deletingPeople.has(personId),
+      );
+      if (missingPersonId) {
+        throw new Error(`任务引用的人物不存在或即将删除：${missingPersonId}`);
+      }
+      const task: TaskRecord = {
+        id: operation.targetId,
+        title: operation.replacement.title,
+        detail: operation.replacement.detail ?? undefined,
+        assignee: operation.replacement.assignee ?? undefined,
+        personIds: operation.replacement.personIds.length
+          ? operation.replacement.personIds
+          : undefined,
+        priority: operation.replacement.priority,
+        status: "todo",
+        due: operation.replacement.due ?? undefined,
+        createdAt: now,
+        source: { kind: "ai", detail: "AI 行动规划草案，经用户批准", at: now },
+      };
+      batch.tasks = pushUnique(batch.tasks, task);
+      taskById.set(task.id, task);
+      diff.push({
+        operationId: operation.id,
+        targetId: operation.targetId,
+        field: "task",
+        before: "不存在",
+        after: task.title,
+        destructive: false,
+      });
       continue;
     }
 

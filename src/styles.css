@@ -474,6 +474,11 @@
   animation: reasoning-disclosure-sweep 2.8s ease-in-out infinite;
 }
 
+.reasoning-disclosure-body {
+  border-top: 1px solid color-mix(in oklch, var(--primary) 14%, var(--border));
+  background: color-mix(in oklch, var(--card) 78%, transparent);
+}
+
 @keyframes reasoning-disclosure-sweep {
   0% {
     left: -15rem;

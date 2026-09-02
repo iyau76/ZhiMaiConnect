@@ -46,7 +46,8 @@ import {
   staleContacts,
   type CandidateRecommendation,
 } from "@/lib/recommendation";
-import { runRecommendationAgent, type AgentTraceEvent } from "@/lib/recommendation-agent";
+import type { AgentTraceEvent } from "@/lib/agent-trace";
+import { runRecommendationAgent } from "@/lib/recommendation-agent";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
@@ -327,7 +328,9 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
       );
     } catch (error) {
       if (!controller.signal.aborted) {
-        toast.error(error instanceof Error ? error.message : t("AI 全库分析失败"));
+        const message = error instanceof Error ? error.message : t("AI 全库分析失败");
+        setAgentTrace((current) => [...current.slice(-19), { kind: "error", text: message }]);
+        toast.error(message);
       }
     } finally {
       if (agentAbortRef.current === controller) agentAbortRef.current = null;
@@ -655,7 +658,7 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
               current={agentTrace.at(-1)?.text ?? t("正在准备")}
               steps={agentTrace.length}
               running={agentBusy}
-              history={agentTrace.map((event) => event.text)}
+              events={agentTrace}
               stepLabel={t("步")}
             />
           </div>

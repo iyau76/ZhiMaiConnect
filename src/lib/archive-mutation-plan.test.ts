@@ -127,6 +127,52 @@ describe("archive mutation plan contract", () => {
 });
 
 describe("archive mutation plan integration", () => {
+  it("creates approved action items through the same typed mutation transaction", async () => {
+    const { facesDb } = await import("./face-db");
+    const { applyArchiveMutationPlan, createArchiveMutationPlan, createTaskOperation } =
+      await import("./archive-mutation-plan");
+
+    const photographer = person("photographer", "唐悦");
+    await facesDb.putRelationshipBatch({ persons: [photographer] });
+    const plan = createArchiveMutationPlan({
+      title: "开幕活动行动计划",
+      reason: "用户批准了行动草案",
+      operations: [
+        createTaskOperation({
+          taskId: "task-photo",
+          reason: "用户批准此行动项",
+          replacement: {
+            title: "确认开幕活动拍摄清单",
+            detail: "确认机位和交付格式",
+            assignee: null,
+            personIds: [photographer.id],
+            priority: "high",
+            due: "2026-09-08",
+          },
+        }),
+      ],
+    });
+
+    const applied = await applyArchiveMutationPlan(plan, { now: 20 });
+    expect(applied.diff).toEqual([
+      expect.objectContaining({
+        field: "task",
+        before: "不存在",
+        after: "确认开幕活动拍摄清单",
+        targetLabel: "确认开幕活动拍摄清单",
+      }),
+    ]);
+    await expect(facesDb.listTasks()).resolves.toEqual([
+      expect.objectContaining({
+        id: "task-photo",
+        personIds: [photographer.id],
+        status: "todo",
+        source: expect.objectContaining({ kind: "ai" }),
+      }),
+    ]);
+    await expect(applyArchiveMutationPlan(plan, { now: 21 })).rejects.toThrow(/已存在/);
+  });
+
   it("applies person, relation, event and collection edits in one approved plan", async () => {
     const { facesDb } = await import("./face-db");
     const {

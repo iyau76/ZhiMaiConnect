@@ -873,11 +873,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           workspace: base ?? undefined,
           includeArchive: allowArchiveTools,
           sourceMaterial: materialSource,
-          onTrace: (event) =>
-            report(
-              event.text,
-              event.kind === "check" ? "check" : event.kind === "model" ? "model" : "status",
-            ),
+          onTrace: (event) => report(event.text, event.kind),
           onRun: setLatestAgentRun,
         });
         report(t("模型输出完成，正在解析结构化草稿"), "check");
@@ -2245,7 +2241,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               current={job.trace.at(-1)?.text ?? t("正在准备")}
               steps={job.trace.length}
               running={busy}
-              history={job.trace.map((item) => item.text)}
+              events={job.trace}
               stepLabel={t("步")}
             />
           </div>

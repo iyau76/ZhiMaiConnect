@@ -39,7 +39,8 @@ import type {
   RelationRecord,
 } from "./face-db";
 import { resolveRelationSemantics } from "./relation-ontology";
-import { planArchiveDisclosure, type AgentTraceEvent } from "./recommendation-agent";
+import { planArchiveDisclosure } from "./recommendation-agent";
+import type { AgentTraceEvent } from "./agent-trace";
 import { askModel } from "./vision-client";
 import type { ChatTurn, ProviderPreset } from "./vision-providers";
 import { resolveAssistantArchiveCitations, type ArchiveCitation } from "./agent-output-grounding";
@@ -725,7 +726,7 @@ export async function runAssistantAgent(options: {
                 "failed",
               );
               trace({
-                kind: "status",
+                kind: "error",
                 text: `第 ${round} 轮连接暂时失败，正在进行第 ${nextAttempt} 次有限重试`,
               });
             },
@@ -827,7 +828,7 @@ export async function runAssistantAgent(options: {
           throw new Error("AI 连续返回了无法解析的结果；可换一个更擅长结构化输出的模型");
         }
         formatCorrection = true;
-        trace({ kind: "status", text: "返回格式不完整，正在自动要求模型修正" });
+        trace({ kind: "check", text: "返回格式不完整，正在自动要求模型修正" });
         continue;
       }
 
@@ -852,7 +853,7 @@ export async function runAssistantAgent(options: {
           !clarification
         ) {
           formatCorrection = true;
-          trace({ kind: "status", text: "回答字段为空，正在请求补齐" });
+          trace({ kind: "check", text: "回答字段为空，正在请求补齐" });
           continue;
         }
         if (options.includeArchive && clarification) {
@@ -881,6 +882,9 @@ export async function runAssistantAgent(options: {
           archive,
           includeArchive: options.includeArchive,
         });
+        if (options.includeArchive || languageAnswers.length > 0) {
+          trace({ kind: "check", text: "档案引用与语言答案已完成本地校验" });
+        }
         const answer = [modelAnswer, ...typedClaims.advice].filter(Boolean).join("\n");
         const groundedAnswer = [
           grounding.evidenceText,
@@ -912,7 +916,7 @@ export async function runAssistantAgent(options: {
 
       if (response.type !== "tool" || typeof response.tool !== "string") {
         formatCorrection = true;
-        trace({ kind: "status", text: "工具请求格式有误，正在让模型修正" });
+        trace({ kind: "check", text: "工具请求格式有误，正在让模型修正" });
         continue;
       }
 
@@ -945,7 +949,7 @@ export async function runAssistantAgent(options: {
       }
       if (repeated > 2) {
         toolHistory.push({ call, result: { error: "相同调用已重复，请换检索方式或直接作答" } });
-        trace({ kind: "status", text: "检测到重复查询，已要求模型换路径" });
+        trace({ kind: "check", text: "检测到重复查询，已要求模型换路径" });
         continue;
       }
 
@@ -996,7 +1000,7 @@ export async function runAssistantAgent(options: {
         const structuredError = structuredToolError(error);
         result = { error: structuredError };
         trace({
-          kind: "tool",
+          kind: "error",
           text: `${archiveToolLabel(response.tool)}失败，正在使用现有信息继续`,
         });
         if (
@@ -1009,7 +1013,7 @@ export async function runAssistantAgent(options: {
           });
           toolHistory.push({ call, result: { error: structuredError } });
           trace({
-            kind: "status",
+            kind: "check",
             text: "事务编译器拒绝了不完整提案，正在按精确字段错误修正",
           });
           continue;
