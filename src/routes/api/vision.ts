@@ -150,12 +150,22 @@ export async function handleVisionPost(request: Request): Promise<Response> {
     const body = await parseJsonRequest(request, visionBodySchema, API_LIMITS.visionRequestBytes);
     model = body.model;
     const target = resolveTarget(body);
-    const oneShot = body.action === "test" || body.action === "audit";
+    const oneShot = body.action !== "chat";
+    const privateOneShot = body.action === "test" || body.action === "audit";
     const prompt = body.action === "test" ? "回复两个字：连通" : (body.prompt ?? "");
+    const targetHostname = new URL(target.url).hostname;
+    const officialDeepSeekAgent =
+      body.action === "agent" &&
+      targetHostname === "api.deepseek.com" &&
+      /^deepseek-v4-(?:flash(?:-vision-exp)?|pro)$/i.test(body.model);
+    const officialGeminiAgent =
+      body.action === "agent" &&
+      targetHostname === "generativelanguage.googleapis.com" &&
+      /^gemini-/i.test(body.model);
     const payload = {
       model: body.model,
       messages: buildMessages(
-        oneShot ? [] : body.history,
+        privateOneShot ? [] : body.history,
         prompt,
         body.action === "test" ? null : body.image,
       ),
@@ -169,6 +179,14 @@ export async function handleVisionPost(request: Request): Promise<Response> {
         ? { temperature: body.temperature }
         : {}),
       ...(body.model.startsWith("openai/gpt-5.6") ? { reasoning_effort: "none" } : {}),
+      ...(officialDeepSeekAgent
+        ? {
+            thinking: { type: "disabled" },
+            response_format: { type: "json_object" },
+          }
+        : officialGeminiAgent
+          ? { response_format: { type: "json_object" } }
+          : {}),
     };
 
     upstreamRequest = await startUpstreamRequest(
@@ -212,11 +230,27 @@ export async function handleVisionPost(request: Request): Promise<Response> {
       let reply = "";
       try {
         const payload = JSON.parse(raw) as {
-          choices?: Array<{ message?: { content?: unknown } }>;
+          choices?: Array<{
+            finish_reason?: unknown;
+            message?: { content?: unknown; reasoning_content?: unknown };
+          }>;
         };
         const content = payload.choices?.[0]?.message?.content;
         if (typeof content === "string") reply = content;
-      } catch {
+        if (!reply) {
+          const choice = payload.choices?.[0];
+          const reasoning = choice?.message?.reasoning_content;
+          if (choice?.finish_reason === "length" && typeof reasoning === "string" && reasoning) {
+            throw new SafeApiError(
+              422,
+              "MODEL_OUTPUT_TRUNCATED",
+              "模型把输出预算耗在思考阶段，尚未生成可用正文",
+            );
+          }
+          throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 没有返回可用正文");
+        }
+      } catch (error) {
+        if (error instanceof SafeApiError) throw error;
         throw new SafeApiError(502, "UPSTREAM_INVALID_RESPONSE", "上游 AI 返回了无效响应");
       }
       logResult("completed", { status: 200 });

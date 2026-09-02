@@ -1289,7 +1289,6 @@ export async function runIntakeAgent(options: {
     for (let round = 1; round <= maxRounds; round += 1) {
       options.signal?.throwIfAborted();
       let raw = "";
-      let activityMark = 500;
       trace({ kind: "status", text: `智能体正在整理第 ${round} 轮` });
       const prompt = promptForRound(
         options.extractionPrompt,
@@ -1303,6 +1302,7 @@ export async function runIntakeAgent(options: {
         archiveIndex,
       );
       const modelDecision = await runtime.runModelRound({ payload: { prompt } }, async (signal) => {
+        raw = "";
         await askModel(
           options.preset,
           prompt,
@@ -1310,13 +1310,6 @@ export async function runIntakeAgent(options: {
           [],
           (chunk) => {
             raw += chunk;
-            if (raw.length >= activityMark) {
-              trace({
-                kind: "model",
-                text: `模型持续输出 · ${raw.length.toLocaleString()} 个字符`,
-              });
-              activityMark += 800;
-            }
           },
           signal,
           {
@@ -1325,6 +1318,7 @@ export async function runIntakeAgent(options: {
               Math.min(32_768, runtime.contextBudget.snapshot().remaining.outputTokens),
             ),
             temperature: 0,
+            responseMode: "structured",
           },
         );
         return { value: raw, payload: { response: raw } };

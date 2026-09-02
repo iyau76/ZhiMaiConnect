@@ -1,12 +1,30 @@
 import { assertVision, type ChatTurn, type ProviderPreset } from "./vision-providers";
 import { confirmCloudTransfer, type CloudDataType } from "./cloud-consent";
-import { apiSessionHeaders } from "./api-session";
+import { fetchWithApiSession } from "./api-session";
 import { assertVisionPromptFits, fitVisionHistory } from "./ai-request-contract";
 import { ModelTransportError } from "./model-transport-resilience";
 
 function stripDataUrl(dataUrl: string) {
   const idx = dataUrl.indexOf(",");
   return idx === -1 ? dataUrl : dataUrl.slice(idx + 1);
+}
+
+export interface ModelRequestOptions {
+  maxOutputTokens?: number;
+  temperature?: number;
+  /** Agent 协议使用完整 JSON 响应；普通问答默认继续流式返回。 */
+  responseMode?: "stream" | "structured";
+}
+
+function ollamaMessages(prompt: string, image: string | null, history: ChatTurn[]) {
+  return [
+    ...history.slice(-8).map((turn) => ({ role: turn.role, content: turn.text })),
+    {
+      role: "user" as const,
+      content: prompt,
+      ...(image ? { images: [stripDataUrl(image)] } : {}),
+    },
+  ];
 }
 
 async function streamOllama(
@@ -20,14 +38,7 @@ async function streamOllama(
   temperature?: number,
 ) {
   const base = preset.baseUrl.replace(/\/+$/, "");
-  const messages = [
-    ...history.slice(-8).map((turn) => ({ role: turn.role, content: turn.text })),
-    {
-      role: "user",
-      content: prompt,
-      ...(image ? { images: [stripDataUrl(image)] } : {}),
-    },
-  ];
+  const messages = ollamaMessages(prompt, image, history);
 
   const response = await fetch(`${base}/api/chat`, {
     method: "POST",
@@ -78,26 +89,122 @@ async function streamOllama(
   }
 }
 
-async function streamServer(
+async function completeOllama(
   preset: ProviderPreset,
   prompt: string,
   image: string | null,
   history: ChatTurn[],
-  onChunk: (text: string) => void,
+  signal: AbortSignal,
+  maxOutputTokens?: number,
+  temperature?: number,
+) {
+  const base = preset.baseUrl.replace(/\/+$/, "");
+  const response = await fetch(`${base}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: preset.model,
+      messages: ollamaMessages(prompt, image, history),
+      stream: false,
+      format: "json",
+      ...(maxOutputTokens || temperature !== undefined
+        ? {
+            options: {
+              ...(maxOutputTokens ? { num_predict: maxOutputTokens } : {}),
+              ...(temperature !== undefined ? { temperature } : {}),
+            },
+          }
+        : {}),
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new ModelTransportError(
+      `Ollama 返回 ${response.status}：${(await response.text()).slice(0, 300)}`,
+      response.status,
+    );
+  }
+
+  try {
+    const json = (await response.json()) as { message?: { content?: unknown } };
+    const reply = json.message?.content;
+    if (typeof reply === "string" && reply.trim()) return reply;
+  } catch {
+    // 统一在下方报告协议错误，不泄露上游正文。
+  }
+  throw new ModelTransportError(
+    "Ollama 没有返回可用的结构化正文",
+    502,
+    "UPSTREAM_INVALID_RESPONSE",
+  );
+}
+
+async function serverResponseError(response: Response, clientRequestId: string) {
+  let message = `请求失败（${response.status}）`;
+  let code: string | undefined;
+  let upstreamStatus: number | undefined;
+  let providerCode: string | undefined;
+  let providerType: string | undefined;
+  let upstreamRequestId: string | undefined;
+  try {
+    const json = (await response.json()) as {
+      error?: string;
+      code?: string;
+      upstreamStatus?: number;
+      providerCode?: string;
+      providerType?: string;
+      upstreamRequestId?: string;
+    };
+    if (json.error) message = json.error;
+    code = json.code;
+    upstreamStatus = json.upstreamStatus;
+    providerCode = json.providerCode;
+    providerType = json.providerType;
+    upstreamRequestId = json.upstreamRequestId;
+  } catch {
+    /* 保留默认信息 */
+  }
+  const edgeRequestId = response.headers.get("cf-ray") ?? undefined;
+  const diagnosticText = [
+    `client=${clientRequestId}`,
+    edgeRequestId ? `edge=${edgeRequestId}` : "",
+    upstreamStatus ? `upstream=${upstreamStatus}` : "",
+    providerCode ? `provider=${providerCode}` : "",
+    upstreamRequestId ? `upstream-request=${upstreamRequestId}` : "",
+  ]
+    .filter(Boolean)
+    .join("；");
+  return new ModelTransportError(`${message}（${diagnosticText}）`, response.status, code, {
+    clientRequestId,
+    edgeRequestId,
+    upstreamRequestId,
+    upstreamStatus,
+    providerCode,
+    providerType,
+  });
+}
+
+async function requestServer(
+  action: "chat" | "agent",
+  preset: ProviderPreset,
+  prompt: string,
+  image: string | null,
+  history: ChatTurn[],
   signal: AbortSignal,
   maxOutputTokens?: number,
   temperature?: number,
 ) {
   const clientRequestId = crypto.randomUUID();
-  const response = await fetch("/api/vision", {
+  const response = await fetchWithApiSession("/api/vision", {
     method: "POST",
-    headers: await apiSessionHeaders({
+    headers: {
       "Content-Type": "application/json",
       "X-Zhimai-Client-Request": clientRequestId,
-    }),
+    },
     signal,
     body: JSON.stringify({
-      action: "chat",
+      action,
       kind: preset.kind,
       baseUrl: preset.baseUrl,
       apiKey: preset.apiKey,
@@ -109,51 +216,30 @@ async function streamServer(
       temperature,
     }),
   });
+  if (!response.ok) throw await serverResponseError(response, clientRequestId);
+  return response;
+}
 
-  if (!response.ok) {
-    let message = `请求失败（${response.status}）`;
-    let code: string | undefined;
-    let upstreamStatus: number | undefined;
-    let providerCode: string | undefined;
-    let providerType: string | undefined;
-    let upstreamRequestId: string | undefined;
-    try {
-      const json = (await response.json()) as {
-        error?: string;
-        code?: string;
-        upstreamStatus?: number;
-        providerCode?: string;
-        providerType?: string;
-        upstreamRequestId?: string;
-      };
-      if (json.error) message = json.error;
-      code = json.code;
-      upstreamStatus = json.upstreamStatus;
-      providerCode = json.providerCode;
-      providerType = json.providerType;
-      upstreamRequestId = json.upstreamRequestId;
-    } catch {
-      /* 保留默认信息 */
-    }
-    const edgeRequestId = response.headers.get("cf-ray") ?? undefined;
-    const diagnosticText = [
-      `client=${clientRequestId}`,
-      edgeRequestId ? `edge=${edgeRequestId}` : "",
-      upstreamStatus ? `upstream=${upstreamStatus}` : "",
-      providerCode ? `provider=${providerCode}` : "",
-      upstreamRequestId ? `upstream-request=${upstreamRequestId}` : "",
-    ]
-      .filter(Boolean)
-      .join("；");
-    throw new ModelTransportError(`${message}（${diagnosticText}）`, response.status, code, {
-      clientRequestId,
-      edgeRequestId,
-      upstreamRequestId,
-      upstreamStatus,
-      providerCode,
-      providerType,
-    });
-  }
+async function streamServer(
+  preset: ProviderPreset,
+  prompt: string,
+  image: string | null,
+  history: ChatTurn[],
+  onChunk: (text: string) => void,
+  signal: AbortSignal,
+  maxOutputTokens?: number,
+  temperature?: number,
+) {
+  const response = await requestServer(
+    "chat",
+    preset,
+    prompt,
+    image,
+    history,
+    signal,
+    maxOutputTokens,
+    temperature,
+  );
   if (!response.body) throw new Error("接口没有返回内容");
 
   const reader = response.body.getReader();
@@ -222,6 +308,39 @@ async function streamServer(
   }
 }
 
+async function completeServer(
+  preset: ProviderPreset,
+  prompt: string,
+  image: string | null,
+  history: ChatTurn[],
+  signal: AbortSignal,
+  maxOutputTokens?: number,
+  temperature?: number,
+) {
+  const response = await requestServer(
+    "agent",
+    preset,
+    prompt,
+    image,
+    history,
+    signal,
+    maxOutputTokens,
+    temperature,
+  );
+
+  try {
+    const json = (await response.json()) as { reply?: unknown };
+    if (typeof json.reply === "string" && json.reply.trim()) return json.reply;
+  } catch {
+    // 统一在下方报告协议错误，不泄露上游正文。
+  }
+  throw new ModelTransportError(
+    "上游 AI 没有返回可用的结构化正文",
+    502,
+    "UPSTREAM_INVALID_RESPONSE",
+  );
+}
+
 /** 云端兼容接口必须填地址和 Key，否则请求没有明确的接收方。 */
 function assertConfigured(preset: ProviderPreset) {
   if (preset.kind === "ollama") return;
@@ -240,7 +359,7 @@ export async function askModel(
   history: ChatTurn[],
   onChunk: (text: string) => void,
   signal: AbortSignal,
-  options: { maxOutputTokens?: number; temperature?: number } = {},
+  options: ModelRequestOptions = {},
 ) {
   assertConfigured(preset);
   const fittedHistory = fitVisionHistory(history);
@@ -252,6 +371,19 @@ export async function askModel(
   // 有图就必须是验证过的多模态模型，避免拿纯文本模型瞎分析
   if (image || boundedHistory.some((turn) => turn.image)) assertVision(preset);
   if (preset.kind === "ollama") {
+    if (options.responseMode === "structured") {
+      const reply = await completeOllama(
+        preset,
+        effectivePrompt,
+        image,
+        boundedHistory,
+        signal,
+        options.maxOutputTokens,
+        options.temperature,
+      );
+      onChunk(reply);
+      return;
+    }
     return streamOllama(
       preset,
       effectivePrompt,
@@ -267,6 +399,19 @@ export async function askModel(
   if (/人物档案|人物关系|人脉库|关系网/.test(prompt)) dataTypes.push("人物关系上下文");
   if (image || boundedHistory.some((turn) => turn.image)) dataTypes.push("图片");
   await confirmCloudTransfer(preset, dataTypes);
+  if (options.responseMode === "structured") {
+    const reply = await completeServer(
+      preset,
+      effectivePrompt,
+      image,
+      boundedHistory,
+      signal,
+      options.maxOutputTokens,
+      options.temperature,
+    );
+    onChunk(reply);
+    return;
+  }
   return streamServer(
     preset,
     effectivePrompt,
@@ -293,9 +438,9 @@ export async function testConnection(preset: ProviderPreset) {
     return "连接正常";
   }
 
-  const response = await fetch("/api/vision", {
+  const response = await fetchWithApiSession("/api/vision", {
     method: "POST",
-    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       action: "test",
       kind: preset.kind,
@@ -349,9 +494,9 @@ async function askOnce(preset: ProviderPreset, prompt: string, image: string) {
     return json.message?.content ?? "";
   }
 
-  const response = await fetch("/api/vision", {
+  const response = await fetchWithApiSession("/api/vision", {
     method: "POST",
-    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       action: "audit",
       kind: preset.kind,

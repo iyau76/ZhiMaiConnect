@@ -72,6 +72,155 @@ describe("POST /api/vision", () => {
     assert.equal(upstreamBody.stream, false);
   });
 
+  test("uses a non-thinking JSON request for an official DeepSeek agent round", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { content: '{"type":"final","summary":"done"}' },
+          },
+        ],
+      }),
+    );
+    const request = await routeRequest(
+      "vision",
+      JSON.stringify({
+        kind: "openai",
+        baseUrl: "https://api.deepseek.com/v1",
+        apiKey: "test-only-key",
+        model: "deepseek-v4-flash",
+        action: "agent",
+        prompt: "continue from the available tool results",
+        history: [{ role: "assistant", text: "previous tool result" }],
+        maxOutputTokens: 3_000,
+      }),
+      { authenticated: true },
+    );
+
+    const response = await handleVisionPost(request);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await responseBody(response), {
+      ok: true,
+      reply: '{"type":"final","summary":"done"}',
+    });
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const upstreamBody = JSON.parse(String(init?.body)) as {
+      stream?: unknown;
+      thinking?: unknown;
+      response_format?: unknown;
+      messages?: Array<{ role?: unknown; content?: unknown }>;
+    };
+    assert.equal(upstreamBody.stream, false);
+    assert.deepEqual(upstreamBody.thinking, { type: "disabled" });
+    assert.deepEqual(upstreamBody.response_format, { type: "json_object" });
+    assert.equal(upstreamBody.messages?.[1]?.content, "previous tool result");
+    assert.equal(upstreamBody.messages?.[2]?.content, "continue from the available tool results");
+  });
+
+  test("uses JSON mode for a Gemini OpenAI-compatible agent round", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        choices: [{ finish_reason: "stop", message: { content: '{"type":"final"}' } }],
+      }),
+    );
+    const request = await routeRequest(
+      "vision",
+      JSON.stringify({
+        kind: "gemini",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        apiKey: "test-only-key",
+        model: "gemini-3.7-flash",
+        action: "agent",
+        prompt: "return JSON",
+        history: [],
+      }),
+      { authenticated: true },
+    );
+
+    const response = await handleVisionPost(request);
+    assert.equal(response.status, 200);
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const upstreamBody = JSON.parse(String(init?.body)) as {
+      stream?: unknown;
+      thinking?: unknown;
+      response_format?: unknown;
+    };
+    assert.equal(upstreamBody.stream, false);
+    assert.equal(upstreamBody.thinking, undefined);
+    assert.deepEqual(upstreamBody.response_format, { type: "json_object" });
+  });
+
+  test("applies the DeepSeek agent contract to the current vision model", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        choices: [{ finish_reason: "stop", message: { content: '{"type":"final"}' } }],
+      }),
+    );
+    const response = await handleVisionPost(
+      await routeRequest(
+        "vision",
+        JSON.stringify({
+          kind: "openai",
+          baseUrl: "https://api.deepseek.com/v1",
+          apiKey: "test-only-key",
+          model: "deepseek-v4-flash-vision-exp",
+          action: "agent",
+          prompt: "return JSON",
+          history: [],
+        }),
+        { authenticated: true },
+      ),
+    );
+
+    assert.equal(response.status, 200);
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const upstreamBody = JSON.parse(String(init?.body)) as {
+      thinking?: unknown;
+      response_format?: unknown;
+    };
+    assert.deepEqual(upstreamBody.thinking, { type: "disabled" });
+    assert.deepEqual(upstreamBody.response_format, { type: "json_object" });
+  });
+
+  test("reports a DeepSeek agent response that spent its budget before writing content", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        choices: [
+          {
+            finish_reason: "length",
+            message: {
+              content: "",
+              reasoning_content: "private upstream reasoning must never reach the browser",
+            },
+          },
+        ],
+      }),
+    );
+    const request = await routeRequest(
+      "vision",
+      JSON.stringify({
+        kind: "openai",
+        baseUrl: "https://api.deepseek.com/v1",
+        apiKey: "test-only-key",
+        model: "deepseek-v4-flash",
+        action: "agent",
+        prompt: "return a protocol object",
+        history: [],
+      }),
+      { authenticated: true },
+    );
+
+    const response = await handleVisionPost(request);
+    const body = await responseBody(response);
+
+    assert.equal(response.status, 422);
+    assert.equal(body.code, "MODEL_OUTPUT_TRUNCATED");
+    assert.equal(JSON.stringify(body).includes("private upstream reasoning"), false);
+    assertSafeResponse(response);
+  });
+
   test("maps an upstream credential failure to a body-safe 502", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

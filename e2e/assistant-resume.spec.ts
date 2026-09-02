@@ -21,29 +21,32 @@ test("503 后可从中断轮次继续，并保留已完成的档案工具结果"
   await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
 
   const prompts: string[] = [];
-  let chatCalls = 0;
+  let agentCalls = 0;
   await page.route("**/api/vision", async (route) => {
     const body = route.request().postDataJSON() as { action?: string; prompt?: string };
-    if (body.action !== "chat") {
+    if (body.action !== "agent") {
       await route.fallback();
       return;
     }
-    chatCalls += 1;
+    agentCalls += 1;
     prompts.push(body.prompt ?? "");
-    if (chatCalls === 1) {
+    if (agentCalls === 1) {
       await route.fulfill({
         status: 200,
-        contentType: "text/plain; charset=utf-8",
+        contentType: "application/json",
         body: JSON.stringify({
-          type: "tool",
-          summary: "先读取唐悦的完整档案",
-          tool: "get_profiles",
-          args: { personIds: ["resume-person"] },
+          ok: true,
+          reply: JSON.stringify({
+            type: "tool",
+            summary: "先读取唐悦的完整档案",
+            tool: "get_profiles",
+            args: { personIds: ["resume-person"] },
+          }),
         }),
       });
       return;
     }
-    if (chatCalls <= 4) {
+    if (agentCalls <= 4) {
       await route.fulfill({
         status: 503,
         contentType: "application/json",
@@ -56,12 +59,15 @@ test("503 后可从中断轮次继续，并保留已完成的档案工具结果"
     }
     await route.fulfill({
       status: 200,
-      contentType: "text/plain; charset=utf-8",
+      contentType: "application/json",
       body: JSON.stringify({
-        type: "final",
-        summary: "已从中断轮次继续，并复用此前档案结果",
-        answer: "唐悦喜欢人像摄影；本次恢复没有重新读取档案。",
-        claims: [{ kind: "fact", sourceRef: "person:resume-person", field: "profile.likes" }],
+        ok: true,
+        reply: JSON.stringify({
+          type: "final",
+          summary: "已从中断轮次继续，并复用此前档案结果",
+          answer: "唐悦喜欢人像摄影；本次恢复没有重新读取档案。",
+          claims: [{ kind: "fact", sourceRef: "person:resume-person", field: "profile.likes" }],
+        }),
       }),
     });
   });
@@ -79,7 +85,7 @@ test("503 后可从中断轮次继续，并保留已完成的档案工具结果"
 
   await expect(assistant).toContainText("唐悦喜欢人像摄影", { timeout: 30_000 });
   await expect(resume).toHaveCount(0);
-  expect(chatCalls).toBe(5);
+  expect(agentCalls).toBe(5);
   expect(prompts[0]).not.toContain('"tool":"get_profiles"');
   expect(prompts[4]).toContain('"tool":"get_profiles"');
   expect(prompts[4]).toContain("人像摄影");

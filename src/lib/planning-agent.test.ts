@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MemoryAgentRunRecorder } from "./agent-run-log";
 import type { PersonRecord } from "./face-db";
 
 const askModelMock = vi.hoisted(() => vi.fn());
@@ -160,5 +161,82 @@ describe("planning agent", () => {
 
     expect(result.tasks[0].personIds).toEqual([]);
     expect(result.warnings).toEqual([expect.stringContaining("已移除 1 个无效人物引用")]);
+  });
+
+  it("turns the last available round into a final-answer round", async () => {
+    askModelMock
+      .mockImplementationOnce(
+        replyWith({
+          type: "tool",
+          summary: "先确认当前日期",
+          tool: "get_datetime",
+          args: {},
+        }),
+      )
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[1]);
+        expect(prompt).toContain("保留的最终草案轮");
+        expect(prompt).not.toContain('"type":"tool"');
+        expect(prompt).not.toContain("search_profiles");
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "final",
+            summary: "形成可执行草案",
+            tasks: [
+              {
+                title: "确认活动范围和截止时间",
+                detail: "已有日期信息；参与人仍待用户确认",
+                priority: "normal",
+                personIds: [],
+              },
+            ],
+          }),
+        );
+      });
+
+    const result = await runPlanningAgent({
+      preset,
+      goal: "安排一次活动",
+      archive: { persons: [], relations: [], events: [] },
+      budget: {
+        maxRounds: 2,
+        maxToolCalls: 2,
+        maxInputTokens: 10_000,
+        maxOutputTokens: 4_000,
+        maxWallTimeMs: 60_000,
+      },
+    });
+
+    expect(result).toMatchObject({ rounds: 2, toolCalls: 1, summary: "形成可执行草案" });
+  });
+
+  it("does not execute a tool returned during the reserved final round", async () => {
+    askModelMock.mockImplementationOnce(
+      replyWith({
+        type: "tool",
+        summary: "仍想查询日期",
+        tool: "get_datetime",
+        args: {},
+      }),
+    );
+    const recorder = new MemoryAgentRunRecorder({ runId: "planning-final-only" });
+
+    await expect(
+      runPlanningAgent({
+        preset,
+        goal: "安排一次活动",
+        archive: { persons: [], relations: [], events: [] },
+        recorder,
+        budget: {
+          maxRounds: 1,
+          maxToolCalls: 2,
+          maxInputTokens: 10_000,
+          maxOutputTokens: 4_000,
+          maxWallTimeMs: 60_000,
+        },
+      }),
+    ).rejects.toThrow("最终草案轮仍请求工具");
+    expect(askModelMock).toHaveBeenCalledTimes(1);
+    expect(recorder.events().filter((event) => event.kind === "tool_call")).toHaveLength(0);
   });
 });

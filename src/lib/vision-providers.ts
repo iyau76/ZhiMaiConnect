@@ -17,6 +17,8 @@ export interface ProviderPreset {
 
 export const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
 export const GEMINI_DEFAULT_MODEL = "gemini-3.7-flash";
+export const DEEPSEEK_OPENAI_BASE_URL = "https://api.deepseek.com/v1";
+export const DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash";
 
 export const KIND_LABEL: Record<ProviderKind, string> = {
   openai: "OpenAI 兼容接口",
@@ -97,8 +99,8 @@ export function createPreset(kind: ProviderKind): ProviderPreset {
   }
   return {
     ...base,
-    baseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
+    baseUrl: DEEPSEEK_OPENAI_BASE_URL,
+    model: DEEPSEEK_DEFAULT_MODEL,
   };
 }
 
@@ -107,8 +109,8 @@ export const DEFAULT_PRESETS: ProviderPreset[] = [
     id: "builtin-openai",
     name: "OpenAI 兼容接口",
     kind: "openai",
-    baseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
+    baseUrl: DEEPSEEK_OPENAI_BASE_URL,
+    model: DEEPSEEK_DEFAULT_MODEL,
     apiKey: "",
   },
   {
@@ -149,13 +151,25 @@ export function migrateLegacyProviderPresets(value: unknown): ProviderPreset[] {
     })
     .map((preset) => {
       const name = preset.name.trim();
+      let model = preset.model;
+      try {
+        if (
+          preset.kind === "openai" &&
+          new URL(preset.baseUrl).hostname === "api.deepseek.com" &&
+          model.trim() === "deepseek-chat"
+        ) {
+          model = DEEPSEEK_DEFAULT_MODEL;
+        }
+      } catch {
+        // Invalid custom URLs remain editable in the UI; connection testing reports the error.
+      }
       if (preset.kind === "openai" && (name === "自定义接口" || name === "OpenAI兼容接口")) {
-        return { ...preset, name: KIND_LABEL.openai };
+        return { ...preset, name: KIND_LABEL.openai, model };
       }
       if (preset.kind === "gemini" && name.replace(/\s+/gu, "") === "Gemini兼容接口") {
-        return { ...preset, name: KIND_LABEL.gemini };
+        return { ...preset, name: KIND_LABEL.gemini, model };
       }
-      return preset;
+      return model === preset.model ? preset : { ...preset, model };
     });
 
   const openai = retained.filter((item) => item.kind === "openai");

@@ -60,6 +60,12 @@ export interface AgentToolInputContract {
   const?: unknown;
   anyOf?: AgentToolInputContract[];
   additionalProperties?: boolean | AgentToolInputContract;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  maxItems?: number;
 }
 
 export interface AgentModelToolDefinition {
@@ -88,7 +94,10 @@ type ZodInternals = {
   options?: z.ZodTypeAny[] | Map<unknown, z.ZodTypeAny>;
   values?: unknown[];
   value?: unknown;
-  checks?: Array<{ kind?: string }>;
+  checks?: Array<{ kind?: string; value?: unknown; inclusive?: boolean }>;
+  minLength?: { value?: unknown } | null;
+  maxLength?: { value?: unknown } | null;
+  exactLength?: { value?: unknown } | null;
 };
 
 function zodInternals(schema: z.ZodTypeAny) {
@@ -107,10 +116,28 @@ export function describeAgentToolInput(schema: z.ZodTypeAny): AgentToolInputCont
   const definition = zodInternals(schema);
   const kind = definition.typeName;
 
-  if (kind === "ZodString") return withDescription(schema, { type: "string" });
+  if (kind === "ZodString") {
+    const minimum = definition.checks?.find((check) => check.kind === "min")?.value;
+    const maximum = definition.checks?.find((check) => check.kind === "max")?.value;
+    return withDescription(schema, {
+      type: "string",
+      ...(typeof minimum === "number" ? { minLength: minimum } : {}),
+      ...(typeof maximum === "number" ? { maxLength: maximum } : {}),
+    });
+  }
   if (kind === "ZodNumber") {
     const integer = definition.checks?.some((check) => check.kind === "int");
-    return withDescription(schema, { type: integer ? "integer" : "number" });
+    const minimum = definition.checks?.find(
+      (check) => check.kind === "min" && check.inclusive !== false,
+    )?.value;
+    const maximum = definition.checks?.find(
+      (check) => check.kind === "max" && check.inclusive !== false,
+    )?.value;
+    return withDescription(schema, {
+      type: integer ? "integer" : "number",
+      ...(typeof minimum === "number" ? { minimum } : {}),
+      ...(typeof maximum === "number" ? { maximum } : {}),
+    });
   }
   if (kind === "ZodBoolean") return withDescription(schema, { type: "boolean" });
   if (kind === "ZodDate") return withDescription(schema, { type: "string" });
@@ -133,9 +160,14 @@ export function describeAgentToolInput(schema: z.ZodTypeAny): AgentToolInputCont
   }
   if (kind === "ZodArray") {
     const item = definition.type ?? definition.element;
+    const exactLength = definition.exactLength?.value;
+    const minimum = exactLength ?? definition.minLength?.value;
+    const maximum = exactLength ?? definition.maxLength?.value;
     return withDescription(schema, {
       type: "array",
       items: item ? describeAgentToolInput(item) : {},
+      ...(typeof minimum === "number" ? { minItems: minimum } : {}),
+      ...(typeof maximum === "number" ? { maxItems: maximum } : {}),
     });
   }
   if (kind === "ZodObject") {
@@ -197,7 +229,13 @@ function compactInputContract(contract: AgentToolInputContract): string {
   }
   if (contract.const !== undefined) return JSON.stringify(contract.const);
   if (contract.enum?.length) return contract.enum.map((value) => JSON.stringify(value)).join(" | ");
-  if (contract.type === "array") return `Array<${compactInputContract(contract.items ?? {})}>`;
+  if (contract.type === "array") {
+    const bounds =
+      contract.minItems !== undefined || contract.maxItems !== undefined
+        ? `[${contract.minItems ?? 0}..${contract.maxItems ?? "∞"}]`
+        : "";
+    return `Array<${compactInputContract(contract.items ?? {})}>${bounds}`;
+  }
   if (contract.type === "object") {
     if (contract.properties) {
       const required = new Set(contract.required ?? []);
@@ -215,7 +253,14 @@ function compactInputContract(contract: AgentToolInputContract): string {
     }
     return "{}";
   }
-  return contract.type ?? "unknown";
+  const type = contract.type ?? "unknown";
+  const bounds =
+    contract.minimum !== undefined || contract.maximum !== undefined
+      ? `[${contract.minimum ?? "-∞"}..${contract.maximum ?? "∞"}]`
+      : contract.minLength !== undefined || contract.maxLength !== undefined
+        ? `[length ${contract.minLength ?? 0}..${contract.maxLength ?? "∞"}]`
+        : "";
+  return `${type}${bounds}`;
 }
 
 export class AgentToolRegistryError extends Error {}

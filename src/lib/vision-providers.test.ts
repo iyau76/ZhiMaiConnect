@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_PRESETS,
+  DEEPSEEK_DEFAULT_MODEL,
+  DEEPSEEK_OPENAI_BASE_URL,
   GEMINI_DEFAULT_MODEL,
   GEMINI_OPENAI_BASE_URL,
   migrateLegacyProviderPresets,
@@ -17,6 +19,10 @@ describe("vision provider presets", () => {
     });
     expect(GEMINI_DEFAULT_MODEL).toBe("gemini-3.7-flash");
     expect(supportsVision(DEFAULT_PRESETS[1]!)).toBe(true);
+    expect(DEFAULT_PRESETS[0]).toMatchObject({
+      baseUrl: DEEPSEEK_OPENAI_BASE_URL,
+      model: DEEPSEEK_DEFAULT_MODEL,
+    });
   });
 
   it("removes legacy Lovable presets and preserves user-compatible endpoints", () => {
@@ -51,5 +57,24 @@ describe("vision provider presets", () => {
       "Gemini 兼容接口",
       "办公室 Ollama",
     ]);
+  });
+
+  it("migrates the retired official DeepSeek alias without changing private endpoints", () => {
+    const migrated = migrateLegacyProviderPresets([
+      { ...DEFAULT_PRESETS[0], model: "deepseek-chat" },
+      {
+        ...DEFAULT_PRESETS[0],
+        id: "private-deepseek-alias",
+        baseUrl: "https://gateway.example.com/v1",
+        model: "deepseek-chat",
+      },
+    ]);
+
+    expect(migrated.find((preset) => preset.id === "builtin-openai")?.model).toBe(
+      DEEPSEEK_DEFAULT_MODEL,
+    );
+    expect(migrated.find((preset) => preset.id === "private-deepseek-alias")?.model).toBe(
+      "deepseek-chat",
+    );
   });
 });

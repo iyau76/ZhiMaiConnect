@@ -6,7 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 const BASE_URL = process.env.ZHIMAI_LIVE_BASE_URL ?? "http://127.0.0.1:8080";
 const API_KEY = process.env.DEEPSEEK_API_KEY;
 const API_BASE = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1";
-const MODEL = process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
+const MODEL = process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash";
 
 if (!API_KEY) throw new Error("DEEPSEEK_API_KEY is not available to the test process");
 

@@ -17,6 +17,33 @@ describe("model transport resilience", () => {
       ),
     ).toBe(false);
     expect(isTransientModelError(new ModelTransportError("API Key 无效", 502))).toBe(false);
+    expect(
+      isTransientModelError(
+        new ModelTransportError("上游拒绝请求", 502, "UPSTREAM_REJECTED", {
+          upstreamStatus: 400,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isTransientModelError(
+        new ModelTransportError("上游暂时不可用", 502, "UPSTREAM_REJECTED", {
+          upstreamStatus: 503,
+        }),
+      ),
+    ).toBe(true);
+    expect(isTransientModelError(new ModelTransportError("请求过多", 429, "RATE_LIMITED"))).toBe(
+      false,
+    );
+    expect(
+      isTransientModelError(
+        new ModelTransportError("上游请求过多", 502, "UPSTREAM_REJECTED", {
+          upstreamStatus: 429,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isTransientModelError(new ModelRetryExhaustedError(3, new ModelTransportError("503", 503))),
+    ).toBe(false);
   });
 
   it("retries only the invocation while preserving one caller-owned logical round", async () => {
@@ -43,5 +70,15 @@ describe("model transport resilience", () => {
         delaysMs: [0],
       }),
     ).rejects.toBeInstanceOf(ModelRetryExhaustedError);
+  });
+
+  it("does not nest another retry loop around an exhausted request", async () => {
+    const exhausted = new ModelRetryExhaustedError(3, new ModelTransportError("503", 503));
+    const invoke = vi.fn<() => Promise<string>>().mockRejectedValue(exhausted);
+
+    await expect(
+      runWithTransientModelRetries({ invoke, maxAttempts: 3, delaysMs: [0, 0] }),
+    ).rejects.toBe(exhausted);
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 });

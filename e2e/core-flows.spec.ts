@@ -309,6 +309,13 @@ test("更新已有档案时，姓名变更会按预览实际写入", async ({ pa
   await acceptAllDraftItems(page);
   await page.getByRole("button", { name: "确认入库" }).click();
 
+  await expect
+    .poll(async () => {
+      const stored = await readIndexedDbStore<{ name: string }>(page, "persons");
+      return stored[0]?.name;
+    })
+    .toBe("唐悦");
+
   const people = await readIndexedDbStore<{ id: string; name: string; note: string }>(
     page,
     "persons",
@@ -393,7 +400,7 @@ test("模型配置名称不重复，并可由用户显式保存到当前浏览�
   const openaiPreset = panel.locator('[data-provider-preset-id="builtin-openai"]');
   const geminiPreset = panel.locator('[data-provider-preset-id="builtin-gemini"]');
 
-  await expect(openaiPreset).toContainText("OpenAI 兼容接口 · deepseek-chat");
+  await expect(openaiPreset).toContainText("OpenAI 兼容接口 · deepseek-v4-flash");
   await expect(geminiPreset).toContainText("Gemini 兼容接口 · gemini-3.7-flash");
   expect(((await openaiPreset.innerText()).match(/OpenAI 兼容接口/gu) ?? []).length).toBe(1);
   expect(((await geminiPreset.innerText()).match(/Gemini 兼容接口/gu) ?? []).length).toBe(1);

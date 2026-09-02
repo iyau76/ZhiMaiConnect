@@ -135,6 +135,7 @@ export function ModelsPanel({
   const [useData, setUseData] = useState(true);
 
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [assistantTrace, setAssistantTrace] = useState<AgentTraceEvent[]>([]);
   const coordinatorRef = useRef(assistantMutationCoordinator);
   const [pendingProposals, setPendingProposals] = useState<MutationProposalEntry[]>(() =>
@@ -341,7 +342,7 @@ export function ModelsPanel({
 
   const handleSend = async () => {
     const prompt = input.trim();
-    if (!prompt || busy) return;
+    if (!prompt || busyRef.current) return;
     const preset = editing;
     if (!preset.model.trim()) {
       toast.error(t("请先填写模型名称"));
@@ -359,6 +360,7 @@ export function ModelsPanel({
     setCitationFeedback({});
     setInput("");
     if (sentFrame) onFrameUsed();
+    busyRef.current = true;
     setBusy(true);
     setAssistantTrace([]);
     try {
@@ -382,6 +384,7 @@ export function ModelsPanel({
         return next;
       });
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
@@ -404,34 +407,39 @@ export function ModelsPanel({
   };
 
   const resumeAssistant = async () => {
-    if (!suspendedRequest || busy) return;
+    if (!suspendedRequest || busyRef.current) return;
+    const resumeRequest = suspendedRequest;
+    busyRef.current = true;
     setBusy(true);
+    setSuspendedRequest(null);
     setAssistantTrace([]);
     setTurns((prev) => {
       const next = [...prev];
       const last = next[next.length - 1];
       next[next.length - 1] = {
         ...last,
-        text: `正在从第 ${suspendedRequest.checkpoint.nextRound} 轮继续…`,
+        text: `正在从第 ${resumeRequest.checkpoint.nextRound} 轮继续…`,
       };
       return next;
     });
     try {
       await runAssistantRequest({
-        preset: suspendedRequest.preset,
-        prompt: suspendedRequest.checkpoint.question,
-        history: suspendedRequest.history,
-        image: suspendedRequest.image,
-        includeArchive: suspendedRequest.includeArchive,
-        resumeFrom: suspendedRequest.checkpoint,
+        preset: resumeRequest.preset,
+        prompt: resumeRequest.checkpoint.question,
+        history: resumeRequest.history,
+        image: resumeRequest.image,
+        includeArchive: resumeRequest.includeArchive,
+        resumeFrom: resumeRequest.checkpoint,
       });
     } catch (error) {
+      setSuspendedRequest(resumeRequest);
       toast.error((error as Error).message);
       setAssistantTrace((prev) => [
         ...prev.slice(-23),
         { kind: "error", text: (error as Error).message || t("请求失败") },
       ]);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
@@ -597,7 +605,7 @@ export function ModelsPanel({
                   ? "llava / qwen2.5vl"
                   : editing.kind === "gemini"
                     ? "gemini-3.7-flash"
-                    : "gpt-4o-mini / deepseek-chat"
+                    : "gpt-4o-mini / deepseek-v4-flash"
               }
               onChange={(e) => patch({ model: e.target.value, visionVerified: false })}
             />

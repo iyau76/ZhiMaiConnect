@@ -29,17 +29,31 @@ export class ModelRetryExhaustedError extends Error {
   }
 }
 
-const NON_RETRYABLE_CODES = new Set(["SERVER_MISCONFIGURED"]);
+const NON_RETRYABLE_CODES = new Set([
+  "SERVER_MISCONFIGURED",
+  "RATE_LIMITED",
+  "SESSION_REQUIRED",
+  "MODEL_OUTPUT_TRUNCATED",
+]);
 const NON_RETRYABLE_MESSAGES = /API Key|凭据|额度不足|尚未配置|接口地址/u;
 const TIMEOUT_MESSAGES =
   /(?:timeout|timed out|响应超时|连接超时|首包.*超时|连续\s*\d+\s*秒没有收到数据)/iu;
 
 export function isTransientModelError(error: unknown) {
-  if (error instanceof ModelRetryExhaustedError) return true;
+  if (error instanceof ModelRetryExhaustedError) return false;
   if (error instanceof ModelTransportError) {
     if (error.code && NON_RETRYABLE_CODES.has(error.code)) return false;
     if (NON_RETRYABLE_MESSAGES.test(error.message)) return false;
-    if (error.status === 408 || error.status === 425 || error.status === 429) return true;
+    if (
+      error.code === "UPSTREAM_REJECTED" &&
+      error.diagnostics?.upstreamStatus !== undefined &&
+      error.diagnostics.upstreamStatus >= 400 &&
+      error.diagnostics.upstreamStatus < 500 &&
+      ![408, 425].includes(error.diagnostics.upstreamStatus)
+    ) {
+      return false;
+    }
+    if (error.status === 408 || error.status === 425) return true;
     if (error.status !== undefined && error.status >= 500 && error.status <= 599) return true;
   }
   if (error instanceof Error) {

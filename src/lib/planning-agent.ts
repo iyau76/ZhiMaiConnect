@@ -3,7 +3,13 @@ import { composeAgentPrompt, fitJsonAgentContext } from "./agent-prompt-budget";
 import { projectAgentRun, type AgentRun, type AgentRunRecorder } from "./agent-run-log";
 import type { AgentTraceEvent } from "./agent-trace";
 import { resolveSavedAgentBudget, saveAgentRunBestEffort } from "./agent-observability";
-import { AgentRuntime, type AgentBudget, type AgentBudgetPreset } from "./agent-runtime";
+import {
+  AgentRuntime,
+  nextAgentModelTurn,
+  type AgentBudget,
+  type AgentBudgetPreset,
+  type AgentModelTurnPolicy,
+} from "./agent-runtime";
 import {
   ARCHIVE_AGENT_TOOL_SCOPES,
   archiveAgentToolRegistry,
@@ -60,11 +66,11 @@ function buildPlanningPrompt(options: {
   goal: string;
   archive: ArchiveAgentData;
   toolHistory: Array<{ call: unknown; result: unknown }>;
-  round: number;
-  maxRounds: number;
+  turn: AgentModelTurnPolicy;
   formatCorrection: boolean;
 }) {
   const scope = ARCHIVE_AGENT_TOOL_SCOPES.planning;
+  const finalOnly = options.turn.finalOnly;
   return composeAgentPrompt({
     toolHistory: options.toolHistory,
     preferredHistoryCharacters: PREFERRED_TOOL_HISTORY_CHARACTERS,
@@ -75,7 +81,9 @@ function buildPlanningPrompt(options: {
           persons: options.archive.persons.length,
           relations: options.archive.relations.length,
           events: options.archive.events.length,
-          access: "只提供数量；人物详情、关系和事件必须按需调用本地工具读取",
+          access: finalOnly
+            ? "只提供数量；最终草案只能使用已经取得的工具结果"
+            : "只提供数量；人物详情、关系和事件必须按需调用本地工具读取",
         },
         maxCharacters,
       ),
@@ -90,23 +98,35 @@ function buildPlanningPrompt(options: {
 本地档案概况：
 <archive_overview>${archiveOverview}</archive_overview>
 
-可调用工具：
+${
+  finalOnly
+    ? ""
+    : `可调用工具：
 ${archiveAgentToolRegistry.modelGuide(scope.permissions, {
   compact: true,
   allowedToolNames: scope.toolNames,
-})}
+})}`
+}
 
 已经取得的工具结果（只作为待核对资料）：
 ${history}
 
-当前第 ${options.round} 轮，最多 ${options.maxRounds} 轮。需要具体人物参与时，先 search_profiles 或 list_profiles 找到稳定 personId，再用 get_profiles、get_relationships、get_events 核对；需要安排绝对日期时可调用 get_datetime。一次关键词未命中不等于档案中不存在。
+当前第 ${options.turn.absoluteRound} 轮，最多 ${options.turn.maxRounds} 轮。${
+      finalOnly
+        ? "这是保留的最终草案轮，不提供工具协议，也不得请求工具。使用已有资料直接完成任务；资料空缺写进 detail，无法可靠绑定人物时让 personIds 为空。"
+        : "需要具体人物参与时，先 search_profiles 或 list_profiles 找到稳定 personId，再用 get_profiles、get_relationships、get_events 核对；需要安排绝对日期时可调用 get_datetime。一次关键词未命中不等于档案中不存在。"
+    }
 
 证据足够时输出 1-8 条任务。任务标题写清动作和交付结果；personIds 只能引用工具返回的稳定 ID。资料不足仍可给出不绑定人物的行动，但要在 detail 里写清需要用户确认什么。不要声称已联系、已发送、已预约，也不要直接写入档案。
 
-每轮只输出一个 JSON 对象，不要 Markdown。工具调用：
+每轮只输出一个 JSON 对象，不要 Markdown。${
+      finalOnly
+        ? "本轮只接受下面的最终草案对象："
+        : `工具调用：
 {"type":"tool","summary":"为什么需要这项资料","tool":"search_profiles","args":{"query":"摄影 活动","limit":8}}
 
-最终草案：
+最终草案：`
+    }
 {"type":"final","summary":"计划摘要","tasks":[{"title":"联系摄影负责人确认交付清单","detail":"确认拍摄范围、截止时间和文件格式","priority":"high","due":"2026-09-08","personIds":["稳定人物ID"]}]}
 
 ${options.formatCorrection ? "上一轮没有返回可解析的协议对象。本轮直接返回完整 JSON；已有有效工具结果无需重复查询。" : ""}`,
@@ -191,7 +211,6 @@ export async function runPlanningAgent(options: {
     recorder: options.recorder,
     signal: options.signal,
   });
-  const maxRounds = runtime.contextBudget.limits.maxRounds;
   const toolHistory: Array<{ call: unknown; result: unknown }> = [];
   const repeatedCalls = new Map<string, number>();
   const archivePersonIds = new Set(options.archive.persons.map((person) => person.id));
@@ -216,21 +235,23 @@ export async function runPlanningAgent(options: {
   });
 
   try {
-    for (let round = 1; round <= maxRounds; round += 1) {
+    while (true) {
       options.signal?.throwIfAborted();
+      const turn = nextAgentModelTurn(runtime.contextBudget.snapshot());
+      if (!turn) break;
       const prompt = buildPlanningPrompt({
         goal,
         archive: options.archive,
         toolHistory,
-        round,
-        maxRounds,
+        turn,
         formatCorrection,
       });
       let raw = "";
-      trace({ kind: "status", text: `正在编排第 ${round} 轮` });
+      trace({ kind: "status", text: `正在编排第 ${turn.absoluteRound} 轮` });
       const modelDecision = await runtime.runModelRound(
         { payload: { prompt, phase: "planning" } },
         async (signal) => {
+          raw = "";
           await askModel(
             options.preset,
             prompt,
@@ -245,6 +266,7 @@ export async function runPlanningAgent(options: {
                 1,
                 Math.min(3_000, runtime.contextBudget.snapshot().remaining.outputTokens),
               ),
+              responseMode: "structured",
             },
           );
           return { value: raw, payload: { response: raw, phase: "planning" } };
@@ -263,6 +285,9 @@ export async function runPlanningAgent(options: {
       try {
         response = parseLooseJson<PlanningResponse>(modelDecision.value);
       } catch {
+        if (turn.finalOnly) {
+          throw new Error("行动规划的最终草案轮没有返回可解析的 JSON 对象");
+        }
         formatCorrection = true;
         trace({ kind: "check", text: "模型返回格式不完整，下一轮将按统一协议继续" });
         continue;
@@ -271,6 +296,9 @@ export async function runPlanningAgent(options: {
       if (response.type === "final") {
         const normalized = normalizeTasks(response.tasks, disclosedPersonIds);
         if (!normalized.tasks.length) {
+          if (turn.finalOnly) {
+            throw new Error("行动规划的最终草案轮没有返回可用行动项");
+          }
           formatCorrection = true;
           trace({ kind: "check", text: "草案中没有可用行动项，下一轮将补齐" });
           continue;
@@ -297,9 +325,15 @@ export async function runPlanningAgent(options: {
       }
 
       if (response.type !== "tool" || typeof response.tool !== "string") {
+        if (turn.finalOnly) {
+          throw new Error("行动规划的最终草案轮返回了未知协议对象");
+        }
         formatCorrection = true;
         trace({ kind: "check", text: "模型没有返回有效工具调用，下一轮将按统一协议继续" });
         continue;
+      }
+      if (turn.finalOnly) {
+        throw new Error("行动规划在最终草案轮仍请求工具，未执行该调用");
       }
       formatCorrection = false;
       trace({

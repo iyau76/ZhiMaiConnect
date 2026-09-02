@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AGENT_PROMPT_MAX_CHARACTERS } from "./ai-request-contract";
+import { MemoryAgentRunRecorder } from "./agent-run-log";
 import type { LifeEventRecord, PersonRecord, RelationRecord } from "./face-db";
 
 const askModelMock = vi.hoisted(() => vi.fn());
@@ -54,10 +55,18 @@ describe("archive disclosure", () => {
   it("switches to progressive disclosure when the archive is large", () => {
     const persons = Array.from({ length: 20 }, (_, index) => person(`person-${index}`, "项目顾问"));
     const plan = planArchiveDisclosure({ persons, relations: [], events: [] });
+    const context = JSON.parse(plan.context) as {
+      profileIndex: unknown[];
+      profileIndexComplete: boolean;
+      nextProfileCursor: number;
+    };
 
     expect(plan.mode).toBe("progressive");
     expect(plan.context).toContain('"persons":20');
     expect(plan.context).toContain("已授权按需访问全库");
+    expect(context.profileIndex).toHaveLength(12);
+    expect(context.profileIndexComplete).toBe(false);
+    expect(context.nextProfileCursor).toBe(12);
   });
 
   it("keeps every progressive disclosure payload valid JSON at smaller budgets", () => {
@@ -289,6 +298,13 @@ describe("archive disclosure", () => {
       persons: [person("贾母"), person("贾琏")],
       relations: [],
       events: [],
+      budget: {
+        maxRounds: 1,
+        maxToolCalls: 1,
+        maxInputTokens: 10_000,
+        maxOutputTokens: 2_000,
+        maxWallTimeMs: 60_000,
+      },
     });
 
     expect(result.candidates).toEqual([]);
@@ -298,6 +314,43 @@ describe("archive disclosure", () => {
       question: "你希望把贾母还是贾琏作为最终联系目标？",
     });
     expect(result.answer).toContain("最终联系目标");
+    expect(result.rounds).toBe(1);
+    expect(askModelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports when a one-round budget is consumed by a non-terminal intent plan", async () => {
+    askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[4] as (chunk: string) => void)(
+        JSON.stringify({
+          type: "recommendation_plan",
+          mode: "open",
+          slots: [
+            {
+              label: "合同审查",
+              deliverable: "核对合同风险",
+              searchTerms: ["合同", "法律顾问"],
+            },
+          ],
+        }),
+      );
+    });
+
+    await expect(
+      runRecommendationAgent({
+        preset: {} as never,
+        task: "找人审核合同",
+        persons: [person("legal", "法律顾问 合同审查")],
+        relations: [],
+        events: [],
+        budget: {
+          maxRounds: 1,
+          maxToolCalls: 2,
+          maxInputTokens: 10_000,
+          maxOutputTokens: 2_000,
+          maxWallTimeMs: 60_000,
+        },
+      }),
+    ).rejects.toThrow("至少需要 2 个模型轮次");
     expect(askModelMock).toHaveBeenCalledTimes(1);
   });
 
@@ -369,6 +422,107 @@ describe("archive disclosure", () => {
     expect(result.answer).toContain("急救保障：doctor");
     expect(result.answer).toContain("视觉物料：visual");
     expect(result.answer).not.toContain("friend");
+  });
+
+  it("counts intent planning and the reserved final answer in the same two-round budget", async () => {
+    const candidate = person("legal", "法律顾问 合同审查");
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "recommendation_plan",
+            mode: "open",
+            slots: [
+              {
+                label: "合同审查",
+                deliverable: "核对合同风险",
+                searchTerms: ["法律顾问", "合同审查"],
+              },
+            ],
+          }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[1]);
+        expect(prompt).toContain("第 2/2 个模型轮次");
+        expect(prompt).toContain("保留的最终回答轮");
+        expect(prompt).not.toContain('"type":"tool"');
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "final",
+            decision: { mode: "open", orderedPersonIds: ["legal"], accessVerified: false },
+            outreachDraft: "你好，想请你帮我核对这份合同。",
+          }),
+        );
+      });
+
+    const result = await runRecommendationAgent({
+      preset: {} as never,
+      task: "找人审核合同",
+      persons: [candidate],
+      relations: [],
+      events: [],
+      budget: {
+        maxRounds: 2,
+        maxToolCalls: 4,
+        maxInputTokens: 20_000,
+        maxOutputTokens: 4_000,
+        maxWallTimeMs: 60_000,
+      },
+    });
+
+    expect(result.rounds).toBe(2);
+    expect(askModelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not execute a model-requested tool when only the final answer round remains", async () => {
+    const candidate = person("legal", "法律顾问 合同审查");
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "recommendation_plan",
+            mode: "open",
+            slots: [
+              {
+                label: "合同审查",
+                deliverable: "核对合同风险",
+                searchTerms: ["法律顾问", "合同审查"],
+              },
+            ],
+          }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "tool",
+            tool: "get_profiles",
+            args: { personIds: ["legal"] },
+          }),
+        );
+      });
+    const recorder = new MemoryAgentRunRecorder({ runId: "recommendation-final-only" });
+
+    await expect(
+      runRecommendationAgent({
+        preset: {} as never,
+        task: "找人审核合同",
+        persons: [candidate],
+        relations: [],
+        events: [],
+        recorder,
+        budget: {
+          maxRounds: 2,
+          maxToolCalls: 4,
+          maxInputTokens: 20_000,
+          maxOutputTokens: 4_000,
+          maxWallTimeMs: 60_000,
+        },
+      }),
+    ).rejects.toThrow("最终结论轮仍请求工具");
+    expect(askModelMock).toHaveBeenCalledTimes(2);
+    expect(recorder.events().filter((event) => event.kind === "tool_call")).toHaveLength(1);
   });
 
   it("rejects a model decision that changes the locked first person before rendering", async () => {

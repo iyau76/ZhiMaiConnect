@@ -50,6 +50,7 @@ export type ApiErrorCode =
   | "UPSTREAM_TIMEOUT"
   | "UPSTREAM_UNAVAILABLE"
   | "UPSTREAM_INVALID_RESPONSE"
+  | "MODEL_OUTPUT_TRUNCATED"
   | "SERVER_MISCONFIGURED"
   | "INTERNAL_ERROR";
 
@@ -170,7 +171,7 @@ export const visionBodySchema = z
   .object({
     ...baseBodyShape,
     model: z.string().trim().min(1).max(200),
-    action: z.enum(["chat", "test", "audit"]).default("chat"),
+    action: z.enum(["chat", "agent", "test", "audit"]).default("chat"),
     maxOutputTokens: z.number().int().min(1).max(32_768).optional(),
     temperature: z.number().min(0).max(2).optional(),
     prompt: optionalTrimmedString(API_LIMITS.promptCharacters),
@@ -540,9 +541,27 @@ export async function enforceRateLimit(
 }
 
 const API_SESSION_COOKIE = "zhimai_ai_session";
+const API_SESSION_TOKEN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function requestCookie(request: Request, name: string): string | undefined {
+  const header = request.headers.get("cookie");
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+    return part.slice(separator + 1).trim() || undefined;
+  }
+  return undefined;
+}
+
+function apiSessionCookie(request: Request): string | undefined {
+  const token = requestCookie(request, API_SESSION_COOKIE);
+  return token && API_SESSION_TOKEN.test(token) ? token : undefined;
+}
 
 export function issueApiSession(request: Request) {
-  const token = crypto.randomUUID();
+  const token = apiSessionCookie(request) ?? crypto.randomUUID();
   const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
   return {
     token,
@@ -556,13 +575,8 @@ export function issueApiSession(request: Request) {
  */
 export function requireApiSession(request: Request) {
   const header = request.headers.get("x-zhimai-session")?.trim() ?? "";
-  const cookie = request.headers
-    .get("cookie")
-    ?.split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${API_SESSION_COOKIE}=`))
-    ?.slice(API_SESSION_COOKIE.length + 1);
-  if (!header || !cookie || header !== cookie || !/^[0-9a-f-]{36}$/i.test(header)) {
+  const cookie = apiSessionCookie(request);
+  if (!API_SESSION_TOKEN.test(header) || !cookie || header !== cookie) {
     throw new SafeApiError(401, "SESSION_REQUIRED", "AI 会话已失效，请刷新页面后重试");
   }
 }

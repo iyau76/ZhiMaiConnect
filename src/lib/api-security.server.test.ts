@@ -421,3 +421,50 @@ test("AI routes require a matching in-memory session header and SameSite cookie"
     (error: unknown) => error instanceof SafeApiError && error.code === "SESSION_REQUIRED",
   );
 });
+
+test("issuing an API session reuses and refreshes a valid existing cookie", () => {
+  const existing = crypto.randomUUID();
+  const session = issueApiSession(
+    new Request("https://connect.example/api/status", {
+      headers: { Cookie: `theme=dark; zhimai_ai_session=${existing}; locale=zh` },
+    }),
+  );
+
+  assert.equal(session.token, existing);
+  assert.match(session.cookie, new RegExp(`^zhimai_ai_session=${existing};`));
+  assert.match(session.cookie, /Max-Age=7200/);
+  assert.match(session.cookie, /; Secure$/);
+});
+
+test("issuing an API session replaces an invalid existing cookie", () => {
+  const session = issueApiSession(
+    new Request("https://connect.example/api/status", {
+      headers: { Cookie: "zhimai_ai_session=not-a-valid-session" },
+    }),
+  );
+
+  assert.notEqual(session.token, "not-a-valid-session");
+  assert.match(
+    session.token,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
+  assert.match(session.cookie, new RegExp(`^zhimai_ai_session=${session.token};`));
+});
+
+test("AI routes reject a stale header even when the request has a newer valid cookie", () => {
+  const staleHeader = crypto.randomUUID();
+  const currentCookie = crypto.randomUUID();
+
+  assert.throws(
+    () =>
+      requireApiSession(
+        new Request("https://connect.example/api/vision", {
+          headers: {
+            "X-Zhimai-Session": staleHeader,
+            Cookie: `zhimai_ai_session=${currentCookie}`,
+          },
+        }),
+      ),
+    (error: unknown) => error instanceof SafeApiError && error.code === "SESSION_REQUIRED",
+  );
+});

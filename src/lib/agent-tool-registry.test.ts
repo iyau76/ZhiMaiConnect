@@ -7,6 +7,7 @@ import {
   AgentToolRegistry,
   AgentToolRegistryError,
   AgentToolValidationError,
+  defineAgentTool,
 } from "./agent-tool-registry";
 
 interface TestServices {
@@ -124,6 +125,39 @@ describe("AgentToolRegistry", () => {
     });
     expect(registry.modelGuide(["private_read"])).toContain("search_profiles [private_read]");
     expect(registry.modelGuide(["private_read"])).not.toContain("commit_archive");
+  });
+
+  it("keeps collection and scalar bounds in both the schema and compact guide", () => {
+    const registry = new AgentToolRegistry().register(
+      defineAgentTool({
+        name: "read_people",
+        label: "读取人物",
+        description: "按稳定 ID 批量读取人物",
+        input: z
+          .object({
+            personIds: z.array(z.string().min(1).max(200)).min(1).max(20),
+            limit: z.number().int().min(1).max(30).optional(),
+          })
+          .strict(),
+        permission: "private_read",
+        handler: () => null,
+      }),
+    );
+
+    expect(registry.modelDefinitions()[0]?.inputSchema).toMatchObject({
+      properties: {
+        personIds: {
+          type: "array",
+          minItems: 1,
+          maxItems: 20,
+          items: { type: "string", minLength: 1, maxLength: 200 },
+        },
+        limit: { type: "integer", minimum: 1, maximum: 30 },
+      },
+    });
+    const guide = registry.modelGuide(["private_read"], { compact: true });
+    expect(guide).toContain("personIds:Array<string[length 1..200]>[1..20]");
+    expect(guide).toContain("limit?:integer[1..30]");
   });
 
   it("redacts a rejected call before it reaches the run log", async () => {

@@ -7,10 +7,12 @@ import {
   AgentRuntime,
   ContextBudget,
   estimateAgentTokens,
+  nextAgentModelTurn,
   resolveAgentBudget,
   type AgentBudget,
 } from "./agent-runtime";
 import { AgentToolRegistry } from "./agent-tool-registry";
+import { ModelRetryExhaustedError, ModelTransportError } from "./model-transport-resilience";
 
 const SMALL_BUDGET: AgentBudget = {
   maxRounds: 2,
@@ -72,6 +74,26 @@ describe("ContextBudget", () => {
       reason: "max_input_tokens",
     });
     expect(budget.snapshot()).toMatchObject({ rounds: 0, inputTokens: { total: 0 } });
+  });
+
+  it("derives tool availability and the reserved final turn from the live ledger", () => {
+    const budget = new ContextBudget(SMALL_BUDGET);
+
+    expect(nextAgentModelTurn(budget.snapshot())).toEqual({
+      absoluteRound: 1,
+      maxRounds: 2,
+      remainingRounds: 2,
+      finalOnly: false,
+    });
+    budget.claimModelRound({ value: 1, source: "actual" });
+    expect(nextAgentModelTurn(budget.snapshot())).toEqual({
+      absoluteRound: 2,
+      maxRounds: 2,
+      remainingRounds: 1,
+      finalOnly: true,
+    });
+    budget.claimModelRound({ value: 1, source: "actual" });
+    expect(nextAgentModelTurn(budget.snapshot())).toBeNull();
   });
 });
 
@@ -164,6 +186,80 @@ describe("AgentRuntime", () => {
 
   it("marks local token fallback as estimated", () => {
     expect(estimateAgentTokens("中文abcd")).toEqual({ value: 3, source: "estimated" });
+  });
+
+  it("retries transient 5xx and timeout failures inside one logical model round", async () => {
+    const recorder = new MemoryAgentRunRecorder({ runId: "retry-run" });
+    const invoke = vi
+      .fn<() => Promise<{ value: string }>>()
+      .mockRejectedValueOnce(new ModelTransportError("upstream unavailable", 503))
+      .mockRejectedValueOnce(new Error("upstream timed out"))
+      .mockResolvedValueOnce({ value: "done" });
+    const runtime = new AgentRuntime({
+      registry: new AgentToolRegistry(),
+      services: undefined,
+      budget: SMALL_BUDGET,
+      recorder,
+      modelRetry: { maxAttempts: 3, delaysMs: [0, 0] },
+    });
+
+    await expect(
+      runtime.runModelRound({ payload: "prompt", tokens: { value: 1, source: "actual" } }, invoke),
+    ).resolves.toMatchObject({ status: "ok", value: "done" });
+
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(runtime.contextBudget.snapshot().rounds).toBe(1);
+    expect(recorder.events().filter((event) => event.kind === "model_request")).toHaveLength(1);
+    expect(recorder.events().filter((event) => event.kind === "model_response")).toHaveLength(1);
+    expect(
+      recorder
+        .events()
+        .filter(
+          (event) =>
+            event.kind === "validation" &&
+            (event.payload as { status?: string } | undefined)?.status === "transport_retry",
+        ),
+    ).toHaveLength(2);
+  });
+
+  it("treats an empty model response as retryable transport failure", async () => {
+    const invoke = vi
+      .fn<() => Promise<{ value: string; payload: { response: string } }>>()
+      .mockResolvedValueOnce({ value: "   ", payload: { response: "   " } })
+      .mockResolvedValueOnce({ value: "usable", payload: { response: "usable" } });
+    const runtime = new AgentRuntime({
+      registry: new AgentToolRegistry(),
+      services: undefined,
+      budget: SMALL_BUDGET,
+      modelRetry: { maxAttempts: 2, delaysMs: [0] },
+    });
+
+    await expect(runtime.runModelRound({ payload: "prompt" }, invoke)).resolves.toMatchObject({
+      status: "ok",
+      value: "usable",
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(runtime.contextBudget.snapshot().rounds).toBe(1);
+  });
+
+  it("returns typed exhaustion without consuming another logical round", async () => {
+    const invoke = vi.fn(() => Promise.reject(new ModelTransportError("unavailable", 503)));
+    const runtime = new AgentRuntime({
+      registry: new AgentToolRegistry(),
+      services: undefined,
+      budget: SMALL_BUDGET,
+      modelRetry: { maxAttempts: 2, delaysMs: [0] },
+    });
+
+    const result = await runtime.runModelRound({ payload: "prompt" }, invoke);
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error).toBeInstanceOf(ModelRetryExhaustedError);
+      expect((result.error as ModelRetryExhaustedError).attempts).toBe(2);
+    }
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(runtime.contextBudget.snapshot().rounds).toBe(1);
   });
 
   it("actively finalizes hanging model and tool operations at maxWallTime", async () => {

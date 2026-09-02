@@ -46,10 +46,7 @@ import type { ChatTurn, ProviderPreset } from "./vision-providers";
 import { resolveAssistantArchiveCitations, type ArchiveCitation } from "./agent-output-grounding";
 import { routeAssistantRequest } from "./assistant-request-router";
 import { validateNameLanguageAnswers } from "./name-language";
-import {
-  ModelRetryExhaustedError,
-  runWithTransientModelRetries,
-} from "./model-transport-resilience";
+import { ModelRetryExhaustedError } from "./model-transport-resilience";
 
 const PREFERRED_TOOL_HISTORY_CHARACTERS = 5_000;
 const NO_ARCHIVE_CONTEXT = "用户未启用本机资料访问；只回答一般问题或使用联网工具。";
@@ -565,6 +562,16 @@ export async function runAssistantAgent(options: {
     recorder: options.recorder,
     signal: options.signal,
     roundOffset: resume ? resume.nextRound - 1 : 0,
+    modelRetry: {
+      maxAttempts: options.transportRetry?.maxAttempts,
+      delaysMs: options.transportRetry?.delaysMs,
+      onRetry: ({ round, nextAttempt }) => {
+        trace({
+          kind: "error",
+          text: `第 ${round} 轮连接暂时失败，正在进行第 ${nextAttempt} 次有限重试`,
+        });
+      },
+    },
   });
   const maxRounds = resume?.maxRounds ?? resolveAgentBudget(requestedBudget).maxRounds;
   const conversationHistory = fitVisionHistory(options.history ?? []);
@@ -650,7 +657,6 @@ export async function runAssistantAgent(options: {
     for (let round = firstRound; round <= maxRounds; round += 1) {
       options.signal?.throwIfAborted();
       let raw = "";
-      let activityMark = 240;
       trace({ kind: "status", text: `模型正在分析第 ${round} 轮` });
       const prompt = buildPrompt({
         question: options.question,
@@ -680,58 +686,24 @@ export async function runAssistantAgent(options: {
           }),
         },
         async (signal) => {
-          const attempt = await runWithTransientModelRetries({
-            maxAttempts: options.transportRetry?.maxAttempts,
-            delaysMs: options.transportRetry?.delaysMs,
+          raw = "";
+          await askModel(
+            options.preset,
+            prompt,
+            options.image ?? null,
+            conversationHistory.turns,
+            (chunk) => {
+              raw += chunk;
+            },
             signal,
-            invoke: async () => {
-              let attemptRaw = "";
-              activityMark = 240;
-              await askModel(
-                options.preset,
-                prompt,
-                options.image ?? null,
-                conversationHistory.turns,
-                (chunk) => {
-                  attemptRaw += chunk;
-                  if (attemptRaw.length >= activityMark) {
-                    trace({
-                      kind: "status",
-                      text: `模型持续输出，已接收 ${attemptRaw.length} 字`,
-                    });
-                    activityMark += 360;
-                  }
-                },
-                signal,
-                {
-                  maxOutputTokens: Math.max(
-                    1,
-                    Math.min(32_768, runtime.contextBudget.snapshot().remaining.outputTokens),
-                  ),
-                },
-              );
-              return attemptRaw;
+            {
+              maxOutputTokens: Math.max(
+                1,
+                Math.min(32_768, runtime.contextBudget.snapshot().remaining.outputTokens),
+              ),
+              responseMode: "structured",
             },
-            onRetry: ({ failedAttempt, nextAttempt, delayMs, error }) => {
-              runtime.recordLifecycle(
-                "validation",
-                {
-                  status: "transport_retry",
-                  logicalRound: round,
-                  failedAttempt,
-                  nextAttempt,
-                  delayMs,
-                  error: error instanceof Error ? error.message : String(error),
-                },
-                "failed",
-              );
-              trace({
-                kind: "error",
-                text: `第 ${round} 轮连接暂时失败，正在进行第 ${nextAttempt} 次有限重试`,
-              });
-            },
-          });
-          raw = attempt.value;
+          );
           return { value: raw, payload: { response: raw } };
         },
       );

@@ -3,6 +3,7 @@ import { expect, test as base, type Page, type Route } from "@playwright/test";
 export interface MockNetworkState {
   blockedExternalUrls: string[];
   unhandledApiUrls: string[];
+  agentProtocolViolations: string[];
   transcriptionRequests: unknown[];
   webToolRequests: Array<Record<string, unknown>>;
   visionRequests: Array<Record<string, unknown>>;
@@ -336,12 +337,24 @@ async function handleRoute(route: Route, state: MockNetworkState) {
   if (url.pathname === "/api/vision") {
     const body = (request.postDataJSON() ?? {}) as Record<string, unknown>;
     state.visionRequests.push(body);
+    const prompt = typeof body.prompt === "string" ? body.prompt : "";
+    if (
+      (prompt.includes("通用问答智能体") ||
+        prompt.includes("行动规划智能体") ||
+        prompt.includes("人际协作推荐智能体") ||
+        prompt.includes("本轮唯一动作是一次性声明所有新增和更新") ||
+        prompt.includes("你负责理解一项人际协作任务")) &&
+      body.action !== "agent"
+    ) {
+      state.agentProtocolViolations.push(`${String(body.action)}:${prompt.slice(0, 40)}`);
+    }
+    const reply = visionReply(body);
+    const oneShot = body.action !== "chat";
     await route.fulfill({
       status: 200,
-      contentType: body.action === "test" ? "application/json" : "text/plain; charset=utf-8",
+      contentType: oneShot ? "application/json" : "text/plain; charset=utf-8",
       headers: { "Cache-Control": "no-store" },
-      body:
-        body.action === "test" ? JSON.stringify({ reply: visionReply(body) }) : visionReply(body),
+      body: oneShot ? JSON.stringify({ ok: true, reply }) : reply,
     });
     return;
   }
@@ -407,6 +420,7 @@ export const test = base.extend<{ mockNetwork: MockNetworkState }>({
       const state: MockNetworkState = {
         blockedExternalUrls: [],
         unhandledApiUrls: [],
+        agentProtocolViolations: [],
         transcriptionRequests: [],
         webToolRequests: [],
         visionRequests: [],
@@ -438,6 +452,7 @@ export const test = base.extend<{ mockNetwork: MockNetworkState }>({
       page.on("dialog", (dialog) => dialog.accept());
       await fixtureUse(state);
       expect(state.unhandledApiUrls).toEqual([]);
+      expect(state.agentProtocolViolations).toEqual([]);
     },
     { auto: true },
   ],

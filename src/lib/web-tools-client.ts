@@ -1,4 +1,4 @@
-import { apiSessionHeaders } from "./api-session";
+import { fetchWithApiSession } from "./api-session";
 
 export type WebToolRequest =
   | { tool: "weather"; location: string }
@@ -6,9 +6,9 @@ export type WebToolRequest =
   | { tool: "search"; query: string };
 
 export async function callWebTool(request: WebToolRequest, signal?: AbortSignal) {
-  const response = await fetch("/api/web-tools", {
+  const response = await fetchWithApiSession("/api/web-tools", {
     method: "POST",
-    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
     signal,
   });

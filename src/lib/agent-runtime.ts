@@ -8,6 +8,7 @@ import {
   type AgentTokenCount,
 } from "./agent-run-log";
 import { AgentToolRegistry, type AgentToolPermission } from "./agent-tool-registry";
+import { ModelTransportError, runWithTransientModelRetries } from "./model-transport-resilience";
 
 export const agentBudgetSchema = z
   .object({
@@ -78,6 +79,29 @@ export interface AgentBudgetSnapshot {
     inputTokens: number;
     outputTokens: number;
     wallTimeMs: number;
+  };
+}
+
+export interface AgentModelTurnPolicy {
+  absoluteRound: number;
+  maxRounds: number;
+  remainingRounds: number;
+  finalOnly: boolean;
+}
+
+/**
+ * Describe the next model turn from the live budget ledger. Agent protocols
+ * use this same policy both when rendering allowed response types and when
+ * dispatching the parsed response, so the last round cannot spend itself on a
+ * tool call with no synthesis round left.
+ */
+export function nextAgentModelTurn(snapshot: AgentBudgetSnapshot): AgentModelTurnPolicy | null {
+  if (snapshot.remaining.rounds < 1) return null;
+  return {
+    absoluteRound: snapshot.rounds + 1,
+    maxRounds: snapshot.limits.maxRounds,
+    remainingRounds: snapshot.remaining.rounds,
+    finalOnly: snapshot.remaining.rounds === 1,
   };
 }
 
@@ -226,6 +250,20 @@ export function estimateAgentTokens(value: unknown): AgentTokenCount {
   };
 }
 
+export interface AgentModelRetryEvent {
+  round: number;
+  failedAttempt: number;
+  nextAttempt: number;
+  delayMs: number;
+  error: unknown;
+}
+
+export interface AgentModelRetryOptions {
+  maxAttempts?: number;
+  delaysMs?: readonly number[];
+  onRetry?: (event: AgentModelRetryEvent) => void;
+}
+
 export interface AgentRuntimeOptions<TServices> {
   registry: AgentToolRegistry<TServices>;
   services: TServices;
@@ -237,6 +275,8 @@ export interface AgentRuntimeOptions<TServices> {
   now?: () => number;
   /** Logical round offset used when a suspended run resumes in a new runtime. */
   roundOffset?: number;
+  /** Finite transport retry policy shared by every model round. */
+  modelRetry?: AgentModelRetryOptions;
 }
 
 export interface AgentModelRoundInput {
@@ -282,6 +322,7 @@ export class AgentRuntime<TServices = unknown> {
   private readonly signal?: AbortSignal;
   private readonly now: () => number;
   private readonly roundOffset: number;
+  private readonly modelRetry: AgentModelRetryOptions;
   private finalDecision?: AgentFinalizeDecision;
 
   constructor(options: AgentRuntimeOptions<TServices>) {
@@ -298,6 +339,7 @@ export class AgentRuntime<TServices = unknown> {
       : undefined;
     this.now = options.now ?? Date.now;
     this.roundOffset = Math.max(0, Math.trunc(options.roundOffset ?? 0));
+    this.modelRetry = options.modelRetry ?? {};
     this.recorder = options.recorder ?? new MemoryAgentRunRecorder({ now: this.now });
     this.contextBudget = new ContextBudget(options.budget, { now: this.now });
     this.signal = options.signal;
@@ -393,11 +435,38 @@ export class AgentRuntime<TServices = unknown> {
     const started = this.beginModelRound(input);
     if (started.status === "finalize") return started;
     try {
-      const response = await withAgentDeadline(invoke, {
-        timeoutMs: started.budget.remaining.wallTimeMs,
-        signals: [this.signal],
-        now: this.now,
-      });
+      const response = await withAgentDeadline(
+        async (signal) => {
+          const attempted = await runWithTransientModelRetries({
+            maxAttempts: this.modelRetry.maxAttempts,
+            delaysMs: this.modelRetry.delaysMs,
+            signal,
+            invoke: async () => {
+              const result = await invoke(signal);
+              if (typeof result.value === "string" && !result.value.trim()) {
+                throw new ModelTransportError("上游模型返回空响应", 502, "UPSTREAM_EMPTY_RESPONSE");
+              }
+              return result;
+            },
+            onRetry: (event) => {
+              const retryEvent: AgentModelRetryEvent = { ...event, round: started.round };
+              this.recorder.record({
+                kind: "validation",
+                status: "failed",
+                round: started.round,
+                payload: { status: "transport_retry", ...event },
+              });
+              this.modelRetry.onRetry?.(retryEvent);
+            },
+          });
+          return attempted.value;
+        },
+        {
+          timeoutMs: started.budget.remaining.wallTimeMs,
+          signals: [this.signal],
+          now: this.now,
+        },
+      );
       const completed = this.completeModelRound({
         payload: response.payload ?? response.value,
         tokens: response.tokens,

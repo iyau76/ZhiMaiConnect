@@ -2,7 +2,7 @@
 
 import { findVariant } from "./dialects";
 import { confirmCloudTransfer } from "./cloud-consent";
-import { apiSessionHeaders } from "./api-session";
+import { fetchWithApiSession } from "./api-session";
 import { assertAudio, type ProviderPreset } from "./vision-providers";
 
 export function fileToDataUrl(file: Blob) {
@@ -75,9 +75,9 @@ export async function transcribeAudio(
 
   await confirmCloudTransfer(preset, ["音频"]);
 
-  const response = await fetch("/api/transcribe", {
+  const response = await fetchWithApiSession("/api/transcribe", {
     method: "POST",
-    headers: await apiSessionHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       audio: dataUrl,
       mime,
