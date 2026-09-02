@@ -50,7 +50,13 @@ import type { AgentTraceEvent } from "@/lib/agent-trace";
 import { runRecommendationAgent } from "@/lib/recommendation-agent";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
-export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
+export function RemindersPanel({
+  preset,
+  active = true,
+}: {
+  preset: ProviderPreset;
+  active?: boolean;
+}) {
   const [persons, setPersons] = useState<PersonRecord[]>([]);
   const [reminders, setReminders] = useState<ReminderRecord[]>([]);
   const [events, setEvents] = useState<LifeEventRecord[]>([]);
@@ -88,9 +94,10 @@ export function RemindersPanel({ preset }: { preset: ProviderPreset }) {
   }, []);
 
   useEffect(() => {
-    void load();
-    return () => agentAbortRef.current?.abort();
-  }, [load]);
+    if (active) void load();
+  }, [active, load]);
+
+  useEffect(() => () => agentAbortRef.current?.abort(), []);
 
   const items = useMemo(() => upcoming(persons, 60), [persons]);
   const stale = useMemo(() => staleContacts(persons, events, 90).slice(0, 6), [persons, events]);

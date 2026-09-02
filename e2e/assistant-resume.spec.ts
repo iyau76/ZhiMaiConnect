@@ -81,6 +81,10 @@ test("503 后可从中断轮次继续，并保留已完成的档案工具结果"
   await expect(assistant).toContainText("已保留前 1 轮和 1 条工具结果");
   const resume = assistant.getByRole("button", { name: "从第 2 轮继续" });
   await expect(resume).toBeVisible();
+  await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
+  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await expect(resume).toBeVisible();
+  await expect(assistant).toContainText("已保留前 1 轮和 1 条工具结果");
   await resume.click();
 
   await expect(assistant).toContainText("唐悦喜欢人像摄影", { timeout: 30_000 });

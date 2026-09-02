@@ -785,6 +785,15 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
     recommendation.getByRole("textbox", { name: "可编辑的候选比较与求助话术" }),
   ).not.toHaveValue(/赵宇/);
 
+  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await expect(page.getByText("问一问", { exact: true })).toBeVisible();
+  await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
+  await expect(recommendation.getByRole("textbox").first()).toHaveValue(
+    "帮我看一下租房合同中的违约条款",
+  );
+  await expect(recommendation.getByRole("status")).toContainText("分析完成");
+  await expect(recommendation.locator("ol li").first()).toContainText("陈安");
+
   expect(mockNetwork.visionRequests).toHaveLength(3);
   const prompts = mockNetwork.visionRequests.map((request) => String(request.prompt));
   expect(prompts[0]).toContain("你负责理解一项人际协作任务");
@@ -804,6 +813,13 @@ test("AI 助理问一问会展示流式轨迹并调用受控网页检索工具",
   await expect(trace).toContainText("问答轨迹");
   await expect(trace).toContainText("回答完成");
   await expect(questionCard).toContainText("Open-Meteo 提供无需密钥的天气预报接口");
+
+  await clickVisible(page, page.getByRole("button", { name: /^日历/ }));
+  await expect(page.getByText("公历 · 农历")).toBeVisible();
+  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await expect(questionCard).toContainText("Open-Meteo 现在适合做无密钥天气查询吗？");
+  await expect(questionCard).toContainText("Open-Meteo 提供无需密钥的天气预报接口");
+  await expect(questionCard.getByRole("status")).toContainText("回答完成");
 
   expect(mockNetwork.webToolRequests).toEqual([{ tool: "search", query: "Open-Meteo 官方文档" }]);
   expect(mockNetwork.visionRequests).toHaveLength(2);
@@ -982,6 +998,10 @@ test("行动规划先生成可编辑草案，批准后才原子写入任务", as
 
   await draftTitles.first().fill("确认唐悦的拍摄档期");
   await drafts.getByRole("checkbox", { name: "选择此行动项" }).nth(1).uncheck();
+  await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
+  await clickVisible(page, page.getByRole("button", { name: /^计划/ }));
+  await expect(draftTitles.first()).toHaveValue("确认唐悦的拍摄档期");
+  await expect(drafts.getByRole("checkbox", { name: "选择此行动项" }).nth(1)).not.toBeChecked();
   await drafts.getByRole("button", { name: /批准并加入计划/ }).click();
   await expect(page.getByText(/本次批准已作为一个事务写入/)).toBeVisible();
   await expect(page.getByRole("button", { name: "撤销本次批准" })).toBeVisible();

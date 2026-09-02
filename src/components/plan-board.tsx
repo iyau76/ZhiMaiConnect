@@ -65,7 +65,7 @@ function pendingTasks(tasks: PlannedTaskDraft[]): PendingTask[] {
   return tasks.map((task) => ({ ...task, id: crypto.randomUUID(), selected: true }));
 }
 
-export function PlanBoard({ preset }: { preset: ProviderPreset }) {
+export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; active?: boolean }) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [relations, setRelations] = useState<RelationRecord[]>([]);
@@ -98,14 +98,17 @@ export function PlanBoard({ preset }: { preset: ProviderPreset }) {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    if (active) void refresh();
+  }, [active, refresh]);
+
+  useEffect(() => {
     try {
       setOwner(localStorage.getItem(OWNER_KEY) ?? "");
     } catch {
       // 浏览器禁用存储时，本页仍可在内存中使用。
     }
     return () => abortRef.current?.abort();
-  }, [refresh]);
+  }, []);
 
   const namesById = useMemo(
     () => new Map(people.map((person) => [person.id, person.name])),

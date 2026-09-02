@@ -51,6 +51,13 @@ export const Route = createFileRoute("/")({
 
 type View = "intake" | "people" | "reminders" | "calendar" | "plan" | "models" | "settings";
 
+/**
+ * These workspaces can own a multi-round browser-side Agent run. Once opened,
+ * keep them mounted while the user visits another section so navigation does
+ * not erase the conversation or abort an in-flight run.
+ */
+const RETAINED_AGENT_VIEWS = new Set<View>(["reminders", "plan", "models"]);
+
 function getNav(): Array<{ id: View; label: string; hint: string; icon: typeof Users }> {
   return [
     { id: "intake", label: t("录入"), hint: t("一段话写下身边的人"), icon: PenLine },
@@ -147,6 +154,7 @@ function Index() {
   const [activeId, setActiveId] = useState(DEFAULT_PRESETS[0].id);
   const [hydrated, setHydrated] = useState(false);
   const [view, setView] = useState<View>("intake");
+  const [retainedViews, setRetainedViews] = useState<ReadonlySet<View>>(() => new Set());
   useLang();
   const NAV = getNav();
 
@@ -189,6 +197,62 @@ function Index() {
   const activePreset = presets.find((preset) => preset.id === resolvedActiveId) ?? presets[0];
   const heading = HEADINGS[view];
 
+  const openView = (nextView: View) => {
+    if (RETAINED_AGENT_VIEWS.has(nextView)) {
+      setRetainedViews((current) => {
+        if (current.has(nextView)) return current;
+        const next = new Set(current);
+        next.add(nextView);
+        return next;
+      });
+    }
+    setView(nextView);
+  };
+
+  const renderWorkspace = (workspaceView: View) => {
+    if (workspaceView === "intake") {
+      return (
+        <div className="min-w-0 space-y-5">
+          <IntakePanel preset={activePreset} />
+        </div>
+      );
+    }
+    if (workspaceView === "reminders") {
+      return <RemindersPanel preset={activePreset} active={view === "reminders"} />;
+    }
+    if (workspaceView === "settings") {
+      return (
+        <div className="max-w-2xl space-y-5 rounded-xl border border-border bg-card p-5">
+          <AppearanceControls />
+          <DemoDataControls />
+          <PreflightPanel preset={activePreset} />
+        </div>
+      );
+    }
+    if (workspaceView === "calendar") return <CalendarPanel preset={activePreset} />;
+    if (workspaceView === "plan") {
+      return <PlanBoard preset={activePreset} active={view === "plan"} />;
+    }
+    if (workspaceView === "models") {
+      return (
+        <ModelsPanel
+          presets={presets}
+          onPresetsChange={setPresets}
+          onSavePresets={persistModelPresets}
+          activeId={resolvedActiveId}
+          onActiveIdChange={setActiveId}
+          frame={null}
+          onFrameUsed={() => undefined}
+        />
+      );
+    }
+    return (
+      <div className="min-w-0 space-y-5">
+        <RelationsPanel preset={activePreset} onOpenIntake={() => openView("intake")} />
+      </div>
+    );
+  };
+
   return (
     <div
       className="min-h-screen bg-background text-foreground"
@@ -214,7 +278,7 @@ function Index() {
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => setView(item.id)}
+                    onClick={() => openView(item.id)}
                     className={cn(
                       "group flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
                       active
@@ -262,7 +326,7 @@ function Index() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setView(item.id)}
+                  onClick={() => openView(item.id)}
                   className={cn(
                     "shrink-0 rounded-md px-3 py-2 text-xs transition-colors",
                     view === item.id ? "bg-accent text-accent-foreground" : "text-muted-foreground",
@@ -291,37 +355,15 @@ function Index() {
               />
             </header>
 
-            {view === "intake" ? (
-              <div className="min-w-0 space-y-5">
-                <IntakePanel preset={activePreset} />
-              </div>
-            ) : view === "reminders" ? (
-              <RemindersPanel preset={activePreset} />
-            ) : view === "settings" ? (
-              <div className="max-w-2xl space-y-5 rounded-xl border border-border bg-card p-5">
-                <AppearanceControls />
-                <DemoDataControls />
-                <PreflightPanel preset={activePreset} />
-              </div>
-            ) : view === "calendar" ? (
-              <CalendarPanel preset={activePreset} />
-            ) : view === "plan" ? (
-              <PlanBoard preset={activePreset} />
-            ) : view === "models" ? (
-              <ModelsPanel
-                presets={presets}
-                onPresetsChange={setPresets}
-                onSavePresets={persistModelPresets}
-                activeId={resolvedActiveId}
-                onActiveIdChange={setActiveId}
-                frame={null}
-                onFrameUsed={() => undefined}
-              />
-            ) : (
-              <div className="min-w-0 space-y-5">
-                <RelationsPanel preset={activePreset} onOpenIntake={() => setView("intake")} />
-              </div>
-            )}
+            {NAV.map((item) => {
+              const mounted = item.id === view || retainedViews.has(item.id);
+              if (!mounted) return null;
+              return (
+                <section key={item.id} hidden={item.id !== view} data-workspace-view={item.id}>
+                  {renderWorkspace(item.id)}
+                </section>
+              );
+            })}
           </main>
         </div>
       </div>
