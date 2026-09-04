@@ -779,6 +779,13 @@ describe("facesDb life events and reminders", () => {
 
     await facesDb.putLifeEvent(original);
     await expect(facesDb.listLifeEvents()).resolves.toEqual([original]);
+    await facesDb.putReminder({
+      id: "linked-reminder",
+      title: "Follow up",
+      done: true,
+      completionEventId: original.id,
+      createdAt: 1,
+    });
 
     const updated = { ...original, detail: "Bring the photo album" };
     await facesDb.putLifeEvent(updated);
@@ -786,6 +793,14 @@ describe("facesDb life events and reminders", () => {
 
     await facesDb.deleteLifeEvent(original.id);
     await expect(facesDb.listLifeEvents()).resolves.toEqual([]);
+    await expect(facesDb.listReminders()).resolves.toEqual([
+      {
+        id: "linked-reminder",
+        title: "Follow up",
+        done: true,
+        createdAt: 1,
+      },
+    ]);
   });
 
   it("supports reminder CRUD", async () => {

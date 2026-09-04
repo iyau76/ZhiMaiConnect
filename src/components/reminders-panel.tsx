@@ -8,6 +8,7 @@ import {
   Clock3,
   Gift,
   Loader2,
+  NotebookPen,
   PartyPopper,
   Plus,
   Sparkles,
@@ -47,6 +48,7 @@ import {
   type ReminderRecord,
 } from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
+import { buildReminderOutcome } from "@/lib/reminder-outcome";
 import { cn } from "@/lib/utils";
 import { blessingPrompt, upcoming, todayStr, type UpcomingItem } from "@/lib/personal";
 import {
@@ -83,12 +85,14 @@ export function RemindersPanel({
   focusReminderId,
   focusRunId,
   focusNonce,
+  onOpenEvent,
 }: {
   preset: ProviderPreset;
   active?: boolean;
   focusReminderId?: string;
   focusRunId?: string;
   focusNonce?: number;
+  onOpenEvent?: (eventId: string) => void;
 }) {
   const [persons, setPersons] = useState<PersonRecord[]>([]);
   const [reminders, setReminders] = useState<ReminderRecord[]>([]);
@@ -96,6 +100,8 @@ export function RemindersPanel({
   const [relations, setRelations] = useState<RelationRecord[]>([]);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
+  const [outcomeReminderId, setOutcomeReminderId] = useState("");
+  const [outcomeText, setOutcomeText] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [answer, setAnswer] = useState<{ key: string; text: string } | null>(null);
   const [ask, setAsk] = useState("");
@@ -291,8 +297,31 @@ export function RemindersPanel({
   };
 
   const toggle = async (record: ReminderRecord) => {
-    await facesDb.putReminder({ ...record, done: !record.done });
+    const done = !record.done;
+    await facesDb.putReminder({ ...record, done });
+    if (done && !record.completionEventId) {
+      setOutcomeReminderId(record.id);
+      setOutcomeText("");
+    } else if (!done && outcomeReminderId === record.id) {
+      setOutcomeReminderId("");
+      setOutcomeText("");
+    }
     await load();
+  };
+
+  const saveOutcome = async (record: ReminderRecord) => {
+    if (!outcomeText.trim()) return;
+    const eventId = record.completionEventId ?? crypto.randomUUID();
+    const previous = events.find((event) => event.id === eventId);
+    const outcome = buildReminderOutcome(record, outcomeText, { eventId, previous });
+    await facesDb.applyArchiveMutationBatch({
+      lifeEvents: [outcome.event],
+      reminders: [outcome.reminder],
+    });
+    setOutcomeReminderId("");
+    setOutcomeText("");
+    await load();
+    toast.success(t("结果已记入时间线"));
   };
 
   const remove = async (id: string) => {
@@ -875,37 +904,98 @@ export function RemindersPanel({
               id={`reminder-${record.id}`}
               data-reminder-id={record.id}
               className={cn(
-                "flex scroll-mt-6 items-center justify-between gap-3 rounded-lg border border-border bg-background/60 px-3 py-2",
+                "scroll-mt-6 rounded-lg border border-border bg-background/60 px-3 py-2",
                 focusReminderId === record.id && "ring-2 ring-primary/35",
               )}
             >
-              <button
-                type="button"
-                onClick={() => void toggle(record)}
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
-              >
-                <span
-                  className={`flex size-4 shrink-0 items-center justify-center rounded border ${record.done ? "border-primary bg-primary text-primary-foreground" : "border-border"}`}
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => void toggle(record)}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  aria-label={`${t(record.done ? "恢复待办" : "完成待办")}：${record.title}`}
                 >
-                  {record.done && <Check className="size-3" aria-hidden="true" />}
-                </span>
-                <span
-                  className={`truncate text-sm ${record.done ? "text-muted-foreground line-through" : ""}`}
+                  <span
+                    className={`flex size-4 shrink-0 items-center justify-center rounded border ${record.done ? "border-primary bg-primary text-primary-foreground" : "border-border"}`}
+                  >
+                    {record.done && <Check className="size-3" aria-hidden="true" />}
+                  </span>
+                  <span
+                    className={`truncate text-sm ${record.done ? "text-muted-foreground line-through" : ""}`}
+                  >
+                    {record.title}
+                  </span>
+                  {record.due && (
+                    <span className="text-[11px] text-muted-foreground">{record.due}</span>
+                  )}
+                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  {record.done && !record.completionEventId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOutcomeReminderId(record.id);
+                        setOutcomeText("");
+                      }}
+                      className="text-[11px] text-primary hover:underline"
+                    >
+                      {t("补记结果")}
+                    </button>
+                  )}
+                  {record.completionEventId && onOpenEvent && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenEvent(record.completionEventId!)}
+                      className="flex items-center gap-1 text-[11px] text-primary hover:underline"
+                    >
+                      <NotebookPen className="size-3" aria-hidden="true" />
+                      {t("查看结果")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void remove(record.id)}
+                    aria-label={t("删除")}
+                    className="text-muted-foreground transition-colors hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              {outcomeReminderId === record.id && (
+                <div
+                  data-reminder-outcome-editor={record.id}
+                  className="mt-3 space-y-2 border-t border-border pt-3"
                 >
-                  {record.title}
-                </span>
-                {record.due && (
-                  <span className="text-[11px] text-muted-foreground">{record.due}</span>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => void remove(record.id)}
-                aria-label={t("删除")}
-                className="text-muted-foreground transition-colors hover:text-destructive"
-              >
-                <Trash2 className="size-3.5" aria-hidden="true" />
-              </button>
+                  <Textarea
+                    value={outcomeText}
+                    onChange={(event) => setOutcomeText(event.target.value)}
+                    rows={2}
+                    aria-label={t("这件事最后怎么样了")}
+                    placeholder={t("例如：已经把清单发给唐悦，她说明天确认档期")}
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setOutcomeReminderId("");
+                        setOutcomeText("");
+                      }}
+                    >
+                      {t("稍后再记")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => void saveOutcome(record)}
+                      disabled={!outcomeText.trim()}
+                    >
+                      <NotebookPen className="size-3.5" aria-hidden="true" />
+                      {t("保存到时间线")}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </li>
           ))}
           {reminders.length === 0 && (

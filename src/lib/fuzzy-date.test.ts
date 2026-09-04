@@ -63,6 +63,17 @@ describe("fuzzy event spans", () => {
     expect(yearOf(row)).toBe("2023");
   });
 
+  it("keeps the user's original fuzzy wording while normalized dates drive placement", () => {
+    const row = event({
+      date: "2025-06-01",
+      dateEnd: "2025-08-31",
+      precision: "range",
+      dateText: "去年夏天",
+    });
+    expect(formatFuzzy(row)).toBe("去年夏天");
+    expect(eventSpan(row)).toEqual({ start: "2025-06-01", end: "2025-08-31" });
+  });
+
   it.each([
     [event({ date: "2026-08-26" }), "2026 年 8 月 26 日"],
     [event({ date: "2026-08-01", precision: "month" }), "2026 年 8 月"],

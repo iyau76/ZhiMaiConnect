@@ -304,6 +304,9 @@ function Index() {
               : undefined
           }
           focusNonce={workspaceFocus?.view === "reminders" ? workspaceFocus.nonce : undefined}
+          onOpenEvent={(eventId) =>
+            openTodayTarget({ view: "calendar", recordType: "event", recordId: eventId })
+          }
         />
       );
     }

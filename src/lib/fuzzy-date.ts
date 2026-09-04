@@ -31,6 +31,7 @@ export function eventSpan(event: LifeEventRecord) {
 /** 人话时间标签 */
 export function formatFuzzy(event: LifeEventRecord) {
   const p = precisionOf(event);
+  if (p !== "day" && event.dateText?.trim()) return event.dateText.trim();
   const [y, m, d] = event.date.split("-").map(Number);
   if (p === "day") return `${y} 年 ${m} 月 ${d} 日`;
   if (p === "month") return `${y} 年 ${m} 月`;

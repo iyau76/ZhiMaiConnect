@@ -218,6 +218,7 @@ const eventSetSchema = z
     date: isoDateSchema.optional(),
     dateEnd: isoDateSchema.optional(),
     precision: z.enum(["day", "month", "year", "range"]).optional(),
+    dateText: z.string().trim().min(1).max(200).optional(),
     title: z.string().trim().min(1).max(500).optional(),
     detail: z.string().max(4_000).optional(),
     place: z.string().trim().min(1).max(500).optional(),
@@ -225,7 +226,7 @@ const eventSetSchema = z
     kind: z.string().trim().min(1).max(100).optional(),
   })
   .strict();
-const EVENT_UNSET_FIELDS = ["dateEnd", "precision", "detail", "place", "kind"] as const;
+const EVENT_UNSET_FIELDS = ["dateEnd", "precision", "dateText", "detail", "place", "kind"] as const;
 const EVENT_CLEAR_FIELDS = ["personIds"] as const;
 
 export const eventMutationPatchSchema = z

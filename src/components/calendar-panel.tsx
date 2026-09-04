@@ -77,6 +77,7 @@ export function CalendarPanel({
   const [title, setTitle] = useState("");
 
   const [withIds, setWithIds] = useState<string[]>([]);
+  const [personQuery, setPersonQuery] = useState("");
   const [photos, setPhotos] = useState<PhotoNote[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const handledFocus = useRef("");
@@ -200,6 +201,7 @@ export function CalendarPanel({
     setEditingId(null);
     setTitle("");
     setWithIds([]);
+    setPersonQuery("");
     setPhotos([]);
     setFuzzyText("");
     setFuzzyHint("");
@@ -300,6 +302,7 @@ export function CalendarPanel({
       date,
       dateEnd,
       precision: stored,
+      dateText: stored === "day" ? undefined : fuzzyText.trim(),
       title: (head || raw).slice(0, 60),
       detail: body || undefined,
       personIds: withIds,
@@ -321,6 +324,32 @@ export function CalendarPanel({
     (ids ?? [])
       .map((id) => persons.find((person) => person.id === id)?.name ?? t("已删除"))
       .join("、");
+
+  const personOptions = useMemo(() => {
+    const selectedIds = new Set(withIds);
+    const query = personQuery.trim().toLocaleLowerCase();
+    const selectedPeople = persons.filter((person) => selectedIds.has(person.id));
+    const matches = persons.filter((person) => {
+      if (selectedIds.has(person.id)) return false;
+      if (!query) return true;
+      const profile = person.profile;
+      return [
+        person.name,
+        person.note,
+        profile?.relation,
+        profile?.org,
+        profile?.department,
+        profile?.title,
+        ...(profile?.tags ?? []),
+        ...(profile?.identities?.map((identity) => identity.alias) ?? []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(query);
+    });
+    return [...selectedPeople, ...matches].slice(0, Math.max(30, selectedPeople.length));
+  }, [personQuery, persons, withIds]);
 
   const dayEvents = byDate.get(selected) ?? [];
   const dayReminders = remindersByDate.get(selected) ?? [];
@@ -715,29 +744,51 @@ export function CalendarPanel({
 
           <PhotoNotes photos={photos} onChange={setPhotos} />
           {persons.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {persons.slice(0, 30).map((person) => {
-                const on = withIds.includes(person.id);
-                return (
-                  <button
-                    key={person.id}
-                    type="button"
-                    onClick={() =>
-                      setWithIds((prev) =>
-                        on ? prev.filter((id) => id !== person.id) : [...prev, person.id],
-                      )
-                    }
-                    className={cn(
-                      "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
-                      on
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border text-muted-foreground",
-                    )}
-                  >
-                    {person.name}
-                  </button>
-                );
-              })}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={personQuery}
+                  onChange={(event) => setPersonQuery(event.target.value)}
+                  aria-label={t("搜索参与人物")}
+                  placeholder={t("搜索参与人物")}
+                  className="h-8 max-w-xs text-xs"
+                />
+                {withIds.length > 0 && (
+                  <span className="text-[11px] text-muted-foreground">
+                    {t("已选")} {withIds.length} {t("人")}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {personOptions.map((person) => {
+                  const on = withIds.includes(person.id);
+                  return (
+                    <button
+                      key={person.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() =>
+                        setWithIds((prev) =>
+                          on ? prev.filter((id) => id !== person.id) : [...prev, person.id],
+                        )
+                      }
+                      className={cn(
+                        "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+                        on
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border text-muted-foreground",
+                      )}
+                    >
+                      {person.name}
+                    </button>
+                  );
+                })}
+                {personOptions.length === 0 && (
+                  <span className="text-[11px] text-muted-foreground">
+                    {t("没有找到匹配的人物")}
+                  </span>
+                )}
+              </div>
             </div>
           )}
           <div className="flex justify-end">

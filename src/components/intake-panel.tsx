@@ -2755,6 +2755,7 @@ export function IntakePanel({
           date,
           dateEnd: precision === "range" ? item.dateEnd || undefined : undefined,
           precision,
+          dateText: precision === "day" ? undefined : item.timeText?.trim() || previous?.dateText,
           detail: item.detail !== undefined ? item.detail || undefined : previous?.detail,
           place: item.place !== undefined ? item.place || undefined : previous?.place,
           personIds:

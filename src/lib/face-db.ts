@@ -369,6 +369,8 @@ export interface LifeEventRecord {
   dateEnd?: string;
   /** 记忆精度，缺省视为 day（老数据兼容） */
   precision?: DatePrecision;
+  /** 用户写下的原始时间说法，如「去年夏天」；date/dateEnd 只负责排序与定位。 */
+  dateText?: string;
   title: string;
   detail?: string;
   place?: string;
@@ -394,6 +396,8 @@ export interface ReminderRecord {
   personIds?: string[];
   kind?: "birthday" | "festival" | "gift" | "custom";
   done: boolean;
+  /** 完成提醒后补记的互动事件；事实仍以对应 LifeEventRecord 为准。 */
+  completionEventId?: string;
   createdAt: number;
   source?: Provenance;
 }
@@ -1018,7 +1022,7 @@ async function replaceArchiveSnapshot(replacement: FaceDbArchiveReplacement) {
   assertUniqueIds("案件事件", replacement.caseEvents);
   assertUniqueIds("待办", replacement.tasks);
   assertUniqueIds("事务", replacement.projects);
-  assertUniqueIds("日历事件", replacement.lifeEvents);
+  const lifeEventIds = assertUniqueIds("日历事件", replacement.lifeEvents);
   assertUniqueIds("提醒", replacement.reminders);
 
   const requirePerson = (id: string, context: string) => {
@@ -1060,8 +1064,12 @@ async function replaceArchiveSnapshot(replacement: FaceDbArchiveReplacement) {
   for (const task of replacement.tasks) requirePeople(task.personIds, `待办 ${task.id}`);
   for (const event of replacement.lifeEvents)
     requirePeople(event.personIds, `日历事件 ${event.id}`);
-  for (const reminder of replacement.reminders)
+  for (const reminder of replacement.reminders) {
     requirePeople(reminder.personIds, `提醒 ${reminder.id}`);
+    if (reminder.completionEventId && !lifeEventIds.has(reminder.completionEventId)) {
+      throw new Error(`提醒 ${reminder.id} 引用了不存在的完成事件：${reminder.completionEventId}`);
+    }
+  }
   for (const project of replacement.projects) {
     if (project.ownerId) requirePerson(project.ownerId, `事务 ${project.id}`);
     requirePeople(project.memberIds, `事务 ${project.id}`);
@@ -1364,6 +1372,24 @@ async function applyArchiveMutationBatchInternal(
       deleteRows(RELATION_VIEW_PREFERENCES, batch.deleteViewPreferenceIds);
       writeRows(REFERRAL_POLICIES, batch.referralPolicies);
       deleteRows(REFERRAL_POLICIES, batch.deleteReferralPolicyIds);
+
+      const deletedLifeEventIds = new Set(batch.deleteLifeEventIds ?? []);
+      if (deletedLifeEventIds.size) {
+        const reminderStore = tx.objectStore(REMINDERS);
+        const reminderRequest = reminderStore.getAll();
+        reminderRequest.onsuccess = () => {
+          for (const reminder of reminderRequest.result as ReminderRecord[]) {
+            if (
+              !reminder.completionEventId ||
+              !deletedLifeEventIds.has(reminder.completionEventId)
+            ) {
+              continue;
+            }
+            const { completionEventId: _deleted, ...remaining } = reminder;
+            reminderStore.put(remaining);
+          }
+        };
+      }
 
       // Relationship-side auxiliary rows may outlive an assertion after a
       // privacy deletion. Prune them inside the same transaction.
@@ -2158,7 +2184,7 @@ export const facesDb = {
     ),
   putLifeEvent: (record: LifeEventRecord) =>
     run<void>(LIFE_EVENTS, "readwrite", (s) => s.put(record)),
-  deleteLifeEvent: (id: string) => run<void>(LIFE_EVENTS, "readwrite", (s) => s.delete(id)),
+  deleteLifeEvent: (id: string) => applyArchiveMutationBatch({ deleteLifeEventIds: [id] }),
   listReminders: () =>
     run<ReminderRecord[]>(REMINDERS, "readonly", (s) => s.getAll()).then((rows) =>
       rows.sort((a, b) => b.createdAt - a.createdAt),

@@ -150,7 +150,9 @@ function source(): ArchiveV2Source {
     lifeEvents: [
       {
         id: "event-1",
-        date: "2026-09-02",
+        date: "2026-09-01",
+        precision: "month",
+        dateText: "今年九月",
         title: "团队聚餐",
         personIds: ["friend"],
         photos: [{ id: "photo-event", dataUrl: "data:image/jpeg;base64,y", addedAt: at }],
@@ -163,6 +165,7 @@ function source(): ArchiveV2Source {
         title: "提醒聚餐",
         personIds: ["friend"],
         done: false,
+        completionEventId: "event-1",
         createdAt: at,
       },
     ],
@@ -269,6 +272,16 @@ describe("archive@2 machine contract", () => {
       expect((error as ArchiveValidationError).issues.join("\n")).toContain(
         "缺少对应 evidenceLink",
       );
+    }
+
+    const danglingCompletion = structuredClone(createArchiveV2(source()));
+    danglingCompletion.records.reminders[0].completionEventId = "missing-event";
+    try {
+      normalizeArchive(danglingCompletion);
+      throw new Error("expected completion event validation failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ArchiveValidationError);
+      expect((error as ArchiveValidationError).issues.join("\n")).toContain("missing-event");
     }
   });
 });

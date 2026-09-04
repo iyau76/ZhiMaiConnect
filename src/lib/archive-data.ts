@@ -288,6 +288,7 @@ const lifeEventSchema = z
     date: z.string(),
     dateEnd: z.string().optional(),
     precision: z.enum(["day", "month", "year", "range"]).optional(),
+    dateText: z.string().optional(),
     title: z.string(),
     detail: z.string().optional(),
     place: z.string().optional(),
@@ -308,6 +309,7 @@ const reminderSchema = z
     personIds: z.array(id).optional(),
     kind: z.enum(["birthday", "festival", "gift", "custom"]).optional(),
     done: z.boolean(),
+    completionEventId: id.optional(),
     createdAt: timestamp,
     source: provenanceSchema.optional(),
   })
@@ -569,6 +571,7 @@ export function assertArchiveIntegrity(archive: ArchiveV2) {
     records.relationAssertions.map((assertion) => [assertion.id, assertion]),
   );
   const evidenceIds = new Set(records.evidence.map((record) => record.id));
+  const lifeEventIds = new Set(records.lifeEvents.map((record) => record.id));
   const collectionIds = new Set(records.collections.map((collection) => collection.id));
   const derivedIds = new Set(
     archive.projectionDiagnostics.derivedRelations.map((relation) => relation.id),
@@ -695,8 +698,17 @@ export function assertArchiveIntegrity(archive: ArchiveV2) {
     issues.push(
       ...missingRefIssues("lifeEvents.personIds", record.id, record.personIds, personIds),
     );
-  for (const record of records.reminders)
-    issues.push(...missingRefIssues("reminders.personIds", record.id, record.personIds, personIds));
+  for (const record of records.reminders) {
+    issues.push(
+      ...missingRefIssues("reminders.personIds", record.id, record.personIds, personIds),
+      ...missingRefIssues(
+        "reminders.completionEventId",
+        record.id,
+        record.completionEventId ? [record.completionEventId] : [],
+        lifeEventIds,
+      ),
+    );
+  }
 
   if (issues.length) throw new ArchiveValidationError("备份引用完整性校验失败", issues);
 }
