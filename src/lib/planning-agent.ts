@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { parseLooseJson } from "./ai-text";
 import { composeAgentPrompt, fitJsonAgentContext } from "./agent-prompt-budget";
 import { projectAgentRun, type AgentRun, type AgentRunRecorder } from "./agent-run-log";
@@ -18,7 +20,10 @@ import {
   type ArchiveAgentData,
   type ArchiveAgentServices,
 } from "./archive-agent-tools";
+import { ArchiveAgentReferenceSession } from "./archive-agent-reference-session";
+import { resolveSemanticRecordRef } from "./archive-record-resolver";
 import type { TaskRecord } from "./face-db";
+import { semanticPersonEndpointSchema } from "./intake-semantic-plan";
 import { askModel } from "./vision-client";
 import type { ProviderPreset } from "./vision-providers";
 
@@ -38,25 +43,88 @@ export interface PlanningAgentResult {
   summary: string;
   tasks: PlannedTaskDraft[];
   warnings: string[];
+  issues: PlanningContractIssue[];
   rounds: number;
   toolCalls: number;
   run: AgentRun;
 }
 
-interface PlanningToolCall {
-  type: "tool";
-  tool: string;
-  args?: unknown;
-  summary?: unknown;
+export type PlanningContractIssueCode =
+  | "invalid_json"
+  | "invalid_envelope"
+  | "invalid_task"
+  | "legacy_identifier"
+  | "unresolved_person_reference"
+  | "ambiguous_person_reference"
+  | "undisclosed_person_reference";
+
+export interface PlanningContractIssue {
+  code: PlanningContractIssueCode;
+  message: string;
+  path: Array<string | number>;
+  taskIndex?: number;
+  action: "retry_response" | "retry_task" | "review_task";
 }
 
-interface PlanningFinal {
-  type: "final";
-  summary?: unknown;
-  tasks?: unknown;
+export class PlanningContractError extends Error {
+  readonly issues: PlanningContractIssue[];
+
+  constructor(message: string, issues: PlanningContractIssue[]) {
+    super(message);
+    this.name = "PlanningContractError";
+    this.issues = issues;
+  }
 }
 
-type PlanningResponse = PlanningToolCall | PlanningFinal;
+const opaquePersonRefSchema = z
+  .string()
+  .regex(/^ref_[a-f0-9]{32}$/u, "必须是本轮工具返回的 opaque person ref");
+
+const planningPersonRefSchema = z.union([semanticPersonEndpointSchema, opaquePersonRefSchema]);
+
+const planningTaskSchema = z
+  .object({
+    title: z.string().trim().min(1).max(160),
+    detail: z.string().trim().min(1).max(600).optional(),
+    priority: z.enum(["low", "normal", "high"]),
+    due: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/u, "due 必须使用 YYYY-MM-DD")
+      .optional(),
+    people: z.array(planningPersonRefSchema).max(30),
+  })
+  .strict();
+
+const planningToolCallSchema = z
+  .object({
+    type: z.literal("tool"),
+    tool: z.string().trim().min(1).max(100),
+    args: z.unknown().optional(),
+    summary: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict();
+
+const planningFinalSchema = z
+  .object({
+    type: z.literal("final"),
+    summary: z.string().trim().min(1).max(160).optional(),
+    // Tasks are parsed independently so one broken item cannot erase valid siblings.
+    tasks: z.array(z.unknown()).min(1).max(8),
+  })
+  .strict();
+
+const planningResponseSchema = z.discriminatedUnion("type", [
+  planningToolCallSchema,
+  planningFinalSchema,
+]);
+
+type PlanningResponse = z.infer<typeof planningResponseSchema>;
+type PlanningTaskInput = z.infer<typeof planningTaskSchema>;
+
+interface PlanningCorrectionRequest {
+  issues: PlanningContractIssue[];
+  acceptedTitles: string[];
+}
 
 function clipped(value: unknown, max: number) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -68,6 +136,7 @@ function buildPlanningPrompt(options: {
   toolHistory: Array<{ call: unknown; result: unknown }>;
   turn: AgentModelTurnPolicy;
   formatCorrection: boolean;
+  correctionRequest: PlanningCorrectionRequest | null;
 }) {
   const scope = ARCHIVE_AGENT_TOOL_SCOPES.planning;
   const finalOnly = options.turn.finalOnly;
@@ -113,11 +182,11 @@ ${history}
 
 当前第 ${options.turn.absoluteRound} 轮，最多 ${options.turn.maxRounds} 轮。${
       finalOnly
-        ? "这是保留的最终草案轮，不提供工具协议，也不得请求工具。使用已有资料直接完成任务；资料空缺写进 detail，无法可靠绑定人物时让 personIds 为空。"
-        : "需要具体人物参与时，先 search_profiles 或 list_profiles 找到稳定 personId，再用 get_profiles、get_relationships、get_events 核对；需要安排绝对日期时可调用 get_datetime。一次关键词未命中不等于档案中不存在。"
+        ? "这是保留的最终草案轮，不提供工具协议，也不得请求工具。使用已有资料直接完成任务；资料空缺写进 detail，无法可靠绑定人物时让 people 为空。"
+        : "需要具体人物参与时，先 resolve_record_refs、search_profiles 或 list_profiles 定位人物，再用 get_profiles、get_relationships、get_events 核对；需要安排绝对日期时可调用 get_datetime。一次关键词未命中不等于档案中不存在。"
     }
 
-证据足够时输出 1-8 条任务。任务标题写清动作和交付结果；personIds 只能引用工具返回的稳定 ID。资料不足仍可给出不绑定人物的行动，但要在 detail 里写清需要用户确认什么。不要声称已联系、已发送、已预约，也不要直接写入档案。
+证据足够时输出 1-8 条任务。任务标题写清动作和交付结果；people 中每一项只能使用 {"kind":"person","name":"姓名","hints":{...}} 语义引用，或逐字复制本轮工具返回的 ref_... opaque person ref。不得输出 personIds、personId、id、其他 *Id/*Ids 字段或数据库 UUID。本地 resolver 会把已核对的引用绑定到稳定 ID。资料不足仍可给出 people=[] 的行动，但要在 detail 里写清需要用户确认什么。不要声称已联系、已发送、已预约，也不要直接写入档案。
 
 每轮只输出一个 JSON 对象，不要 Markdown。${
       finalOnly
@@ -127,53 +196,200 @@ ${history}
 
 最终草案：`
     }
-{"type":"final","summary":"计划摘要","tasks":[{"title":"联系摄影负责人确认交付清单","detail":"确认拍摄范围、截止时间和文件格式","priority":"high","due":"2026-09-08","personIds":["稳定人物ID"]}]}
+{"type":"final","summary":"计划摘要","tasks":[{"title":"联系摄影负责人确认交付清单","detail":"确认拍摄范围、截止时间和文件格式","priority":"high","due":"2026-09-08","people":[{"kind":"person","name":"唐悦","hints":{"title":"摄影师"}}]}]}
 
-${options.formatCorrection ? "上一轮没有返回可解析的协议对象。本轮直接返回完整 JSON；已有有效工具结果无需重复查询。" : ""}`,
+${options.formatCorrection ? "上一轮没有返回可解析的协议对象。本轮直接返回完整 JSON；已有有效工具结果无需重复查询。" : ""}
+${
+  options.correctionRequest
+    ? `上一轮有部分内容违反 planning.response.v2 契约。已经合格的任务由本地保留，本轮只返回需要修正的任务，不要重复合格任务。若人物尚未核对且当前允许工具，可先调用工具；无法可靠绑定时明确写 people=[] 并在 detail 中提出需要用户确认的信息。
+<contract_correction>${cleanArchiveText(
+        JSON.stringify({
+          acceptedTitles: options.correctionRequest.acceptedTitles,
+          issues: options.correctionRequest.issues.map(({ code, message, path }) => ({
+            code,
+            message,
+            path,
+          })),
+        }),
+        2_400,
+      )}</contract_correction>`
+    : ""
+}`,
   }).prompt;
 }
 
-function normalizeTasks(value: unknown, personIds: ReadonlySet<string>) {
-  const warnings: string[] = [];
-  if (!Array.isArray(value)) return { tasks: [] as PlannedTaskDraft[], warnings };
-  const tasks: PlannedTaskDraft[] = [];
-  value.slice(0, 8).forEach((raw, index) => {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      warnings.push(`第 ${index + 1} 条任务不是对象，已跳过`);
-      return;
-    }
-    const input = raw as Record<string, unknown>;
-    const title = clipped(input.title, 160);
-    if (!title) {
-      warnings.push(`第 ${index + 1} 条任务缺少标题，已跳过`);
-      return;
-    }
-    const rawIds = Array.isArray(input.personIds)
-      ? [...new Set(input.personIds.filter((id): id is string => typeof id === "string"))]
-      : [];
-    const validIds = rawIds.filter((id) => personIds.has(id));
-    if (validIds.length !== rawIds.length) {
-      warnings.push(`${title}：已移除 ${rawIds.length - validIds.length} 个无效人物引用`);
-    }
-    const dueValue = clipped(input.due, 10);
-    const due = /^\d{4}-\d{2}-\d{2}$/u.test(dueValue) ? dueValue : undefined;
-    if (dueValue && !due) warnings.push(`${title}：日期格式无效，已保留为无截止日期`);
-    tasks.push({
-      title,
-      detail: clipped(input.detail, 600) || undefined,
-      priority: input.priority === "high" || input.priority === "low" ? input.priority : "normal",
-      due,
-      personIds: validIds,
-    });
-  });
-  return { tasks, warnings };
+const DATABASE_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const LEGACY_ID_FIELD_PATTERN = /(?:^id$|Id$|Ids$)/u;
+
+function pathText(path: readonly (string | number)[]) {
+  return path.reduce<string>(
+    (result, part) =>
+      typeof part === "number" ? `${result}[${part}]` : `${result}${result ? "." : ""}${part}`,
+    "",
+  );
 }
 
-function collectDisclosedPersonIds(value: unknown, archivePersonIds: ReadonlySet<string>) {
+function legacyIdentifierIssues(raw: unknown, taskIndex: number) {
+  const issues: PlanningContractIssue[] = [];
+  const visit = (current: unknown, path: Array<string | number>) => {
+    if (typeof current === "string") {
+      if (DATABASE_UUID_PATTERN.test(current.trim())) {
+        issues.push({
+          code: "legacy_identifier",
+          message: `第 ${taskIndex + 1} 条任务在 ${pathText(path)} 使用了数据库 UUID；请改用人物语义引用或本轮 opaque ref`,
+          path: ["tasks", taskIndex, ...path],
+          taskIndex,
+          action: "retry_task",
+        });
+      }
+      return;
+    }
+    if (!current || typeof current !== "object") return;
+    if (Array.isArray(current)) {
+      current.forEach((item, index) => visit(item, [...path, index]));
+      return;
+    }
+    Object.entries(current as Record<string, unknown>).forEach(([key, item]) => {
+      if (LEGACY_ID_FIELD_PATTERN.test(key)) {
+        issues.push({
+          code: "legacy_identifier",
+          message: `第 ${taskIndex + 1} 条任务包含旧协议字段 ${pathText([...path, key])}；人物只能写入 people`,
+          path: ["tasks", taskIndex, ...path, key],
+          taskIndex,
+          action: "retry_task",
+        });
+      }
+      visit(item, [...path, key]);
+    });
+  };
+  visit(raw, []);
+  return issues;
+}
+
+function taskSchemaIssues(error: z.ZodError, taskIndex: number): PlanningContractIssue[] {
+  return error.issues.map((issue) => ({
+    code: "invalid_task",
+    message: `第 ${taskIndex + 1} 条任务的 ${pathText(issue.path) || "内容"} 不符合契约：${issue.message}`,
+    path: ["tasks", taskIndex, ...issue.path],
+    taskIndex,
+    action: "retry_task",
+  }));
+}
+
+function responseSchemaIssues(error: z.ZodError): PlanningContractIssue[] {
+  return error.issues.map((issue) => ({
+    code: "invalid_envelope",
+    message: `模型响应的 ${pathText(issue.path) || "外层对象"} 不符合 planning.response.v2：${issue.message}`,
+    path: [...issue.path],
+    action: "retry_response",
+  }));
+}
+
+function normalizeTasks(
+  value: readonly unknown[],
+  archive: ArchiveAgentData,
+  disclosedPersonIds: ReadonlySet<string>,
+  references: ArchiveAgentReferenceSession,
+) {
+  const issues: PlanningContractIssue[] = [];
+  const tasks: PlannedTaskDraft[] = [];
+  value.forEach((raw, index) => {
+    const legacyIssues = legacyIdentifierIssues(raw, index);
+    if (legacyIssues.length) {
+      issues.push(...legacyIssues);
+      return;
+    }
+    const parsed = planningTaskSchema.safeParse(raw);
+    if (!parsed.success) {
+      issues.push(...taskSchemaIssues(parsed.error, index));
+      return;
+    }
+    const input: PlanningTaskInput = parsed.data;
+    const validIds = new Set<string>();
+    const referenceIssues: PlanningContractIssue[] = [];
+    input.people.forEach((rawRef, personIndex) => {
+      const issuePath = ["tasks", index, "people", personIndex];
+      if (typeof rawRef === "string") {
+        const restored = references.restoreHandle(rawRef, "person");
+        if (restored.status !== "resolved") {
+          referenceIssues.push({
+            code: "unresolved_person_reference",
+            message: `第 ${index + 1} 条任务使用了不属于本轮工具结果的人物引用`,
+            path: issuePath,
+            taskIndex: index,
+            action: "retry_task",
+          });
+          return;
+        }
+        if (!disclosedPersonIds.has(restored.stableId)) {
+          referenceIssues.push({
+            code: "undisclosed_person_reference",
+            message: `第 ${index + 1} 条任务的人物尚未通过本轮工具核对`,
+            path: issuePath,
+            taskIndex: index,
+            action: "retry_task",
+          });
+          return;
+        }
+        validIds.add(restored.stableId);
+        return;
+      }
+      const resolution = resolveSemanticRecordRef(rawRef, {
+        persons: archive.persons,
+        events: archive.events,
+        relations: archive.relations,
+        collections: archive.collections ?? [],
+        collectionMemberships: archive.collectionMemberships ?? [],
+      });
+      if (resolution.status !== "resolved" || resolution.candidates.length !== 1) {
+        referenceIssues.push({
+          code:
+            resolution.status === "ambiguous"
+              ? "ambiguous_person_reference"
+              : "unresolved_person_reference",
+          message: `第 ${index + 1} 条任务的${resolution.status === "ambiguous" ? "人物引用有歧义" : "人物引用无法解析"}`,
+          path: issuePath,
+          taskIndex: index,
+          action: "retry_task",
+        });
+        return;
+      }
+      const personId = resolution.candidates[0].id;
+      if (!disclosedPersonIds.has(personId)) {
+        referenceIssues.push({
+          code: "undisclosed_person_reference",
+          message: `第 ${index + 1} 条任务中的 ${resolution.candidates[0].label} 尚未通过本轮工具核对`,
+          path: issuePath,
+          taskIndex: index,
+          action: "retry_task",
+        });
+        return;
+      }
+      validIds.add(personId);
+    });
+    if (referenceIssues.length) {
+      // Never turn “task for Alice” into an apparently valid unbound task.
+      issues.push(...referenceIssues);
+      return;
+    }
+    tasks.push({
+      title: input.title,
+      detail: input.detail,
+      priority: input.priority,
+      due: input.due,
+      personIds: [...validIds],
+    });
+  });
+  return { tasks, issues };
+}
+
+function collectDisclosedPersonIds(value: unknown, references: ArchiveAgentReferenceSession) {
   const disclosed = new Set<string>();
   const visit = (current: unknown) => {
     if (typeof current === "string") {
-      if (archivePersonIds.has(current)) disclosed.add(current);
+      const restored = references.restoreHandle(current, "person");
+      if (restored.status === "resolved") disclosed.add(restored.stableId);
       return;
     }
     if (Array.isArray(current)) {
@@ -186,6 +402,24 @@ function collectDisclosedPersonIds(value: unknown, archivePersonIds: ReadonlySet
   };
   visit(value);
   return disclosed;
+}
+
+function mergePlannedTasks(
+  accepted: readonly PlannedTaskDraft[],
+  additions: readonly PlannedTaskDraft[],
+) {
+  const keyed = new Map<string, PlannedTaskDraft>();
+  [...accepted, ...additions].forEach((task) => {
+    const key = JSON.stringify({
+      title: task.title,
+      detail: task.detail,
+      priority: task.priority,
+      due: task.due,
+      personIds: [...task.personIds].sort(),
+    });
+    if (!keyed.has(key)) keyed.set(key, task);
+  });
+  return [...keyed.values()].slice(0, 8);
 }
 
 export async function runPlanningAgent(options: {
@@ -212,10 +446,32 @@ export async function runPlanningAgent(options: {
     signal: options.signal,
   });
   const toolHistory: Array<{ call: unknown; result: unknown }> = [];
-  const repeatedCalls = new Map<string, number>();
-  const archivePersonIds = new Set(options.archive.persons.map((person) => person.id));
+  const cachedToolResults = new Map<string, unknown>();
+  const references = new ArchiveAgentReferenceSession(
+    {
+      ...options.archive,
+      collections: options.archive.collections ?? [],
+      collectionMemberships: options.archive.collectionMemberships ?? [],
+    },
+    runtime.recorder.runId,
+  );
   const disclosedPersonIds = new Set<string>();
   let formatCorrection = false;
+  let correctionRequest: PlanningCorrectionRequest | null = null;
+  let correctionAttempts = 0;
+  let acceptedTasks: PlannedTaskDraft[] = [];
+  const correctionWarnings: string[] = [];
+
+  const reportContractIssues = (issues: readonly PlanningContractIssue[]) => {
+    if (!issues.length) return;
+    runtime.recordLifecycle(
+      "validation",
+      { contract: "planning.response.v2", issues },
+      "failed",
+      "contract",
+    );
+    issues.forEach((issue) => trace({ kind: "check", text: issue.message }));
+  };
 
   const finishRun = (reason: "completed" | "suspended" = "completed") => {
     runtime.finalize(reason);
@@ -227,6 +483,58 @@ export async function runPlanningAgent(options: {
     });
     saveAgentRunBestEffort(run, runtime.recorder.events());
     return run;
+  };
+
+  const completeWithTasks = (
+    tasks: PlannedTaskDraft[],
+    requestedSummary: string | undefined,
+    unresolvedIssues: PlanningContractIssue[],
+  ): PlanningAgentResult => {
+    const warnings = [
+      ...new Set([...correctionWarnings, ...unresolvedIssues.map((issue) => issue.message)]),
+    ];
+    const summary = unresolvedIssues.length
+      ? `形成 ${tasks.length} 条草案；另有 ${new Set(unresolvedIssues.map((issue) => issue.taskIndex)).size || 1} 条内容需要修正`
+      : requestedSummary || `形成 ${tasks.length} 条草案`;
+    trace({ kind: "model", text: summary });
+    runtime.recordLifecycle("proposal", {
+      goal,
+      taskCount: tasks.length,
+      warnings,
+      issues: unresolvedIssues,
+      persistence: "awaiting_user_approval",
+    });
+    trace({ kind: "done", text: `草案已生成，等待用户批准 ${tasks.length} 项` });
+    const snapshot = runtime.contextBudget.snapshot();
+    return {
+      summary,
+      tasks,
+      warnings,
+      issues: unresolvedIssues,
+      rounds: snapshot.rounds,
+      toolCalls: snapshot.toolCalls,
+      run: finishRun(),
+    };
+  };
+
+  const requestContractCorrection = (
+    issues: PlanningContractIssue[],
+    turn: AgentModelTurnPolicy,
+    message: string,
+  ) => {
+    reportContractIssues(issues);
+    correctionWarnings.push(...issues.map((issue) => issue.message));
+    if (turn.finalOnly || correctionAttempts >= 1) return false;
+    correctionAttempts += 1;
+    correctionRequest = {
+      issues,
+      acceptedTitles: acceptedTasks.map((task) => task.title),
+    };
+    formatCorrection = issues.some(
+      (issue) => issue.code === "invalid_json" || issue.code === "invalid_envelope",
+    );
+    trace({ kind: "check", text: message });
+    return true;
   };
 
   trace({
@@ -245,6 +553,7 @@ export async function runPlanningAgent(options: {
         toolHistory,
         turn,
         formatCorrection,
+        correctionRequest,
       });
       let raw = "";
       trace({ kind: "status", text: `正在编排第 ${turn.absoluteRound} 轮` });
@@ -281,75 +590,92 @@ export async function runPlanningAgent(options: {
           : new Error("行动规划模型调用失败");
       }
 
-      let response: PlanningResponse;
+      let parsedResponse: unknown;
       try {
-        response = parseLooseJson<PlanningResponse>(modelDecision.value);
+        parsedResponse = parseLooseJson<unknown>(modelDecision.value);
       } catch {
-        if (turn.finalOnly) {
-          throw new Error("行动规划的最终草案轮没有返回可解析的 JSON 对象");
-        }
-        formatCorrection = true;
-        trace({ kind: "check", text: "模型返回格式不完整，下一轮将按统一协议继续" });
-        continue;
-      }
-
-      if (response.type === "final") {
-        const normalized = normalizeTasks(response.tasks, disclosedPersonIds);
-        if (!normalized.tasks.length) {
-          if (turn.finalOnly) {
-            throw new Error("行动规划的最终草案轮没有返回可用行动项");
-          }
-          formatCorrection = true;
-          trace({ kind: "check", text: "草案中没有可用行动项，下一轮将补齐" });
+        const issues: PlanningContractIssue[] = [
+          {
+            code: "invalid_json",
+            message: "模型没有返回可解析的 JSON 对象",
+            path: [],
+            action: "retry_response",
+          },
+        ];
+        if (requestContractCorrection(issues, turn, "模型返回格式不完整，下一轮只修正协议格式")) {
           continue;
         }
-        normalized.warnings.forEach((text) => trace({ kind: "check", text }));
-        const summary = clipped(response.summary, 160) || `形成 ${normalized.tasks.length} 条草案`;
-        trace({ kind: "model", text: summary });
-        runtime.recordLifecycle("proposal", {
-          goal,
-          taskCount: normalized.tasks.length,
-          warnings: normalized.warnings,
-          persistence: "awaiting_user_approval",
-        });
-        trace({ kind: "done", text: `草案已生成，等待用户批准 ${normalized.tasks.length} 项` });
-        const snapshot = runtime.contextBudget.snapshot();
-        return {
-          summary,
-          tasks: normalized.tasks,
-          warnings: normalized.warnings,
-          rounds: snapshot.rounds,
-          toolCalls: snapshot.toolCalls,
-          run: finishRun(),
-        };
+        if (acceptedTasks.length) return completeWithTasks(acceptedTasks, undefined, issues);
+        throw new PlanningContractError("行动规划没有返回可解析的协议对象", issues);
       }
 
-      if (response.type !== "tool" || typeof response.tool !== "string") {
-        if (turn.finalOnly) {
-          throw new Error("行动规划的最终草案轮返回了未知协议对象");
+      const parsedEnvelope = planningResponseSchema.safeParse(parsedResponse);
+      if (!parsedEnvelope.success) {
+        const issues = responseSchemaIssues(parsedEnvelope.error);
+        if (
+          requestContractCorrection(
+            issues,
+            turn,
+            "模型响应不符合 planning.response.v2，下一轮只修正错误字段",
+          )
+        ) {
+          continue;
         }
-        formatCorrection = true;
-        trace({ kind: "check", text: "模型没有返回有效工具调用，下一轮将按统一协议继续" });
-        continue;
+        if (acceptedTasks.length) return completeWithTasks(acceptedTasks, undefined, issues);
+        throw new PlanningContractError("行动规划响应不符合 planning.response.v2", issues);
       }
+      const response: PlanningResponse = parsedEnvelope.data;
+
+      if (response.type === "final") {
+        const normalized = normalizeTasks(
+          response.tasks,
+          options.archive,
+          disclosedPersonIds,
+          references,
+        );
+        acceptedTasks = mergePlannedTasks(acceptedTasks, normalized.tasks);
+        if (normalized.issues.length) {
+          if (
+            requestContractCorrection(
+              normalized.issues,
+              turn,
+              acceptedTasks.length
+                ? "已保留合格任务；下一轮只修正不合格任务"
+                : "草案任务不符合契约；下一轮只修正列出的问题",
+            )
+          ) {
+            continue;
+          }
+          if (acceptedTasks.length) {
+            return completeWithTasks(acceptedTasks, response.summary, normalized.issues);
+          }
+          throw new PlanningContractError(
+            "行动规划没有可用行动项；不合格任务已列入结构化问题",
+            normalized.issues,
+          );
+        }
+        correctionRequest = null;
+        formatCorrection = false;
+        return completeWithTasks(acceptedTasks, response.summary, []);
+      }
+
       if (turn.finalOnly) {
         throw new Error("行动规划在最终草案轮仍请求工具，未执行该调用");
       }
-      formatCorrection = false;
+      if (!correctionRequest) formatCorrection = false;
       trace({
         kind: "model",
-        text: clipped(response.summary, 100) || `需要${archiveToolLabel(response.tool)}`,
+        text: response.summary || `需要${archiveToolLabel(response.tool)}`,
       });
       const call = { tool: response.tool, args: response.args ?? {} };
       const callKey = JSON.stringify(call);
-      const repeated = (repeatedCalls.get(callKey) ?? 0) + 1;
-      repeatedCalls.set(callKey, repeated);
-      if (repeated > 1) {
+      const cachedResult = cachedToolResults.get(callKey);
+      if (cachedResult !== undefined) {
         toolHistory.push({
           call,
-          result: { status: "already_available", instruction: "使用已有结果继续规划" },
+          result: cachedResult,
         });
-        trace({ kind: "check", text: "相同工具结果已经取得，已跳过重复读取" });
+        trace({ kind: "check", text: "已把相同工具的完整缓存结果重新放入当前上下文" });
         continue;
       }
 
@@ -366,18 +692,15 @@ export async function runPlanningAgent(options: {
                 toolDecision.error instanceof Error ? toolDecision.error.message : "工具执行失败",
             };
       if (toolDecision.status === "ok") {
-        collectDisclosedPersonIds(result, archivePersonIds).forEach((id) =>
-          disclosedPersonIds.add(id),
-        );
+        collectDisclosedPersonIds(result, references).forEach((id) => disclosedPersonIds.add(id));
       }
       trace({
         kind: toolDecision.status === "ok" ? "tool" : "error",
         text: `${archiveToolLabel(response.tool)}${toolDecision.status === "ok" ? "完成" : "失败"}`,
       });
-      toolHistory.push({
-        call,
-        result: archiveAgentToolRegistry.modelResult(response.tool, result),
-      });
+      const modelResult = archiveAgentToolRegistry.modelResult(response.tool, result);
+      toolHistory.push({ call, result: modelResult });
+      if (toolDecision.status === "ok") cachedToolResults.set(callKey, modelResult);
     }
     throw new Error("行动规划在本次轮次内没有形成草案；可缩短目标或切换模型后重试");
   } catch (error) {

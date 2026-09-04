@@ -56,11 +56,34 @@ export function claimIntakeJob() {
   set({ ...IDLE, busy: state.busy, trace: state.trace });
 }
 
+/**
+ * Rebuild the transient page projection from the durable Agent ledger.
+ * The ledger remains authoritative; this module only feeds useSyncExternalStore.
+ */
+export function restoreIntakeJob(input: {
+  trace: IntakeJobTrace[];
+  text: string | null;
+  extra: string | null;
+  result?: unknown | null;
+  error?: string | null;
+}) {
+  activeRunId += 1;
+  set({
+    busy: false,
+    trace: input.trace.slice(-24),
+    result: input.result ?? null,
+    error: input.error ?? null,
+    extra: input.extra,
+    text: input.text,
+  });
+}
+
 /** 启动一次整理；已经在跑就忽略 */
 export function startIntakeJob(options: {
   text: string;
   extra: string | null;
   initialTrace: string;
+  priorTrace?: IntakeJobTrace[];
   run: (report: IntakeJobReporter) => Promise<unknown>;
 }) {
   if (state.busy) return;
@@ -76,7 +99,10 @@ export function startIntakeJob(options: {
   };
   set({
     busy: true,
-    trace: [{ kind: "status", text: options.initialTrace, at: runStartedAt }],
+    trace: [
+      ...(options.priorTrace ?? []).slice(-23),
+      { kind: "status" as const, text: options.initialTrace, at: runStartedAt },
+    ].slice(-24),
     result: null,
     error: null,
     extra: options.extra,

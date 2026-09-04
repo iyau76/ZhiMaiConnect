@@ -1,9 +1,11 @@
 import { z } from "zod";
 
 import { isAgentDeadlineExceeded, withAgentDeadline } from "./agent-deadline";
+import { classifyAgentIssue, type AgentIssueClassification } from "./agent-issue-classifier";
 import {
   MemoryAgentRunRecorder,
   type AgentRunEventStatus,
+  type AgentRunIssueCategory,
   type AgentRunRecorder,
   type AgentTokenCount,
 } from "./agent-run-log";
@@ -289,7 +291,12 @@ export type AgentModelRoundDecision =
 
 export type AgentToolExecutionDecision =
   | { status: "ok"; value: unknown; budget: AgentBudgetSnapshot }
-  | { status: "failed"; error: unknown; budget: AgentBudgetSnapshot }
+  | {
+      status: "failed";
+      error: unknown;
+      issue: AgentIssueClassification;
+      budget: AgentBudgetSnapshot;
+    }
   | AgentFinalizeDecision;
 
 export interface AgentModelInvocationResult<T> {
@@ -307,7 +314,12 @@ export type AgentModelExecutionDecision<T> =
       /** Present when the response consumed the final available budget. */
       finalize?: AgentFinalizeDecision;
     }
-  | { status: "failed"; error: unknown; budget: AgentBudgetSnapshot }
+  | {
+      status: "failed";
+      error: unknown;
+      issue: AgentIssueClassification;
+      budget: AgentBudgetSnapshot;
+    }
   | AgentFinalizeDecision;
 
 type LifecycleEventKind = "proposal" | "approval" | "commit" | "validation";
@@ -350,9 +362,11 @@ export class AgentRuntime<TServices = unknown> {
   }
 
   private finalizeBudget(decision: AgentFinalizeDecision) {
+    const issue = classifyAgentIssue(decision.reason, { phase: "budget" });
     this.recorder.record({
       kind: "budget",
       status: "blocked",
+      issueCategory: issue.category,
       payload: { reason: decision.reason, snapshot: decision.budget },
     });
     return this.finalize(decision.reason);
@@ -424,7 +438,12 @@ export class AgentRuntime<TServices = unknown> {
         });
       }
       if (this.signal?.aborted) return this.finalize("aborted");
-      return { status: "failed", error, budget: this.contextBudget.snapshot() };
+      return {
+        status: "failed",
+        error,
+        issue: classifyAgentIssue(error, { phase: "tool" }),
+        budget: this.contextBudget.snapshot(),
+      };
     }
   }
 
@@ -450,9 +469,11 @@ export class AgentRuntime<TServices = unknown> {
             },
             onRetry: (event) => {
               const retryEvent: AgentModelRetryEvent = { ...event, round: started.round };
+              const issue = classifyAgentIssue(event.error, { phase: "model" });
               this.recorder.record({
                 kind: "validation",
                 status: "failed",
+                issueCategory: issue.category,
                 round: started.round,
                 payload: { status: "transport_retry", ...event },
               });
@@ -478,9 +499,11 @@ export class AgentRuntime<TServices = unknown> {
         ...(completed.status === "finalize" ? { finalize: completed } : {}),
       };
     } catch (error) {
+      const issue = classifyAgentIssue(error, { phase: "model" });
       this.recorder.record({
         kind: "model_response",
         status: "failed",
+        issueCategory: issue.category,
         round: started.round,
         payload: error instanceof Error ? error : { error },
       });
@@ -492,7 +515,7 @@ export class AgentRuntime<TServices = unknown> {
         });
       }
       if (this.signal?.aborted) return this.finalize("aborted");
-      return { status: "failed", error, budget: this.contextBudget.snapshot() };
+      return { status: "failed", error, issue, budget: this.contextBudget.snapshot() };
     }
   }
 
@@ -500,10 +523,12 @@ export class AgentRuntime<TServices = unknown> {
     kind: LifecycleEventKind,
     payload: unknown,
     status: AgentRunEventStatus = "succeeded",
+    issueCategory?: AgentRunIssueCategory,
   ) {
     return this.recorder.record({
       kind,
       status,
+      issueCategory,
       round: this.contextBudget.snapshot().rounds + this.roundOffset,
       payload,
     });

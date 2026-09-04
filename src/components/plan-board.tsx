@@ -20,6 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentRun } from "@/lib/agent-run-log";
+import { indexedDbMutationArtifactRepository } from "@/lib/agent-run-ledger";
 import {
   facesDb,
   type LifeEventRecord,
@@ -32,6 +33,7 @@ import { createArchiveMutationPlan, createTaskOperation } from "@/lib/archive-mu
 import {
   MutationCommitCoordinator,
   type MutationCommitReceipt,
+  type MutationProposalEntry,
 } from "@/lib/mutation-commit-coordinator";
 import {
   runPlanningAgent,
@@ -42,7 +44,14 @@ import { makeSource } from "@/lib/provenance";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 const OWNER_KEY = "openglass.plan-owner";
-const planningMutationCoordinator = new MutationCommitCoordinator();
+function createPlanningMutationCoordinator() {
+  return new MutationCommitCoordinator({
+    artifactRepository: indexedDbMutationArtifactRepository,
+    scope: "planning",
+  });
+}
+
+const planningMutationCoordinator = createPlanningMutationCoordinator();
 
 const STATUS: Array<{ id: TaskRecord["status"]; zh: string; en: string; icon: typeof Circle }> = [
   { id: "todo", zh: "待办", en: "To do", icon: Circle },
@@ -65,6 +74,26 @@ function pendingTasks(tasks: PlannedTaskDraft[]): PendingTask[] {
   return tasks.map((task) => ({ ...task, id: crypto.randomUUID(), selected: true }));
 }
 
+function restorePendingTasks(proposals: readonly MutationProposalEntry[]): PendingTask[] {
+  return proposals.flatMap((proposal) =>
+    proposal.plan.operations.flatMap((operation) =>
+      operation.kind === "create_task"
+        ? [
+            {
+              id: operation.id,
+              selected: true,
+              title: operation.replacement.title,
+              detail: operation.replacement.detail ?? undefined,
+              priority: operation.replacement.priority,
+              due: operation.replacement.due ?? undefined,
+              personIds: [...operation.replacement.personIds],
+            },
+          ]
+        : [],
+    ),
+  );
+}
+
 export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; active?: boolean }) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [people, setPeople] = useState<PersonRecord[]>([]);
@@ -81,6 +110,8 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
   const [trace, setTrace] = useState<PlanningTraceEvent[]>([]);
   const [latestRun, setLatestRun] = useState<AgentRun | null>(null);
   const [latestReceipt, setLatestReceipt] = useState<MutationCommitReceipt | null>(null);
+  const [pendingProposals, setPendingProposals] = useState<MutationProposalEntry[]>([]);
+  const [artifactsReady, setArtifactsReady] = useState(false);
   const [drafts, setDrafts] = useState<PendingTask[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -100,6 +131,43 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
   useEffect(() => {
     if (active) void refresh();
   }, [active, refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void planningMutationCoordinator
+      .hydrate()
+      .then(async ({ proposals, receipts }) => {
+        if (cancelled) return;
+        setPendingProposals(proposals);
+        setLatestReceipt(
+          [...receipts]
+            .filter((receipt) => !receipt.undoneAt)
+            .sort(
+              (left, right) =>
+                right.committedAt - left.committedAt || right.id.localeCompare(left.id),
+            )[0] ?? null,
+        );
+        if (proposals.length) {
+          setDrafts(restorePendingTasks(proposals));
+          const restoredAssignee = proposals
+            .flatMap((proposal) => proposal.plan.operations)
+            .find((operation) => operation.kind === "create_task")?.replacement.assignee;
+          if (restoredAssignee) setOwner(restoredAssignee);
+        }
+        await refresh();
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : t("行动草案恢复失败"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setArtifactsReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh]);
 
   useEffect(() => {
     try {
@@ -159,7 +227,7 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
   };
 
   const generatePlan = async () => {
-    if (!goal.trim() || planning) return;
+    if (!goal.trim() || planning || !artifactsReady || pendingProposals.length) return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -199,41 +267,62 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
       return;
     }
     const now = Date.now();
-    const plan = createArchiveMutationPlan(
-      {
-        title: `${t("行动计划")}：${goal.trim().slice(0, 80)}`,
-        reason: t("用户批准了智能体生成并经人工编辑的行动草案"),
-        operations: approved.map((task) =>
-          createTaskOperation({
-            reason: t("用户批准此行动项"),
-            replacement: {
-              title: task.title.trim(),
-              detail: task.detail?.trim() || null,
-              assignee: owner.trim() || null,
-              personIds: task.personIds,
-              priority: task.priority,
-              due: task.due || null,
-            },
-          }),
-        ),
-      },
-      { createdAt: now },
-    );
-    const proposal = planningMutationCoordinator.enqueue(plan, { sourceRunId: latestRun?.id });
     setApproving(true);
     try {
+      let proposals = pendingProposals;
+      if (!proposals.length) {
+        const plan = createArchiveMutationPlan(
+          {
+            title: `${t("行动计划")}：${goal.trim().slice(0, 80)}`,
+            reason: t("用户批准了智能体生成并经人工编辑的行动草案"),
+            operations: approved.map((task) =>
+              createTaskOperation({
+                reason: t("用户批准此行动项"),
+                replacement: {
+                  title: task.title.trim(),
+                  detail: task.detail?.trim() || null,
+                  assignee: owner.trim() || null,
+                  personIds: task.personIds,
+                  priority: task.priority,
+                  due: task.due || null,
+                },
+              }),
+            ),
+          },
+          { createdAt: now },
+        );
+        proposals = [planningMutationCoordinator.enqueue(plan, { sourceRunId: latestRun?.id })];
+        await planningMutationCoordinator.flushPersistence();
+        setPendingProposals(proposals);
+      }
       const receipt = await planningMutationCoordinator.commit({
         authorizationMode: "standard",
-        proposalIds: [proposal.id],
+        proposalIds: proposals.map((proposal) => proposal.id),
         signature: { signer: "user", signedAt: now },
       });
       setLatestReceipt(receipt);
+      setPendingProposals([]);
       setDrafts([]);
       await refresh();
       toast.success(`${t("已批准并加入行动计划")} ${approved.length}`);
     } catch (error) {
-      planningMutationCoordinator.discard([proposal.id]);
       toast.error(error instanceof Error ? error.message : t("行动计划写入失败"));
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const discardDrafts = async () => {
+    setApproving(true);
+    try {
+      if (pendingProposals.length) {
+        planningMutationCoordinator.discard(pendingProposals.map((proposal) => proposal.id));
+        await planningMutationCoordinator.flushPersistence();
+      }
+      setPendingProposals([]);
+      setDrafts([]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("放弃行动草案失败"));
     } finally {
       setApproving(false);
     }
@@ -285,7 +374,7 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
           />
           <Button
             className="self-stretch sm:self-end"
-            disabled={planning || !goal.trim()}
+            disabled={planning || !goal.trim() || !artifactsReady || pendingProposals.length > 0}
             onClick={() => void generatePlan()}
           >
             {planning ? (
@@ -334,7 +423,12 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" onClick={() => setDrafts([])}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={approving}
+                onClick={() => void discardDrafts()}
+              >
                 <X className="size-3.5" aria-hidden="true" />
                 {t("放弃草案")}
               </Button>

@@ -23,7 +23,8 @@ describe("structured name-language answers", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.rendered).toContain("对象：何澜（person:doctor）");
+    expect(result.rendered).toContain("对象：何澜");
+    expect(result.rendered).not.toContain("person:doctor");
     expect(result.rendered).toContain("模型生成，未写入档案");
   });
 

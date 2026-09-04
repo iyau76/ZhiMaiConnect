@@ -5,6 +5,8 @@ import {
   detailedArchivePerson,
   type ArchiveAgentData,
 } from "./archive-agent-tools";
+import type { ArchiveAgentReferenceSession } from "./archive-agent-reference-session";
+import type { ResolvedRecordDomain } from "./archive-record-resolver";
 import type { CandidateRecommendation } from "./recommendation";
 
 export type RecommendationDecisionMode = "open" | "connection" | "target_side";
@@ -28,7 +30,6 @@ export interface ArchiveCitation {
 }
 
 interface ArchiveGroundingSource {
-  ref: string;
   relatedPersonIds: Set<string>;
   identityValues: Set<string>;
   claimPrefix: string;
@@ -184,24 +185,35 @@ function archiveGroundingSources(data: ArchiveAgentData) {
   });
   const sources = new Map<string, ArchiveGroundingSource>();
   for (const person of data.persons) {
-    const structured = detailedArchivePerson(person);
+    const { id: _personId, ...structured } = detailedArchivePerson(person);
+    const duplicateLabelParts = [
+      person.profile?.org,
+      person.profile?.title,
+      person.profile?.relation,
+    ]
+      .map((item) => cleanArchiveText(item, 80))
+      .filter(Boolean);
     sources.set(`person:${person.id}`, {
-      ref: `person:${person.id}`,
       relatedPersonIds: new Set([person.id]),
       identityValues: new Set([person.id, person.name]),
       claimPrefix:
         (normalizedNameCounts.get(normalized(person.name)) ?? 0) > 1
-          ? `${person.name}（person:${person.id}）`
+          ? `${person.name}${duplicateLabelParts.length ? `（${duplicateLabelParts.join(" · ")}）` : ""}`
           : person.name,
       structured,
     });
   }
   for (const relation of data.relations) {
-    const structured = compactArchiveRelation(relation, names);
+    const {
+      id: _relationId,
+      fromId: _fromId,
+      toId: _toId,
+      supportingAssertionIds: _supportingAssertionIds,
+      ...structured
+    } = compactArchiveRelation(relation, names);
     const from = names.get(relation.fromId) ?? "未知人物";
     const to = names.get(relation.toId) ?? "未知人物";
     sources.set(`relation:${relation.id}`, {
-      ref: `relation:${relation.id}`,
       relatedPersonIds: new Set([relation.fromId, relation.toId]),
       identityValues: new Set([relation.id, relation.fromId, relation.toId, from, to]),
       claimPrefix: `${from}与${to}`,
@@ -211,13 +223,18 @@ function archiveGroundingSources(data: ArchiveAgentData) {
     });
   }
   for (const event of data.events) {
-    const structured = compactArchiveEvent(event, names);
+    const {
+      id: _eventId,
+      personIds: _personIds,
+      ...structured
+    } = compactArchiveEvent(event, names);
     const personNames = (event.personIds ?? []).flatMap((id) => names.get(id) ?? []);
     sources.set(`event:${event.id}`, {
-      ref: `event:${event.id}`,
       relatedPersonIds: new Set(event.personIds ?? []),
       identityValues: new Set([event.id, ...(event.personIds ?? []), ...personNames]),
-      claimPrefix: personNames.length ? personNames.join("与") : "事件记录",
+      claimPrefix:
+        cleanArchiveText(event.title, 120) ||
+        (personNames.length ? personNames.join("与") : "事件记录"),
       structured,
     });
   }
@@ -226,16 +243,16 @@ function archiveGroundingSources(data: ArchiveAgentData) {
       .filter((membership) => membership.collectionId === collection.id)
       .map((membership) => membership.personId);
     const structured = {
-      id: collection.id,
       name: cleanArchiveText(collection.name, 100),
       kind: collection.kind,
-      memberIds,
+      members: memberIds
+        .map((personId) => cleanArchiveText(names.get(personId), 80))
+        .filter(Boolean),
     };
     sources.set(`collection:${collection.id}`, {
-      ref: `collection:${collection.id}`,
       relatedPersonIds: new Set(memberIds),
       identityValues: new Set([collection.id, ...memberIds]),
-      claimPrefix: "圈层记录",
+      claimPrefix: `圈层“${cleanArchiveText(collection.name, 100)}”`,
       structured,
     });
   }
@@ -435,6 +452,8 @@ export function resolveAssistantArchiveCitations(options: {
   archiveClaims: unknown;
   archive: ArchiveAgentData;
   includeArchive: boolean;
+  /** Model boundary: only opaque refs issued by this exact session are accepted. */
+  referenceSession: ArchiveAgentReferenceSession;
   hasStructuredNonArchiveAnswer?: boolean;
 }): AssistantGroundingResult {
   if (!options.includeArchive) return { ok: true, citations: [] };
@@ -446,27 +465,40 @@ export function resolveAssistantArchiveCitations(options: {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const value = raw as Record<string, unknown>;
     const requestedSourceRef = typeof value.sourceRef === "string" ? value.sourceRef.trim() : "";
-    const sourceRef = sources.has(requestedSourceRef)
-      ? requestedSourceRef
-      : sources.has(`person:${requestedSourceRef}`)
-        ? `person:${requestedSourceRef}`
-        : requestedSourceRef;
+    const typed = /^(person|relation|event|collection):(ref_[a-f0-9]{32})$/u.exec(
+      requestedSourceRef,
+    );
+    const bare = /^(ref_[a-f0-9]{32})$/u.exec(requestedSourceRef);
+    if (!typed && !bare) continue;
+    const handle = typed?.[2] ?? bare?.[1] ?? "";
+    const domains: ResolvedRecordDomain[] = typed
+      ? [typed[1] as ResolvedRecordDomain]
+      : ["person", "relation", "event", "collection"];
+    let sourceKey = "";
+    let visibleSourceRef = "";
+    for (const domain of domains) {
+      const resolution = options.referenceSession.restoreHandle(handle, domain);
+      if (resolution.status !== "resolved") continue;
+      sourceKey = `${domain}:${resolution.stableId}`;
+      visibleSourceRef = `${domain}:${handle}`;
+      break;
+    }
     const rawRequestedField =
       typeof value.field === "string" && /^[A-Za-z][A-Za-z0-9_.]{0,100}$/.test(value.field.trim())
         ? value.field.trim()
         : undefined;
     const requestedQuote = cleanArchiveText(value.quote, 300);
-    const source = sources.get(sourceRef);
+    const source = sources.get(sourceKey);
     if (!source) continue;
     const requestedField = resolveProjectedFieldPath(source.structured, rawRequestedField);
     const selection = locallySelectedCitation(source, requestedQuote, requestedField);
     if (!selection) continue;
-    const citationKey = `${sourceRef}\u0000${requestedField ?? ""}\u0000${selection.quote}`;
+    const citationKey = `${sourceKey}\u0000${requestedField ?? ""}\u0000${selection.quote}`;
     if (!citationKeys.has(citationKey)) {
       citationKeys.add(citationKey);
       citations.push({
         kind: selection.state === "missing" ? "gap" : "fact",
-        sourceRef,
+        sourceRef: visibleSourceRef,
         ...(requestedField ? { field: requestedField } : {}),
         quote: selection.quote,
         claim: selection.claim ?? canonicalClaim(source, selection.quote),

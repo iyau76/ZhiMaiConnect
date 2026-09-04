@@ -50,4 +50,36 @@ describe("intake background job trace", () => {
       text: "模型格式错误",
     });
   });
+
+  it("restores a page projection without pretending that work is still running", async () => {
+    const job = await import("./intake-job");
+    job.restoreIntakeJob({
+      trace: [{ kind: "status", text: "UNDERSTAND", at: 10 }],
+      text: "source",
+      extra: null,
+    });
+
+    expect(job.getIntakeJob()).toMatchObject({
+      busy: false,
+      text: "source",
+      extra: null,
+      result: null,
+      error: null,
+    });
+    expect(job.getIntakeJob().trace).toEqual([{ kind: "status", text: "UNDERSTAND", at: 10 }]);
+  });
+
+  it("keeps the durable trace prefix when a suspended job resumes", async () => {
+    const job = await import("./intake-job");
+    job.startIntakeJob({
+      text: "source",
+      extra: null,
+      initialTrace: "继续执行",
+      priorTrace: [{ kind: "check", text: "已完成批次 1", at: 10 }],
+      run: async () => "done",
+    });
+
+    await vi.waitFor(() => expect(job.getIntakeJob().busy).toBe(false));
+    expect(job.getIntakeJob().trace.map((item) => item.text)).toEqual(["已完成批次 1", "继续执行"]);
+  });
 });

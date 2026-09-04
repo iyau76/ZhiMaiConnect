@@ -1,6 +1,62 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveAssistantArchiveCitations as validateAssistantArchiveGrounding } from "./agent-output-grounding";
+import { resolveAssistantArchiveCitations } from "./agent-output-grounding";
+import { ArchiveAgentReferenceSession } from "./archive-agent-reference-session";
+import type { ArchiveAgentData } from "./archive-agent-tools";
+
+type GroundingInput = Omit<
+  Parameters<typeof resolveAssistantArchiveCitations>[0],
+  "referenceSession"
+>;
+
+function fixtureSourceRef(
+  sourceRef: unknown,
+  archive: ArchiveAgentData,
+  referenceSession: ArchiveAgentReferenceSession,
+) {
+  if (typeof sourceRef !== "string") return sourceRef;
+  const match = /^(person|relation|event|collection):(.+)$/u.exec(sourceRef);
+  if (!match) return sourceRef;
+  const [, domain, stableId] = match;
+  const label =
+    domain === "person"
+      ? archive.persons.find((person) => person.id === stableId)?.name
+      : domain === "relation"
+        ? archive.relations.find((relation) => relation.id === stableId)?.label
+        : domain === "event"
+          ? archive.events.find((event) => event.id === stableId)?.title
+          : archive.collections?.find((collection) => collection.id === stableId)?.name;
+  if (!label) return sourceRef;
+  const handle = referenceSession.reference(
+    domain as "person" | "relation" | "event" | "collection",
+    stableId,
+    label,
+  ).handle;
+  return `${domain}:${handle}`;
+}
+
+/** Tests express fixture identity readably, then cross the real opaque model boundary. */
+function validateAssistantArchiveGrounding(options: GroundingInput) {
+  const referenceSession = new ArchiveAgentReferenceSession(
+    {
+      ...options.archive,
+      collections: options.archive.collections ?? [],
+      collectionMemberships: options.archive.collectionMemberships ?? [],
+    },
+    "grounding-test",
+  );
+  const archiveClaims = Array.isArray(options.archiveClaims)
+    ? options.archiveClaims.map((raw) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+        const claim = raw as Record<string, unknown>;
+        return {
+          ...claim,
+          sourceRef: fixtureSourceRef(claim.sourceRef, options.archive, referenceSession),
+        };
+      })
+    : options.archiveClaims;
+  return resolveAssistantArchiveCitations({ ...options, archiveClaims, referenceSession });
+}
 
 const archive = {
   persons: [
@@ -114,7 +170,10 @@ describe("assistant archive grounding", () => {
 
     expect(result.ok).toBe(true);
     expect(result.citations).toEqual([
-      expect.objectContaining({ sourceRef: "relation:colleagues", quote: "同事" }),
+      expect.objectContaining({
+        sourceRef: expect.stringMatching(/^relation:ref_/u),
+        quote: "同事",
+      }),
     ]);
   });
 
@@ -156,7 +215,11 @@ describe("assistant archive grounding", () => {
 
     expect(result.ok).toBe(true);
     expect(result.citations).toEqual([
-      expect.objectContaining({ sourceRef: "person:first-love", field: "likes", quote: "猫" }),
+      expect.objectContaining({
+        sourceRef: expect.stringMatching(/^person:ref_/u),
+        field: "likes",
+        quote: "猫",
+      }),
     ]);
     expect(result.evidenceText).toContain("苏晚：猫");
   });
@@ -275,17 +338,26 @@ describe("assistant archive grounding", () => {
     expect(result.evidenceText).toContain("小王子：喜欢童话");
   });
 
-  it("renders a visible stable marker for duplicate display names", () => {
+  it("disambiguates duplicate display names with human-readable context and no stable ID", () => {
     const result = validateAssistantArchiveGrounding({
       question: "张伟喜欢什么？",
       answer: "",
       archiveClaims: [{ sourceRef: "person:first", quote: "喜欢摄影" }],
       archive: {
         persons: [
-          { id: "first", name: "张伟", note: "喜欢摄影", descriptors: [], thumb: "", createdAt: 1 },
+          {
+            id: "first",
+            name: "张伟",
+            profile: { org: "设计院" },
+            note: "喜欢摄影",
+            descriptors: [],
+            thumb: "",
+            createdAt: 1,
+          },
           {
             id: "second",
             name: "张伟",
+            profile: { org: "学校" },
             note: "喜欢跑步",
             descriptors: [],
             thumb: "",
@@ -299,7 +371,9 @@ describe("assistant archive grounding", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.evidenceText).toContain("person:first");
+    expect(result.evidenceText).toContain("张伟（设计院）：喜欢摄影");
+    expect(result.evidenceText).toContain("[person:ref_");
+    expect(result.evidenceText).not.toContain("person:first");
     expect(result.evidenceText).not.toContain("person:second");
   });
 
@@ -388,19 +462,19 @@ describe("assistant archive grounding", () => {
 
     expect(result.ok).toBe(true);
     expect(result.citations).toHaveLength(1);
-    expect(result.citations[0]).toMatchObject({ sourceRef: "person:doctor" });
+    expect(result.citations[0]).toMatchObject({
+      sourceRef: expect.stringMatching(/^person:ref_/u),
+    });
   });
 
-  it("normalizes a raw stable person id into a person source reference", () => {
+  it("rejects a raw stable person id at the model boundary", () => {
     const result = validateAssistantArchiveGrounding({
       archiveClaims: [{ sourceRef: "doctor", field: "note" }],
       archive,
       includeArchive: true,
     });
 
-    expect(result.citations).toEqual([
-      expect.objectContaining({ sourceRef: "person:doctor", quote: "心内科医生" }),
-    ]);
+    expect(result.citations).toEqual([]);
   });
 
   it("resolves a producer namespace prefix against a flattened tool projection", () => {

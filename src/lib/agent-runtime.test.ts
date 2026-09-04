@@ -211,15 +211,15 @@ describe("AgentRuntime", () => {
     expect(runtime.contextBudget.snapshot().rounds).toBe(1);
     expect(recorder.events().filter((event) => event.kind === "model_request")).toHaveLength(1);
     expect(recorder.events().filter((event) => event.kind === "model_response")).toHaveLength(1);
-    expect(
-      recorder
-        .events()
-        .filter(
-          (event) =>
-            event.kind === "validation" &&
-            (event.payload as { status?: string } | undefined)?.status === "transport_retry",
-        ),
-    ).toHaveLength(2);
+    const retryEvents = recorder
+      .events()
+      .filter(
+        (event) =>
+          event.kind === "validation" &&
+          (event.payload as { status?: string } | undefined)?.status === "transport_retry",
+      );
+    expect(retryEvents).toHaveLength(2);
+    expect(retryEvents.every((event) => event.issueCategory === "transport")).toBe(true);
   });
 
   it("treats an empty model response as retryable transport failure", async () => {
@@ -257,9 +257,60 @@ describe("AgentRuntime", () => {
     if (result.status === "failed") {
       expect(result.error).toBeInstanceOf(ModelRetryExhaustedError);
       expect((result.error as ModelRetryExhaustedError).attempts).toBe(2);
+      expect(result.issue.category).toBe("transport");
     }
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(runtime.contextBudget.snapshot().rounds).toBe(1);
+  });
+
+  it("returns the same contract or transaction category recorded by the owning boundary", async () => {
+    const modelRecorder = new MemoryAgentRunRecorder({ runId: "contract-model" });
+    const modelRuntime = new AgentRuntime({
+      registry: new AgentToolRegistry(),
+      services: undefined,
+      budget: SMALL_BUDGET,
+      recorder: modelRecorder,
+    });
+    const modelResult = await modelRuntime.runModelRound({ payload: "prompt" }, () =>
+      Promise.reject(new Error("response violates declared schema")),
+    );
+    expect(modelResult).toMatchObject({
+      status: "failed",
+      issue: { category: "contract", phase: "model" },
+    });
+    expect(modelRecorder.events().find((event) => event.kind === "model_response")).toMatchObject({
+      status: "failed",
+      issueCategory: "contract",
+    });
+
+    const registry = new AgentToolRegistry();
+    registry.register({
+      name: "commit_archive",
+      label: "提交档案",
+      description: "提交一份已经批准的档案变更",
+      permission: "write",
+      input: z.object({ proposalId: z.string().min(1) }).strict(),
+      handler: () => {
+        throw new Error("archive revision conflict");
+      },
+    });
+    const toolRecorder = new MemoryAgentRunRecorder({ runId: "transaction-tool" });
+    const toolRuntime = new AgentRuntime({
+      registry,
+      services: undefined,
+      permissions: ["write"],
+      budget: SMALL_BUDGET,
+      recorder: toolRecorder,
+    });
+    const toolResult = await toolRuntime.executeTool("commit_archive", { proposalId: "p1" });
+    expect(toolResult).toMatchObject({
+      status: "failed",
+      issue: { category: "transaction", phase: "transaction" },
+    });
+    expect(toolRecorder.events().find((event) => event.kind === "tool_result")).toMatchObject({
+      status: "failed",
+      issueCategory: "transaction",
+    });
   });
 
   it("actively finalizes hanging model and tool operations at maxWallTime", async () => {

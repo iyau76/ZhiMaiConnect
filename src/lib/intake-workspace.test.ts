@@ -49,8 +49,73 @@ describe("intake workspace identities", () => {
   });
 
   it("exposes recordRef without leaking internal metadata", () => {
-    const view = intakeWorkspaceView({ people: [{ name: "唐悦", _draftId: "draft:person:tang" }] });
+    const view = intakeWorkspaceView({
+      people: [
+        {
+          name: "唐悦",
+          _draftId: "draft:person:tang",
+          _identityChecked: true,
+          _identityReason: "本地身份解析",
+        },
+      ],
+      relations: [
+        {
+          from: "唐悦",
+          to: "周宁",
+          label: "同事",
+          _draftId: "draft:relation:peer",
+          _relationChecked: true,
+          _relationReason: "本地关系核对",
+        },
+      ],
+      events: [
+        {
+          title: "讨论展览",
+          _draftId: "draft:event:review",
+          _eventChecked: true,
+          _eventReason: "本地事件核对",
+          _groundingVerified: true,
+        },
+      ],
+    });
     expect(view.people[0]).toMatchObject({ recordRef: "draft:person:tang", name: "唐悦" });
-    expect(view.people[0]).not.toHaveProperty("_draftId");
+    expect(JSON.stringify(view)).not.toMatch(/_(?:draft|identity|relation|event|grounding)/u);
+  });
+
+  it("keeps archive identifiers out of the model-facing workspace view", () => {
+    const view = intakeWorkspaceView({
+      people: [{ name: "Alex", targetPersonId: "person-uuid" }],
+      facts: [{ person: "Alex", key: "role", value: "designer", personId: "person-uuid" }],
+      relations: [
+        {
+          from: "Alex",
+          to: "Blair",
+          label: "colleague",
+          targetRelationId: "relation-uuid",
+          fromPersonId: "person-uuid",
+          toPersonId: "other-person-uuid",
+        },
+      ],
+      events: [
+        {
+          title: "Review",
+          people: ["Alex"],
+          targetEventId: "event-uuid",
+          peoplePersonIds: ["person-uuid"],
+        },
+      ],
+      reminders: [
+        {
+          title: "Follow up",
+          people: ["Alex"],
+          peoplePersonIds: ["person-uuid"],
+        },
+      ],
+    });
+
+    expect(JSON.stringify(view)).not.toContain("person-uuid");
+    expect(JSON.stringify(view)).not.toContain("other-person-uuid");
+    expect(JSON.stringify(view)).not.toContain("relation-uuid");
+    expect(JSON.stringify(view)).not.toContain("event-uuid");
   });
 });

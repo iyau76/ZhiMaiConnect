@@ -1,97 +1,203 @@
 import { describe, expect, it } from "vitest";
 
-import { IntakeTaskStateMachine } from "./intake-task-state";
+import {
+  normalizeSemanticIntakeTaskSnapshot,
+  SemanticIntakeTaskStateMachine,
+  transitionSemanticIntakeLifecycle,
+  type LegacyReadySemanticIntakeTaskSnapshot,
+  type SemanticIntakeTaskSnapshot,
+} from "./intake-task-state";
 
-describe("IntakeTaskStateMachine", () => {
-  it("accepts typed create/update intent and closes only by task id", () => {
-    const state = new IntakeTaskStateMachine({ planRequired: true });
-    expect(state.snapshot()).toMatchObject({ phase: "planning", nextAction: "declare_plan" });
-    state.acceptPlan({
-      type: "plan",
-      tasks: [
-        {
-          id: "p",
-          domain: "person",
-          intent: "update",
-          target: { name: "唐悦" },
-          changes: { title: "品牌总监" },
-        },
-        {
-          id: "r",
-          domain: "relation",
-          intent: "update",
-          target: { from: "唐悦", to: "周宁", label: "同事" },
-          changes: { label: "前同事" },
-        },
-        {
-          id: "e",
-          domain: "event",
-          intent: "create",
-          target: { title: "会议" },
-          changes: { date: "2026-09-02" },
-        },
-        {
-          id: "s",
-          domain: "summary",
-          intent: "create",
-          target: { title: "本次材料概要" },
-          changes: { text: "唐悦职位与关系更新" },
-        },
-      ],
-    });
-    state.completeTask("p", "person", "person-1");
-    state.completeTask("r", "relation", "relation-1");
-    state.completeTask("e", "event", "plan:e");
-    state.completeTask("s", "summary", "plan:s");
+const plan = {
+  version: 1 as const,
+  type: "semantic_plan" as const,
+  tasks: [
+    {
+      id: "p1",
+      domain: "person" as const,
+      intent: "create" as const,
+      target: { kind: "person" as const, name: "唐悦" },
+      changes: {},
+    },
+    {
+      id: "p2",
+      domain: "person" as const,
+      intent: "update" as const,
+      target: { kind: "person" as const, name: "张伟" },
+      changes: { title: "设计师" },
+    },
+  ],
+};
+
+function awaitingApproval(): SemanticIntakeTaskSnapshot {
+  const state = new SemanticIntakeTaskStateMachine();
+  state.acceptPlan(plan);
+  state.beginResolution();
+  state.markResolved("p1", ["draft:person:p1"]);
+  state.markResolved("p2", ["person:zhang"]);
+  state.beginProposal();
+  state.markProposed("p1", ["draft:person:p1"]);
+  state.markProposed("p2", ["person:zhang"]);
+  return state.finish();
+}
+
+describe("SemanticIntakeTaskStateMachine", () => {
+  it("moves one way through UNDERSTAND, DISCOVER, RESOLVE and PROPOSE", () => {
+    const state = new SemanticIntakeTaskStateMachine();
     expect(state.snapshot()).toMatchObject({
-      phase: "ready",
-      nextAction: "return_staged",
-      pendingDomains: [],
+      phase: "UNDERSTAND",
+      nextAction: "request_semantic_plan",
     });
-    expect(() => state.assertFinalizable()).not.toThrow();
-  });
-
-  it("rejects untyped plans and plan-external completion", () => {
-    const invalid = new IntakeTaskStateMachine({ planRequired: true });
-    expect(() =>
-      invalid.acceptPlan({
-        type: "plan",
-        tasks: [{ id: "p", domain: "person", target: "唐悦", objective: "更新职位" }],
-      }),
-    ).toThrow("intent");
-
-    const state = new IntakeTaskStateMachine({ planRequired: true });
-    state.acceptPlan({
-      type: "plan",
-      tasks: [
-        {
-          id: "inside",
-          domain: "person",
-          intent: "create",
-          target: { name: "唐悦" },
-          changes: {},
-        },
-      ],
+    state.acceptPlan(plan);
+    state.markDiscovered("p1");
+    state.markDiscovered("p2");
+    state.beginResolution();
+    state.markResolved("p1", ["draft:person:p1"]);
+    state.markNeedsInput("p2", {
+      taskId: "p2",
+      stage: "RESOLVE",
+      code: "ambiguous",
+      message: "匹配到两个张伟",
     });
-    expect(() => state.completeTask("outside", "event", "event-1")).toThrow("计划外变更");
+    state.beginProposal();
+    state.markProposed("p1", ["draft:person:p1"]);
+
+    expect(state.finish()).toMatchObject({
+      phase: "AWAITING_APPROVAL",
+      nextAction: "await_approval",
+      commit: { proposalRefs: [], receiptRefs: [], commitAttempts: 0 },
+    });
   });
 
-  it("rejects an empty plan for non-empty intake work", () => {
-    const state = new IntakeTaskStateMachine({ planRequired: true });
-    expect(() => state.acceptPlan({ type: "plan", tasks: [] })).toThrow("不能返回空 tasks");
+  it("does not rewind or reopen a plan after resolution begins", () => {
+    const state = new SemanticIntakeTaskStateMachine();
+    state.acceptPlan(plan);
+    state.beginResolution();
+
+    expect(() => state.acceptPlan(plan)).toThrow("当前为 RESOLVE");
+    state.markResolved("p1");
+    state.markResolved("p2");
+    state.beginProposal();
+    expect(() => state.markResolved("p1")).toThrow("当前为 PROPOSE");
   });
 
-  it("lets the transport token budget, rather than an arbitrary task count, bound complex input", () => {
-    const state = new IntakeTaskStateMachine({ planRequired: true });
-    const tasks = Array.from({ length: 52 }, (_, index) => ({
-      id: `person-${index + 1}`,
-      domain: "person",
-      intent: "create",
-      target: { name: `人物${index + 1}` },
-      changes: { note: `第 ${index + 1} 位人物` },
-    }));
+  it("links coordinator proposals before recording user approval", () => {
+    const awaiting = awaitingApproval();
+    const linked = transitionSemanticIntakeLifecycle(awaiting, {
+      type: "proposals_enqueued",
+      proposalRefs: ["proposal:intake-1"],
+    });
+    const approved = transitionSemanticIntakeLifecycle(linked, { type: "approve" });
 
-    expect(() => state.acceptPlan({ type: "plan", tasks })).not.toThrow();
-    expect(state.snapshot().tasks).toHaveLength(52);
+    expect(awaiting.commit.proposalRefs).toEqual([]);
+    expect(linked).toMatchObject({
+      phase: "AWAITING_APPROVAL",
+      commit: { proposalRefs: ["proposal:intake-1"] },
+    });
+    expect(approved).toMatchObject({ phase: "APPROVED", nextAction: "commit" });
+  });
+
+  it("tracks a successful commit by receipt reference", () => {
+    const linked = transitionSemanticIntakeLifecycle(awaitingApproval(), {
+      type: "proposals_enqueued",
+      proposalRefs: ["proposal:intake-1"],
+    });
+    const approved = transitionSemanticIntakeLifecycle(linked, { type: "approve" });
+    const committing = transitionSemanticIntakeLifecycle(approved, { type: "commit_started" });
+    const committed = transitionSemanticIntakeLifecycle(committing, {
+      type: "commit_succeeded",
+      receiptRefs: ["receipt:decision-1"],
+    });
+
+    expect(committing).toMatchObject({
+      phase: "COMMITTING",
+      nextAction: "wait_for_commit",
+      commit: { commitAttempts: 1, receiptRefs: [] },
+    });
+    expect(committed).toMatchObject({
+      phase: "COMMITTED",
+      nextAction: "complete",
+      commit: {
+        proposalRefs: ["proposal:intake-1"],
+        receiptRefs: ["receipt:decision-1"],
+        commitAttempts: 1,
+      },
+    });
+  });
+
+  it("keeps an approved failed commit retryable without duplicating proposal payloads", () => {
+    const linked = transitionSemanticIntakeLifecycle(awaitingApproval(), {
+      type: "proposals_enqueued",
+      proposalRefs: ["proposal:intake-1"],
+    });
+    const approved = transitionSemanticIntakeLifecycle(linked, { type: "approve" });
+    const committing = transitionSemanticIntakeLifecycle(approved, { type: "commit_started" });
+    const failed = transitionSemanticIntakeLifecycle(committing, {
+      type: "commit_failed",
+      message: "上游暂时不可用",
+    });
+    const retrying = transitionSemanticIntakeLifecycle(failed, { type: "retry_commit" });
+
+    expect(failed).toMatchObject({
+      phase: "COMMIT_FAILED",
+      nextAction: "retry_commit",
+      commit: { commitAttempts: 1, lastError: "上游暂时不可用" },
+    });
+    expect(retrying).toMatchObject({
+      phase: "COMMITTING",
+      nextAction: "wait_for_commit",
+      commit: { commitAttempts: 2 },
+    });
+    expect(retrying.commit).not.toHaveProperty("lastError");
+    expect(JSON.stringify(retrying)).not.toContain('"plan"');
+    expect(JSON.stringify(retrying)).not.toContain('"receipt"');
+  });
+
+  it("ends the lifecycle when the user rejects an awaiting proposal", () => {
+    const linked = transitionSemanticIntakeLifecycle(awaitingApproval(), {
+      type: "proposals_enqueued",
+      proposalRefs: ["proposal:intake-1"],
+    });
+    const rejected = transitionSemanticIntakeLifecycle(linked, { type: "reject" });
+
+    expect(rejected).toMatchObject({
+      phase: "REJECTED",
+      nextAction: "complete",
+      commit: { proposalRefs: ["proposal:intake-1"], receiptRefs: [] },
+    });
+    expect(() => transitionSemanticIntakeLifecycle(rejected, { type: "approve" })).toThrow(
+      "当前为 REJECTED",
+    );
+  });
+
+  it("allows the user to abandon a proposal after a failed commit", () => {
+    let state = transitionSemanticIntakeLifecycle(awaitingApproval(), {
+      type: "proposals_enqueued",
+      proposalRefs: ["proposal:intake-1"],
+    });
+    state = transitionSemanticIntakeLifecycle(state, { type: "approve" });
+    state = transitionSemanticIntakeLifecycle(state, { type: "commit_started" });
+    state = transitionSemanticIntakeLifecycle(state, {
+      type: "commit_failed",
+      message: "write failed",
+    });
+
+    expect(transitionSemanticIntakeLifecycle(state, { type: "reject" }).phase).toBe("REJECTED");
+  });
+
+  it("migrates the former READY snapshot to explicit awaiting approval", () => {
+    const current = awaitingApproval();
+    const legacy: LegacyReadySemanticIntakeTaskSnapshot = {
+      phase: "READY",
+      tasks: current.tasks,
+      issues: current.issues,
+      nextAction: "return_proposal",
+    };
+
+    expect(normalizeSemanticIntakeTaskSnapshot(legacy)).toMatchObject({
+      phase: "AWAITING_APPROVAL",
+      nextAction: "await_approval",
+      commit: { proposalRefs: [], receiptRefs: [], commitAttempts: 0 },
+    });
   });
 });

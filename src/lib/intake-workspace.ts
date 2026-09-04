@@ -82,18 +82,45 @@ export function ensureIntakeWorkspace(candidate: IngestCandidate): IngestCandida
 }
 
 function publicPerson(person: IngestPerson) {
-  const { _draftId, _audit, _fieldGrounding, _identityCandidateIds, _identityReason, ...value } =
-    person;
+  const {
+    _draftId,
+    _audit,
+    _fieldGrounding,
+    _identityCandidateIds,
+    _identityReason,
+    _identityChecked,
+    targetPersonId: _targetPersonId,
+    ...value
+  } = person;
   return { recordRef: _draftId, ...value };
 }
 
 function publicRelation(relation: IngestRelation) {
-  const { _draftId, _audit, _relationReason, ...value } = relation;
+  const {
+    _draftId,
+    _audit,
+    _relationChecked,
+    _relationReason,
+    targetRelationId: _targetRelationId,
+    fromPersonId: _fromPersonId,
+    toPersonId: _toPersonId,
+    ...value
+  } = relation;
   return { recordRef: _draftId, ...value };
 }
 
 function publicEvent(event: IngestEvent) {
-  const { _draftId, _audit, _eventCandidateIds, _eventReason, ...value } = event;
+  const {
+    _draftId,
+    _audit,
+    _eventCandidateIds,
+    _eventChecked,
+    _eventReason,
+    _groundingVerified,
+    targetEventId: _targetEventId,
+    peoplePersonIds: _peoplePersonIds,
+    ...value
+  } = event;
   return { recordRef: _draftId, ...value };
 }
 
@@ -103,16 +130,18 @@ export function intakeWorkspaceView(candidate: IngestCandidate) {
   return {
     revision: workspace._revision,
     people: (workspace.people ?? []).map(publicPerson),
-    facts: (workspace.facts ?? []).map(({ _draftId, _audit, ...value }) => ({
+    facts: (workspace.facts ?? []).map(({ _draftId, _audit, personId: _personId, ...value }) => ({
       recordRef: _draftId,
       ...value,
     })),
     relations: (workspace.relations ?? []).map(publicRelation),
     events: (workspace.events ?? []).map(publicEvent),
-    reminders: (workspace.reminders ?? []).map(({ _draftId, _audit, ...value }) => ({
-      recordRef: _draftId,
-      ...value,
-    })),
+    reminders: (workspace.reminders ?? []).map(
+      ({ _draftId, _audit, peoplePersonIds: _peoplePersonIds, ...value }) => ({
+        recordRef: _draftId,
+        ...value,
+      }),
+    ),
     evidence: (workspace.evidence ?? []).map(({ _draftId, _audit, ...value }) => ({
       recordRef: _draftId,
       ...value,

@@ -166,8 +166,7 @@ export function questionHasNameLanguageIntent(
 
 function renderAnswers(answers: NameLanguageAnswer[]) {
   const rows = answers.map((answer) => {
-    const target = answer.targetRef ? `${answer.subject}（${answer.targetRef}）` : answer.subject;
-    return `对象：${target}\n${KIND_LABELS[answer.kind]}：${answer.value}`;
+    return `对象：${answer.subject}\n${KIND_LABELS[answer.kind]}：${answer.value}`;
   });
   return `AI 语言说明（模型生成，未写入档案）\n${rows.join("\n\n")}\n请自行核对读音、写法或释义。`;
 }
@@ -184,6 +183,8 @@ export function validateNameLanguageAnswers(options: {
   freeAnswer?: unknown;
   archive: ArchiveAgentData;
   includeArchive: boolean;
+  /** Converts a model-visible opaque person ref into the local canonical ref. */
+  resolvePersonRef?: (targetRef: string) => string | undefined;
 }): NameLanguageValidationResult {
   const raw = Array.isArray(options.languageAnswers) ? options.languageAnswers.slice(0, 4) : [];
   const people = options.includeArchive ? options.archive.persons : [];
@@ -211,6 +212,10 @@ export function validateNameLanguageAnswers(options: {
         pureLanguageRequest: requested.pure,
       };
     }
+    const canonicalTargetRef = answer.targetRef
+      ? (options.resolvePersonRef?.(answer.targetRef) ??
+        (options.resolvePersonRef ? undefined : answer.targetRef))
+      : undefined;
     const answerPair = pairKey(answer);
     if (!expectedPairs.has(answerPair) || answeredPairs.has(answerPair)) {
       return {
@@ -226,7 +231,7 @@ export function validateNameLanguageAnswers(options: {
     const matchingPeople = people.filter((person) => normalized(person.name) === subject);
     if (matchingPeople.length) {
       const matchingRefs = new Set(matchingPeople.map((person) => `person:${person.id}`));
-      if (!answer.targetRef || !matchingRefs.has(answer.targetRef)) {
+      if (!canonicalTargetRef || !matchingRefs.has(canonicalTargetRef)) {
         return {
           ok: false,
           error: "语言说明命中档案人物时，targetRef 必须绑定该人物的稳定 ID",
@@ -234,7 +239,7 @@ export function validateNameLanguageAnswers(options: {
           pureLanguageRequest: requested.pure,
         };
       }
-    } else if (answer.targetRef) {
+    } else if (canonicalTargetRef || answer.targetRef) {
       return {
         ok: false,
         error: "通用语言说明不得绑定不存在或不匹配的档案人物",
@@ -242,7 +247,7 @@ export function validateNameLanguageAnswers(options: {
         pureLanguageRequest: requested.pure,
       };
     }
-    answers.push(answer);
+    answers.push({ ...answer, targetRef: canonicalTargetRef });
   }
 
   if (answeredPairs.size !== expectedPairs.size) {

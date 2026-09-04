@@ -15,6 +15,21 @@ export interface ProviderPreset {
   audioCapable?: boolean;
 }
 
+/** Stable identity for resuming a run without persisting the credential itself. */
+export function providerPresetFingerprint(preset: ProviderPreset) {
+  const canonical = JSON.stringify({
+    kind: preset.kind,
+    baseUrl: preset.baseUrl.replace(/\/+$/, ""),
+    model: preset.model.trim(),
+  });
+  let hash = 2166136261;
+  for (const character of canonical) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${canonical.length}:${(hash >>> 0).toString(36)}`;
+}
+
 export const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
 export const GEMINI_DEFAULT_MODEL = "gemini-3.7-flash";
 export const DEEPSEEK_OPENAI_BASE_URL = "https://api.deepseek.com/v1";

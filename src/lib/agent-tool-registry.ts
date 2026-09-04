@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { raceAgentAbort } from "./agent-deadline";
 import { projectToolResultForHistory } from "./agent-history";
+import { classifyAgentIssue } from "./agent-issue-classifier";
 import type { AgentRunRecorder } from "./agent-run-log";
 
 export type AgentToolCapability = "public_read" | "private_read" | "network" | "proposal" | "write";
@@ -365,7 +366,7 @@ export class AgentToolRegistry<TServices = unknown> {
     const definition = this.tools.get(name);
     return definition?.toModelResult
       ? definition.toModelResult(output, maxCharacters)
-      : projectToolResultForHistory(output, maxCharacters);
+      : projectToolResultForHistory(output, maxCharacters, { toolName: name });
   }
 
   list(
@@ -442,9 +443,12 @@ export class AgentToolRegistry<TServices = unknown> {
     });
 
     if (!definition) {
+      const error = new AgentToolNotFoundError(name);
+      const issue = classifyAgentIssue(error, { phase: "contract" });
       options.recorder.record({
         kind: "validation",
         status: "failed",
+        issueCategory: issue.category,
         round: options.round,
         toolName: name,
         invocationId,
@@ -453,21 +457,25 @@ export class AgentToolRegistry<TServices = unknown> {
       options.recorder.record({
         kind: "tool_result",
         status: "failed",
+        issueCategory: issue.category,
         round: options.round,
         toolName: name,
         invocationId,
         durationMs: (options.now ?? Date.now)() - startedAt,
         payload: { reason: "unknown_tool" },
       });
-      throw new AgentToolNotFoundError(name);
+      throw error;
     }
 
     const allowedToolNames = normalizeToolNames(options.allowedToolNames);
     if (allowedToolNames && !allowedToolNames.has(name)) {
       const payload = { reason: "tool_outside_agent_scope" };
+      const error = new AgentToolScopeError(name);
+      const issue = classifyAgentIssue(error, { phase: "contract" });
       options.recorder.record({
         kind: "validation",
         status: "blocked",
+        issueCategory: issue.category,
         round: options.round,
         toolName: name,
         invocationId,
@@ -476,21 +484,25 @@ export class AgentToolRegistry<TServices = unknown> {
       options.recorder.record({
         kind: "tool_result",
         status: "blocked",
+        issueCategory: issue.category,
         round: options.round,
         toolName: name,
         invocationId,
         durationMs: (options.now ?? Date.now)() - startedAt,
         payload,
       });
-      throw new AgentToolScopeError(name);
+      throw error;
     }
 
     const permissions = normalizePermissions(options.permissions);
     const requiredPermission = canonicalAgentToolPermission(definition.permission);
     if (!permissions.has(requiredPermission)) {
+      const error = new AgentToolPermissionError(name, requiredPermission);
+      const issue = classifyAgentIssue(error, { phase: "contract" });
       options.recorder.record({
         kind: "validation",
         status: "blocked",
+        issueCategory: issue.category,
         round: options.round,
         toolName: name,
         invocationId,
@@ -502,6 +514,7 @@ export class AgentToolRegistry<TServices = unknown> {
       options.recorder.record({
         kind: "tool_result",
         status: "blocked",
+        issueCategory: issue.category,
         round: options.round,
         toolName: name,
         invocationId,
@@ -511,14 +524,17 @@ export class AgentToolRegistry<TServices = unknown> {
           requiredPermission,
         },
       });
-      throw new AgentToolPermissionError(name, requiredPermission);
+      throw error;
     }
 
     const parsed = definition.input.safeParse(rawInput);
     if (!parsed.success) {
+      const error = new AgentToolValidationError(name, parsed.error.issues);
+      const issue = classifyAgentIssue(error, { phase: "contract" });
       options.recorder.record({
         kind: "validation",
         status: "failed",
+        issueCategory: issue.category,
         round: options.round,
         toolName: name,
         invocationId,
@@ -534,13 +550,14 @@ export class AgentToolRegistry<TServices = unknown> {
       options.recorder.record({
         kind: "tool_result",
         status: "failed",
+        issueCategory: issue.category,
         round: options.round,
         toolName: name,
         invocationId,
         durationMs: (options.now ?? Date.now)() - startedAt,
         payload: { reason: "invalid_input" },
       });
-      throw new AgentToolValidationError(name, parsed.error.issues);
+      throw error;
     }
 
     options.recorder.record({
@@ -578,9 +595,14 @@ export class AgentToolRegistry<TServices = unknown> {
       });
       return output;
     } catch (error) {
+      const issue = classifyAgentIssue(error, {
+        phase:
+          canonicalAgentToolPermission(definition.permission) === "write" ? "transaction" : "tool",
+      });
       options.recorder.record({
         kind: "tool_result",
         status: "failed",
+        issueCategory: issue.category,
         round: options.round,
         toolName: name,
         invocationId,

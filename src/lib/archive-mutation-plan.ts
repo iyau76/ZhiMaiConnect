@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   facesDb,
+  normalizePersonRecord,
   type ArchiveMutationWriteBatch,
   type CaseEventRecord,
   type CollectionMembershipRecord,
@@ -18,7 +19,7 @@ import {
   type ReminderRecord,
   type TaskRecord,
 } from "./face-db";
-import type { DerivedRelationshipRecord } from "./kinship-projector";
+import { projectKinshipRelations, type DerivedRelationshipRecord } from "./kinship-projector";
 import {
   RELATION_PREDICATES,
   relationIsSymmetric,
@@ -343,7 +344,7 @@ const organizeCollectionOperationSchema = z
     reason: reasonSchema,
     expectedRevision: revisionSchema.nullable(),
     replacement: collectionReplacementSchema,
-    memberships: z.array(membershipChangeSchema).max(200),
+    memberships: z.array(membershipChangeSchema).max(1_000),
   })
   .strict();
 
@@ -597,6 +598,148 @@ export async function loadArchiveMutationSnapshot(
     projects,
     collections,
     collectionMemberships,
+  };
+}
+
+function materializeRows<T extends { id: string }>(
+  current: readonly T[],
+  writes: readonly T[] | undefined,
+  deletes: readonly string[] | undefined,
+  order: "delete_then_write" | "write_then_delete",
+) {
+  const rows = new Map(current.map((row) => [row.id, structuredClone(row)]));
+  const remove = () => deletes?.forEach((id) => rows.delete(id));
+  const write = () => writes?.forEach((row) => rows.set(row.id, structuredClone(row)));
+  if (order === "delete_then_write") {
+    remove();
+    write();
+  } else {
+    write();
+    remove();
+  }
+  return [...rows.values()];
+}
+
+/**
+ * Project the durable archive produced by one already-prepared write batch.
+ *
+ * This mirrors the atomic IndexedDB write boundary without touching storage.
+ * The commit coordinator uses it to persist a deterministic before/after
+ * decision intent before any fact is written, so an interrupted approval can
+ * later be reconciled without replaying an uncertain mutation.
+ */
+export function materializeArchiveMutationSnapshot(
+  snapshot: ArchiveMutationSnapshot,
+  batch: ArchiveMutationWriteBatch,
+): ArchiveMutationSnapshot {
+  const persons = materializeRows(
+    snapshot.persons,
+    batch.persons?.map(normalizePersonRecord),
+    batch.deletePersonIds,
+    "delete_then_write",
+  );
+  const assertions = materializeRows(
+    snapshot.assertions,
+    batch.assertions,
+    batch.deleteAssertionIds,
+    "delete_then_write",
+  );
+  const activeAssertions = (() => {
+    const superseded = new Set(
+      assertions
+        .map((assertion) => assertion.supersedesAssertionId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    return assertions.filter(
+      (assertion) => !superseded.has(assertion.id) && assertion.confirmationStatus !== "rejected",
+    );
+  })();
+  const derivedRelations = projectKinshipRelations({
+    assertions: activeAssertions.map((assertion) => ({
+      id: assertion.id,
+      fromId: assertion.fromId,
+      toId: assertion.toId,
+      label: assertion.label,
+      predicate: assertion.predicate,
+      qualifiers: assertion.qualifiers,
+      confidence: assertion.confidence,
+      confirmationStatus: assertion.confirmationStatus,
+      evidenceMode: "explicit" as const,
+      basis: assertion.evidence.basis,
+    })),
+    persons,
+  }).relations;
+  const assertionIds = new Set(assertions.map((assertion) => assertion.id));
+  const validRelationSubjectIds = new Set([
+    ...assertionIds,
+    ...derivedRelations.map((relation) => relation.id),
+  ]);
+
+  return {
+    persons,
+    assertions,
+    derivedRelations,
+    evidenceLinks: materializeRows(
+      snapshot.evidenceLinks,
+      batch.evidenceLinks,
+      batch.deleteEvidenceLinkIds,
+      "write_then_delete",
+    ).filter((link) => assertionIds.has(link.assertionId)),
+    evidence: materializeRows(
+      snapshot.evidence,
+      batch.evidence,
+      batch.deleteEvidenceIds,
+      "write_then_delete",
+    ),
+    caseEvents: materializeRows(
+      snapshot.caseEvents,
+      batch.caseEvents,
+      batch.deleteCaseEventIds,
+      "write_then_delete",
+    ),
+    viewPreferences: materializeRows(
+      snapshot.viewPreferences,
+      batch.viewPreferences,
+      batch.deleteViewPreferenceIds,
+      "write_then_delete",
+    ).filter((preference) => validRelationSubjectIds.has(preference.subjectId)),
+    referralPolicies: materializeRows(
+      snapshot.referralPolicies,
+      batch.referralPolicies,
+      batch.deleteReferralPolicyIds,
+      "write_then_delete",
+    ).filter((policy) => validRelationSubjectIds.has(policy.subjectId)),
+    lifeEvents: materializeRows(
+      snapshot.lifeEvents,
+      batch.lifeEvents,
+      batch.deleteLifeEventIds,
+      "write_then_delete",
+    ),
+    reminders: materializeRows(
+      snapshot.reminders,
+      batch.reminders,
+      batch.deleteReminderIds,
+      "write_then_delete",
+    ),
+    tasks: materializeRows(snapshot.tasks, batch.tasks, batch.deleteTaskIds, "write_then_delete"),
+    projects: materializeRows(
+      snapshot.projects,
+      batch.projects,
+      batch.deleteProjectIds,
+      "write_then_delete",
+    ),
+    collections: materializeRows(
+      snapshot.collections,
+      batch.collections,
+      batch.deleteCollectionIds,
+      "write_then_delete",
+    ),
+    collectionMemberships: materializeRows(
+      snapshot.collectionMemberships,
+      batch.collectionMemberships,
+      batch.deleteCollectionMembershipIds,
+      "write_then_delete",
+    ),
   };
 }
 

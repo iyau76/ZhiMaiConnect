@@ -127,6 +127,48 @@ describe("archive mutation plan contract", () => {
 });
 
 describe("archive mutation plan integration", () => {
+  it("prepares and applies one 500-person collection operation atomically", async () => {
+    const { facesDb } = await import("./face-db");
+    const {
+      applyArchiveMutationPlan,
+      createArchiveMutationPlan,
+      createOrganizeCollectionOperation,
+      loadArchiveMutationSnapshot,
+      prepareArchiveMutationPlan,
+    } = await import("./archive-mutation-plan");
+    const persons = Array.from({ length: 500 }, (_, index) =>
+      person(`bulk-person-${String(index + 1).padStart(4, "0")}`, `合成人物${index + 1}`),
+    );
+    await facesDb.putPersons(persons);
+    const snapshot = await loadArchiveMutationSnapshot();
+    const plan = createArchiveMutationPlan(
+      {
+        title: "整理全库圈层",
+        reason: "用户批准将全库合成人物加入演示圈层",
+        operations: [
+          createOrganizeCollectionOperation(snapshot, {
+            id: "bulk-circle-operation",
+            collectionId: "bulk-circle",
+            reason: "全库圈层分类结果",
+            replacement: { name: "演示伙伴", kind: "relationship_circle", color: null },
+            memberships: persons.map((entry) => ({ personId: entry.id, action: "add" })),
+          }),
+        ],
+      },
+      { id: "bulk-circle-plan", createdAt: 2 },
+    );
+
+    const prepared = prepareArchiveMutationPlan(plan, snapshot, { now: 10 });
+    expect(prepared.batch.collectionMemberships).toHaveLength(500);
+    expect(prepared.diff.filter((row) => row.field === "collection.membership")).toHaveLength(500);
+
+    await applyArchiveMutationPlan(plan, { now: 10 });
+    await expect(facesDb.listCollections()).resolves.toEqual([
+      expect.objectContaining({ id: "bulk-circle", name: "演示伙伴" }),
+    ]);
+    await expect(facesDb.listCollectionMemberships()).resolves.toHaveLength(500);
+  });
+
   it("creates approved action items through the same typed mutation transaction", async () => {
     const { facesDb } = await import("./face-db");
     const { applyArchiveMutationPlan, createArchiveMutationPlan, createTaskOperation } =

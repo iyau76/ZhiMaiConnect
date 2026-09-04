@@ -6,7 +6,7 @@ import type { PersonRecord } from "./face-db";
 const askModelMock = vi.hoisted(() => vi.fn());
 vi.mock("./vision-client", () => ({ askModel: askModelMock }));
 
-import { runPlanningAgent, type PlanningTraceEvent } from "./planning-agent";
+import { PlanningContractError, runPlanningAgent, type PlanningTraceEvent } from "./planning-agent";
 
 const preset = {
   id: "planner-test",
@@ -38,7 +38,7 @@ describe("planning agent", () => {
     askModelMock.mockReset();
   });
 
-  it("uses the shared tool scope, reuses duplicate reads and softens invalid references", async () => {
+  it("uses the shared tool scope and reinjects a duplicate read from the result cache", async () => {
     askModelMock
       .mockImplementationOnce(async (...args: unknown[]) => {
         const prompt = String(args[1]);
@@ -64,21 +64,26 @@ describe("planning agent", () => {
           args: { query: "摄影", limit: 8 },
         }),
       )
-      .mockImplementationOnce(
-        replyWith({
-          type: "final",
-          summary: "形成活动准备计划",
-          tasks: [
-            {
-              title: "联系唐悦确认拍摄清单",
-              detail: "确认交付范围",
-              priority: "high",
-              due: "下周三",
-              personIds: ["person-photographer", "invented-person"],
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[1]);
+        expect(prompt).toMatch(/"personRef":"ref_[a-f0-9]{32}"/u);
+        expect(prompt).not.toContain("already_available");
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "final",
+            summary: "形成活动准备计划",
+            tasks: [
+              {
+                title: "联系唐悦确认拍摄清单",
+                detail: "确认交付范围",
+                priority: "high",
+                due: "2026-09-08",
+                people: [{ kind: "person", name: "唐悦", hints: { title: "摄影师" } }],
+              },
+            ],
+          }),
+        );
+      });
 
     const trace: PlanningTraceEvent[] = [];
     const result = await runPlanningAgent({
@@ -94,19 +99,16 @@ describe("planning agent", () => {
         title: "联系唐悦确认拍摄清单",
         detail: "确认交付范围",
         priority: "high",
+        due: "2026-09-08",
         personIds: ["person-photographer"],
       },
     ]);
-    expect(result.warnings).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("无效人物引用"),
-        expect.stringContaining("日期格式无效"),
-      ]),
-    );
+    expect(result.warnings).toEqual([]);
+    expect(result.issues).toEqual([]);
     expect(result.run.status).toBe("completed");
     expect(trace).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "check", text: expect.stringContaining("重复读取") }),
+        expect.objectContaining({ kind: "check", text: expect.stringContaining("完整缓存结果") }),
         expect.objectContaining({ kind: "done", text: expect.stringContaining("等待用户批准") }),
       ]),
     );
@@ -121,7 +123,7 @@ describe("planning agent", () => {
             title: "列出活动必须交付的三项结果",
             detail: "先明确范围，再决定找谁参与",
             priority: "normal",
-            personIds: [],
+            people: [],
           },
         ],
       }),
@@ -139,7 +141,57 @@ describe("planning agent", () => {
     expect(askModelMock.mock.calls[1][1]).toContain("上一轮没有返回可解析的协议对象");
   });
 
-  it("does not bind a person ID that was never disclosed by a tool result", async () => {
+  it("strictly rejects extra response-envelope fields and corrects once", async () => {
+    askModelMock
+      .mockImplementationOnce(
+        replyWith({
+          type: "final",
+          debug: "legacy wrapper field",
+          tasks: [
+            {
+              title: "确认活动范围",
+              priority: "normal",
+              people: [],
+            },
+          ],
+        }),
+      )
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[1]);
+        expect(prompt).toContain("invalid_envelope");
+        expect(prompt).toContain("planning.response.v2");
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "final",
+            tasks: [
+              {
+                title: "确认活动范围",
+                priority: "normal",
+                people: [],
+              },
+            ],
+          }),
+        );
+      });
+
+    const result = await runPlanningAgent({
+      preset,
+      goal: "安排活动",
+      archive: { persons: [], relations: [], events: [] },
+      budget: {
+        maxRounds: 2,
+        maxToolCalls: 2,
+        maxInputTokens: 10_000,
+        maxOutputTokens: 4_000,
+        maxWallTimeMs: 60_000,
+      },
+    });
+
+    expect(result.tasks).toHaveLength(1);
+    expect(result.warnings).toEqual([expect.stringContaining("planning.response.v2")]);
+  });
+
+  it("rejects an undisclosed person binding instead of silently dropping it", async () => {
     askModelMock.mockImplementationOnce(
       replyWith({
         type: "final",
@@ -147,20 +199,194 @@ describe("planning agent", () => {
           {
             title: "确认活动参与人",
             priority: "normal",
-            personIds: [photographer.id],
+            people: [{ kind: "person", name: "唐悦" }],
           },
         ],
       }),
     );
 
-    const result = await runPlanningAgent({
+    const recorder = new MemoryAgentRunRecorder({ runId: "planning-undisclosed" });
+    const promise = runPlanningAgent({
       preset,
       goal: "安排活动参与人",
       archive: { persons: [photographer], relations: [], events: [] },
+      recorder,
+      budget: {
+        maxRounds: 1,
+        maxToolCalls: 2,
+        maxInputTokens: 10_000,
+        maxOutputTokens: 4_000,
+        maxWallTimeMs: 60_000,
+      },
     });
 
-    expect(result.tasks[0].personIds).toEqual([]);
-    expect(result.warnings).toEqual([expect.stringContaining("已移除 1 个无效人物引用")]);
+    await expect(promise).rejects.toMatchObject({
+      name: "PlanningContractError",
+      issues: [expect.objectContaining({ code: "undisclosed_person_reference" })],
+    });
+    expect(recorder.events()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "validation",
+          status: "failed",
+          issueCategory: "contract",
+        }),
+      ]),
+    );
+  });
+
+  it("preserves valid sibling tasks and asks for only the invalid legacy-ID task to be corrected", async () => {
+    const leakedId = "8de3dfd3-feb1-4e38-a493-3c8f606c70ce";
+    const recorder = new MemoryAgentRunRecorder({ runId: "planning-mixed-contract" });
+    askModelMock
+      .mockImplementationOnce(
+        replyWith({
+          type: "final",
+          summary: "先生成两项",
+          tasks: [
+            {
+              title: "列出活动交付清单",
+              detail: "明确照片、海报和复盘材料",
+              priority: "high",
+              people: [],
+            },
+            {
+              title: "联系摄影负责人",
+              priority: "normal",
+              people: [],
+              personIds: [leakedId],
+            },
+          ],
+        }),
+      )
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[1]);
+        expect(prompt).toContain("planning.response.v2");
+        expect(prompt).toContain("已经合格的任务由本地保留");
+        expect(prompt).toContain("列出活动交付清单");
+        expect(prompt).toContain("personIds");
+        expect(prompt).not.toContain(leakedId);
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "final",
+            summary: "已修正",
+            tasks: [
+              {
+                title: "确认摄影负责人",
+                detail: "请用户确认由谁负责，再绑定人物档案",
+                priority: "normal",
+                people: [],
+              },
+            ],
+          }),
+        );
+      });
+
+    const result = await runPlanningAgent({
+      preset,
+      goal: "筹备活动",
+      archive: { persons: [], relations: [], events: [] },
+      recorder,
+      budget: {
+        maxRounds: 2,
+        maxToolCalls: 2,
+        maxInputTokens: 20_000,
+        maxOutputTokens: 6_000,
+        maxWallTimeMs: 60_000,
+      },
+    });
+
+    expect(result.tasks.map((task) => task.title)).toEqual(["列出活动交付清单", "确认摄影负责人"]);
+    expect(result.issues).toEqual([]);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("旧协议字段 personIds")]),
+    );
+    const validation = recorder.events().find((event) => event.kind === "validation");
+    expect(validation).toMatchObject({ status: "failed", issueCategory: "contract" });
+    expect(validation?.payload).toMatchObject({
+      contract: "planning.response.v2",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: "legacy_identifier", taskIndex: 1 }),
+      ]),
+    });
+  });
+
+  it("rejects an all-invalid raw-ID response after one final round without entering a loop", async () => {
+    const leakedId = "8de3dfd3-feb1-4e38-a493-3c8f606c70ce";
+    askModelMock.mockImplementationOnce(
+      replyWith({
+        type: "final",
+        tasks: [
+          {
+            title: "联系摄影负责人",
+            priority: "high",
+            people: [leakedId],
+            personIds: [leakedId],
+          },
+        ],
+      }),
+    );
+
+    const error = await runPlanningAgent({
+      preset,
+      goal: "安排摄影",
+      archive: { persons: [photographer], relations: [], events: [] },
+      budget: {
+        maxRounds: 1,
+        maxToolCalls: 2,
+        maxInputTokens: 10_000,
+        maxOutputTokens: 4_000,
+        maxWallTimeMs: 60_000,
+      },
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(PlanningContractError);
+    expect(error).toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: "legacy_identifier", taskIndex: 0 }),
+        expect.objectContaining({
+          code: "legacy_identifier",
+          path: ["tasks", 0, "people", 0],
+        }),
+      ]),
+    });
+    expect(askModelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a disclosed opaque person ref and restores it only after validation", async () => {
+    askModelMock
+      .mockImplementationOnce(
+        replyWith({
+          type: "tool",
+          tool: "search_profiles",
+          args: { query: "摄影", limit: 8 },
+        }),
+      )
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[1]);
+        const personRef = prompt.match(/"personRef":"(ref_[a-f0-9]{32})"/u)?.[1];
+        expect(personRef).toBeTruthy();
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "final",
+            tasks: [
+              {
+                title: "联系唐悦确认拍摄范围",
+                priority: "high",
+                people: [personRef],
+              },
+            ],
+          }),
+        );
+      });
+
+    const result = await runPlanningAgent({
+      preset,
+      goal: "安排摄影",
+      archive: { persons: [photographer], relations: [], events: [] },
+    });
+
+    expect(result.tasks[0]?.personIds).toEqual([photographer.id]);
   });
 
   it("turns the last available round into a final-answer round", async () => {
@@ -187,7 +413,7 @@ describe("planning agent", () => {
                 title: "确认活动范围和截止时间",
                 detail: "已有日期信息；参与人仍待用户确认",
                 priority: "normal",
-                personIds: [],
+                people: [],
               },
             ],
           }),
@@ -238,5 +464,67 @@ describe("planning agent", () => {
     ).rejects.toThrow("最终草案轮仍请求工具");
     expect(askModelMock).toHaveBeenCalledTimes(1);
     expect(recorder.events().filter((event) => event.kind === "tool_call")).toHaveLength(0);
+  });
+
+  it("resolves a person at the tail of 500 records without exposing the database id", async () => {
+    const targetId = "8de3dfd3-feb1-4e38-a493-3c8f606c70ce";
+    const persons: PersonRecord[] = Array.from({ length: 499 }, (_, index) => ({
+      id: `filler-${index + 1}`,
+      name: `占位人物${index + 1}`,
+      note: "",
+      descriptors: [],
+      thumb: "",
+      createdAt: index + 1,
+    }));
+    persons.push({
+      id: targetId,
+      name: "林柚",
+      note: "校园记忆展摄影师",
+      descriptors: [],
+      thumb: "",
+      createdAt: 500,
+    });
+    const modelOutputs: string[] = [];
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[1]);
+        expect(prompt).not.toContain(targetId);
+        const output = JSON.stringify({
+          type: "tool",
+          tool: "search_profiles",
+          args: { query: "林柚 摄影师", limit: 8 },
+        });
+        modelOutputs.push(output);
+        (args[4] as (chunk: string) => void)(output);
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[1]);
+        expect(prompt).toContain("林柚");
+        expect(prompt).toMatch(/"personRef":"ref_[a-f0-9]{32}"/u);
+        expect(prompt).not.toContain(targetId);
+        const output = JSON.stringify({
+          type: "final",
+          summary: "已形成拍摄确认计划",
+          tasks: [
+            {
+              title: "联系林柚确认拍摄交付",
+              priority: "high",
+              people: [{ kind: "person", name: "林柚" }],
+            },
+          ],
+        });
+        modelOutputs.push(output);
+        (args[4] as (chunk: string) => void)(output);
+      });
+
+    const result = await runPlanningAgent({
+      preset,
+      goal: "请安排林柚确认校园记忆展摄影交付",
+      archive: { persons, relations: [], events: [] },
+    });
+
+    expect(result.tasks[0]?.personIds).toEqual([targetId]);
+    expect(modelOutputs.join("\n")).not.toContain(targetId);
+    expect(modelOutputs.join("\n")).not.toContain("personIds");
   });
 });

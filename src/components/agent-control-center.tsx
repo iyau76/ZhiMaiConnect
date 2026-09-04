@@ -1,12 +1,13 @@
 import { Gauge, History, ShieldAlert, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { AgentRun } from "@/lib/agent-run-log";
-import { LocalAgentRunStore, type StoredAgentRunSummary } from "@/lib/agent-run-store";
+import { projectAgentRun, type AgentRun } from "@/lib/agent-run-log";
+import { indexedDbAgentRunLedger, type AgentLedgerRunStatus } from "@/lib/agent-run-ledger";
+import { LocalAgentRunStore } from "@/lib/agent-run-store";
 import type { AgentBudget } from "@/lib/agent-runtime";
 import { getLang, t } from "@/lib/i18n";
 import {
@@ -36,26 +37,60 @@ function safeSettings() {
   }
 }
 
-function safeRunSummaries() {
-  try {
-    return new LocalAgentRunStore().list();
-  } catch {
-    return [];
-  }
+interface AgentRunLedgerSummary {
+  id: string;
+  status: AgentLedgerRunStatus;
+  rounds: number;
+  eventCount: number;
+  updatedAt: number;
 }
 
 export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
   const [settings, setSettings] = useState<AgentSettings>(safeSettings);
   const [budgetSaveStatus, setBudgetSaveStatus] = useState("已保存");
-  const [summaries, setSummaries] = useState<StoredAgentRunSummary[]>(safeRunSummaries);
+  const [summaries, setSummaries] = useState<AgentRunLedgerSummary[]>([]);
   const [selectedRun, setSelectedRun] = useState<AgentRun | null>(latestRun ?? null);
+  const refreshGeneration = useRef(0);
   const budget = resolveAgentSettingsBudget(settings);
+
+  const refreshRuns = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
+    const runs = await indexedDbAgentRunLedger.listRuns();
+    const next = await Promise.all(
+      runs.slice(0, 50).map(async (run): Promise<AgentRunLedgerSummary> => {
+        const events = await indexedDbAgentRunLedger.listEvents(run.id);
+        return {
+          id: run.id,
+          status: run.status,
+          rounds: events.reduce((highest, event) => Math.max(highest, event.round ?? 0), 0),
+          eventCount: events.length,
+          updatedAt: run.updatedAt,
+        };
+      }),
+    );
+    if (generation === refreshGeneration.current) setSummaries(next);
+  }, []);
+
+  useEffect(() => {
+    void refreshRuns().catch(() => undefined);
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = indexedDbAgentRunLedger.subscribe(() => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        void refreshRuns().catch(() => undefined);
+      }, 120);
+    });
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      unsubscribe();
+    };
+  }, [refreshRuns]);
 
   useEffect(() => {
     if (!latestRun) return;
     setSelectedRun(latestRun);
-    setSummaries(safeRunSummaries());
-  }, [latestRun]);
+    void refreshRuns().catch(() => undefined);
+  }, [latestRun, refreshRuns]);
 
   const choosePreset = (profile: "quick" | "standard" | "deep") => {
     try {
@@ -100,21 +135,46 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
     }
   };
 
-  const openStoredRun = (id: string) => {
+  const openStoredRun = async (id: string) => {
     try {
-      const entry = new LocalAgentRunStore().get(id);
-      if (entry) setSelectedRun(entry.run);
+      const [run, events] = await Promise.all([
+        indexedDbAgentRunLedger.getRun(id),
+        indexedDbAgentRunLedger.listEvents(id),
+      ]);
+      if (!run) return;
+      setSelectedRun(
+        projectAgentRun(events, {
+          id: run.id,
+          title: run.title,
+          agentName: run.agentName,
+          model: run.providerRef.model,
+          status: run.status,
+        }),
+      );
     } catch {
       toast.error("无法读取这条运行日志");
     }
   };
 
-  const clearLogs = () => {
+  const clearLogs = async () => {
     try {
+      const runs = await indexedDbAgentRunLedger.listRuns();
+      const removable = runs.filter((run) =>
+        ["completed", "failed", "cancelled", "budget_exceeded"].includes(run.status),
+      );
+      await Promise.all(removable.map((run) => indexedDbAgentRunLedger.deleteRun(run.id)));
       new LocalAgentRunStore().clear();
-      setSummaries([]);
-      if (selectedRun?.id !== latestRun?.id) setSelectedRun(latestRun ?? null);
-      toast.success("已清除持久化 Agent 日志");
+      await refreshRuns();
+      if (selectedRun && removable.some((run) => run.id === selectedRun.id)) {
+        const latestWasRemoved = latestRun && removable.some((run) => run.id === latestRun.id);
+        setSelectedRun(latestWasRemoved ? null : (latestRun ?? null));
+      }
+      const retained = runs.length - removable.length;
+      toast.success(
+        retained
+          ? `已清除 ${removable.length} 条结束记录；保留 ${retained} 条未完成任务`
+          : "已清除持久化 Agent 日志",
+      );
     } catch {
       toast.error("无法清除 Agent 日志");
     }
@@ -220,7 +280,9 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
             {numberField("maxWallTimeMs", t("总时限 ms"), 1_000)}
           </div>
           <p className="text-[11px] text-muted-foreground">
-            {t("修改任一字段会切换为 custom 并立即保存。")}
+            {t(
+              "这里设置的是整次任务的累计上限，不会扩大单轮上下文。修改任一字段会切换为 custom 并立即保存。",
+            )}
           </p>
         </section>
 
@@ -231,14 +293,14 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 id="agent-log-heading" className="flex items-center gap-1.5 text-xs font-semibold">
               <History className="size-3.5" aria-hidden />
-              {t("最近运行（最多 50 次 / 30 天）")}
+              {t("本机执行记录（最近 50 次）")}
             </h3>
             <Button
               type="button"
               variant="ghost"
               size="sm"
               className="h-7 text-[11px] text-muted-foreground"
-              onClick={clearLogs}
+              onClick={() => void clearLogs()}
             >
               <Trash2 className="mr-1 size-3.5" aria-hidden />
               {t("清除日志")}
@@ -258,7 +320,7 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
                 {t("保存档案正文（敏感）")}
               </span>
               {t(
-                "默认只保存轮次、工具名、耗时和 token；启用后才保存已脱敏的提示词与工具输入输出。",
+                "工具结果会作为断点记忆留在本机；启用后，运行详情还会展示已脱敏的提示词与工具输入输出。",
               )}
             </span>
           </label>
@@ -270,7 +332,7 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
                 type="button"
                 data-agent-run-summary-id={summary.id}
                 className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
-                onClick={() => openStoredRun(summary.id)}
+                onClick={() => void openStoredRun(summary.id)}
               >
                 {summary.status} · {summary.rounds ?? 0} {t("轮")}
               </button>

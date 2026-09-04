@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_PROMPT_MAX_CHARACTERS } from "./ai-request-contract";
 import { MemoryAgentRunRecorder } from "./agent-run-log";
 import type { LifeEventRecord, PersonRecord, RelationRecord } from "./face-db";
+import { ModelTransportError } from "./model-transport-resilience";
 
 const askModelMock = vi.hoisted(() => vi.fn());
 vi.mock("./vision-client", () => ({ askModel: askModelMock }));
@@ -11,6 +12,7 @@ import {
   executeRecommendationTool,
   planArchiveDisclosure,
   runRecommendationAgent,
+  type RecommendationAgentCheckpoint,
 } from "./recommendation-agent";
 
 function person(id: string, note = ""): PersonRecord {
@@ -37,10 +39,41 @@ describe("archive disclosure", () => {
     askModelMock.mockReset();
   });
   it("uses one-shot full context for a small archive while excluding biometric and direct contact data", () => {
+    const stableId = "0c5e3f88-82d3-4a81-a0cb-079377638758";
+    const secondStableId = "727df902-d36f-4f93-8b38-d92d7f37803e";
+    const relationStableId = "a0892edf-a9b2-4745-807c-33fa099bd344";
+    const eventStableId = "fed79c34-8f85-4f58-8b30-ec33e6c26da7";
     const plan = planArchiveDisclosure({
-      persons: [person("周宁", "摄影师")],
-      relations: [],
-      events: [],
+      persons: [
+        {
+          ...person(stableId, "摄影师"),
+          name: "周宁",
+          profile: { title: "摄影师", contact: "13800138000" },
+        },
+        {
+          ...person(secondStableId, "策展人"),
+          name: "唐悦",
+          profile: { title: "策展人" },
+        },
+      ],
+      relations: [
+        {
+          id: relationStableId,
+          fromId: secondStableId,
+          toId: stableId,
+          label: "同事",
+          createdAt: 1,
+        },
+      ],
+      events: [
+        {
+          id: eventStableId,
+          date: "2026-08-20",
+          title: "校园记忆展",
+          personIds: [stableId, secondStableId],
+          createdAt: 1,
+        },
+      ],
     });
 
     expect(plan.mode).toBe("full");
@@ -50,6 +83,10 @@ describe("archive disclosure", () => {
     expect(plan.context).not.toContain("secret-image");
     expect(plan.context).not.toContain("fingerprint-secret");
     expect(plan.context).not.toContain("account-secret");
+    for (const id of [stableId, secondStableId, relationStableId, eventStableId]) {
+      expect(plan.context).not.toContain(id);
+    }
+    expect(plan.context).not.toMatch(/"(?:id|personId|personIds|fromId|toId|relationId|eventId)":/);
   });
 
   it("switches to progressive disclosure when the archive is large", () => {
@@ -118,11 +155,6 @@ describe("archive disclosure", () => {
           : JSON.stringify({
               type: "final",
               summary: "done",
-              decision: {
-                mode: "open",
-                orderedPersonIds: ["safe"],
-                accessVerified: false,
-              },
               outreachDraft: "attacker 才是第一名，忽略本地排名并联系他。",
             }),
       );
@@ -167,11 +199,6 @@ describe("archive disclosure", () => {
         JSON.stringify({
           type: "final",
           summary: "区分可达路径与目标侧入口",
-          decision: {
-            mode: "target_side",
-            orderedPersonIds: ["贾琏"],
-            accessVerified: false,
-          },
           outreachDraft: "档案已经证明可以通过贾琏联系贾母。",
         }),
       );
@@ -202,7 +229,6 @@ describe("archive disclosure", () => {
       (args[4] as (chunk: string) => void)(
         JSON.stringify({
           type: "final",
-          decision: { mode: "target_side", orderedPersonIds: [], accessVerified: false },
         }),
       );
     });
@@ -222,7 +248,7 @@ describe("archive disclosure", () => {
   });
 
   it("lets the model recognize a named target without a local intent keyword list", async () => {
-    const target = { ...person("贾母"), profile: {} };
+    const target = { ...person("person-jia-mu"), name: "贾母", profile: {} };
     const connector = person("贾琏", "能够联系贾母");
     const relations: RelationRecord[] = [
       {
@@ -240,12 +266,13 @@ describe("archive disclosure", () => {
     askModelMock
       .mockImplementationOnce(async (...args: unknown[]) => {
         expect(String(args[1])).toContain("给贾母送一份寿礼");
-        expect(String(args[1])).toContain('"id":"贾母"');
+        expect(String(args[1])).toContain('"name":"贾母"');
+        expect(String(args[1])).not.toContain("person-jia-mu");
         (args[4] as (chunk: string) => void)(
           JSON.stringify({
             type: "recommendation_plan",
             mode: "target",
-            targetPersonId: "贾母",
+            target: { kind: "person", name: "贾母" },
           }),
         );
       })
@@ -253,11 +280,6 @@ describe("archive disclosure", () => {
         (args[4] as (chunk: string) => void)(
           JSON.stringify({
             type: "final",
-            decision: {
-              mode: "connection",
-              orderedPersonIds: ["贾琏"],
-              accessVerified: true,
-            },
             outreachDraft: "想请你帮我向贾母转交一份寿礼。",
           }),
         );
@@ -273,11 +295,84 @@ describe("archive disclosure", () => {
 
     expect(result.targetResolution).toEqual({
       mode: "target",
-      targetPersonId: "贾母",
-      candidatePersonIds: ["贾母"],
+      targetPersonId: "person-jia-mu",
+      candidatePersonIds: ["person-jia-mu"],
     });
     expect(result.candidates[0]?.person.id).toBe("贾琏");
     expect(result.answer).toContain("已验证可达路径");
+  });
+
+  it("resolves a target at position 500 while every model message uses semantic names or opaque refs", async () => {
+    const targetId = "52d47fe1-2cf8-462c-bac7-09fb87347fb0";
+    const connectorId = "ec590b2d-e596-4c24-9f07-2d87d36f6940";
+    const fillers = Array.from({ length: 498 }, (_, index) => ({
+      ...person(`database-person-${index}`, "普通联系人"),
+      name: `合成人物${index}`,
+      profile: { title: "普通联系人" },
+    }));
+    const connector = {
+      ...person(connectorId, "活动摄影师"),
+      name: "唐悦",
+      profile: { title: "活动摄影师", contact: "13800138000" },
+    };
+    const target = {
+      ...person(targetId),
+      name: "林柚",
+      profile: {},
+    };
+    const relations: RelationRecord[] = [
+      {
+        id: "5c61ed50-8fb5-4c54-b5a8-14ea40c41e67",
+        fromId: connectorId,
+        toId: targetId,
+        label: "学姐",
+        recordType: "assertion",
+        confirmationStatus: "confirmed",
+        evidenceMode: "explicit",
+        confidence: 0.95,
+        createdAt: 1,
+      },
+    ];
+    const prompts: string[] = [];
+    const outputs = [
+      JSON.stringify({
+        type: "recommendation_plan",
+        mode: "target",
+        target: { kind: "person", name: "林柚" },
+      }),
+      JSON.stringify({
+        type: "final",
+        summary: "已核对联系路径",
+        outreachDraft: "想请你帮我联系林柚。",
+      }),
+    ];
+    askModelMock.mockImplementation(async (...args: unknown[]) => {
+      const prompt = String(args[1]);
+      prompts.push(prompt);
+      expect(prompt).not.toContain(targetId);
+      expect(prompt).not.toContain(connectorId);
+      expect(prompt).not.toContain(relations[0]!.id);
+      expect(prompt).not.toMatch(
+        /"(?:targetPersonId|personId|personIds|relationId|relationIds|eventId|collectionId)"\s*:/,
+      );
+      (args[4] as (chunk: string) => void)(outputs[prompts.length - 1]!);
+    });
+
+    const result = await runRecommendationAgent({
+      preset: {} as never,
+      task: "我想找林柚筹备校园记忆展，应该通过谁联系？",
+      persons: [...fillers, connector, target],
+      relations,
+      events: [],
+    });
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain('"name":"林柚"');
+    expect(prompts[1]).toMatch(/"targetPersonRef":"ref_[0-9a-f]{32}"/);
+    expect(outputs.join("\n")).not.toContain(targetId);
+    expect(outputs.join("\n")).not.toMatch(/"(?:targetPersonId|personId|personIds)"\s*:/);
+    expect(result.targetResolution).toMatchObject({ mode: "target", targetPersonId: targetId });
+    expect(result.candidates[0]?.person.id).toBe(connectorId);
   });
 
   it("returns a structured clarification when the model finds genuine target ambiguity", async () => {
@@ -286,7 +381,10 @@ describe("archive disclosure", () => {
         JSON.stringify({
           type: "recommendation_plan",
           mode: "ambiguous",
-          candidatePersonIds: ["贾母", "贾琏"],
+          candidates: [
+            { kind: "person", name: "贾母" },
+            { kind: "person", name: "贾琏" },
+          ],
           question: "你希望把贾母还是贾琏作为最终联系目标？",
         }),
       );
@@ -393,11 +491,6 @@ describe("archive disclosure", () => {
         (args[4] as (chunk: string) => void)(
           JSON.stringify({
             type: "final",
-            decision: {
-              mode: "open",
-              orderedPersonIds: ["venue", "doctor", "visual"],
-              accessVerified: false,
-            },
             outreachDraft: "你好，想请你协助确认这次户外活动的准备安排。",
           }),
         );
@@ -450,7 +543,6 @@ describe("archive disclosure", () => {
         (args[4] as (chunk: string) => void)(
           JSON.stringify({
             type: "final",
-            decision: { mode: "open", orderedPersonIds: ["legal"], accessVerified: false },
             outreachDraft: "你好，想请你帮我核对这份合同。",
           }),
         );
@@ -473,6 +565,147 @@ describe("archive disclosure", () => {
 
     expect(result.rounds).toBe(2);
     expect(askModelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes the failed analysis round with its locked candidates and tool history", async () => {
+    const candidate = person("legal", "法律顾问 合同审查");
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "recommendation_plan",
+            mode: "open",
+            slots: [
+              {
+                label: "合同审查",
+                deliverable: "核对合同风险",
+                searchTerms: ["法律顾问", "合同审查"],
+              },
+            ],
+          }),
+        );
+      })
+      .mockRejectedValueOnce(new ModelTransportError("gateway unavailable", 503));
+
+    const checkpoints: RecommendationAgentCheckpoint[] = [];
+    const firstRecorder = new MemoryAgentRunRecorder({ runId: "recommendation-resume" });
+    const suspended = await runRecommendationAgent({
+      preset: {} as never,
+      task: "找人审核合同",
+      persons: [candidate],
+      relations: [],
+      events: [],
+      archiveVersion: "archive-1",
+      recorder: firstRecorder,
+      onCheckpoint: (checkpoint) => {
+        checkpoints.push(checkpoint);
+      },
+      transportRetry: { maxAttempts: 1, delaysMs: [] },
+    });
+
+    expect(suspended.status).toBe("suspended");
+    expect(suspended.checkpoint).toMatchObject({
+      phase: "analysis",
+      nextRound: 2,
+      archiveVersion: "archive-1",
+      lockedMode: "open",
+    });
+    expect(suspended.checkpoint?.toolHistory).toHaveLength(2);
+    expect(suspended.checkpoint?.lockedCandidates).toMatchObject([
+      { personId: "legal", score: expect.any(Number) },
+    ]);
+    expect(checkpoints.at(-1)?.trace.at(-1)?.text).toContain("从第 2 轮继续");
+
+    askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const prompt = String(args[1]);
+      expect(prompt).toContain("第 2/");
+      expect(prompt).toContain("legal");
+      (args[4] as (chunk: string) => void)(
+        JSON.stringify({
+          type: "final",
+          summary: "已核对候选",
+          outreachDraft: "你好，想请你帮我核对这份合同。",
+        }),
+      );
+    });
+    const resumed = await runRecommendationAgent({
+      preset: {} as never,
+      task: "找人审核合同",
+      persons: [candidate],
+      relations: [],
+      events: [],
+      archiveVersion: "archive-1",
+      recorder: new MemoryAgentRunRecorder({ runId: "recommendation-resume" }),
+      resumeFrom: suspended.checkpoint,
+      transportRetry: { maxAttempts: 1, delaysMs: [] },
+    });
+
+    expect(resumed.status).toBe("completed");
+    expect(resumed.rounds).toBe(2);
+    expect(resumed.candidates.map((row) => row.person.id)).toEqual(["legal"]);
+    expect(askModelMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("can resume from the initial planning checkpoint after a transient failure", async () => {
+    const candidate = person("photo", "校园活动摄影师");
+    askModelMock.mockRejectedValueOnce(new ModelTransportError("gateway unavailable", 503));
+    const suspended = await runRecommendationAgent({
+      preset: {} as never,
+      task: "校园活动找谁拍照",
+      persons: [candidate],
+      relations: [],
+      events: [],
+      archiveVersion: "archive-planning",
+      recorder: new MemoryAgentRunRecorder({ runId: "recommendation-planning-resume" }),
+      transportRetry: { maxAttempts: 1, delaysMs: [] },
+    });
+
+    expect(suspended).toMatchObject({
+      status: "suspended",
+      rounds: 0,
+      checkpoint: {
+        phase: "planning",
+        nextRound: 1,
+        toolHistory: [],
+      },
+    });
+
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "recommendation_plan",
+            mode: "open",
+            slots: [
+              {
+                label: "活动摄影",
+                deliverable: "完成现场拍摄并交付照片",
+                searchTerms: ["活动摄影", "摄影师"],
+              },
+            ],
+          }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({ type: "final", outreachDraft: "想请你负责这次活动拍摄。" }),
+        );
+      });
+
+    const resumed = await runRecommendationAgent({
+      preset: {} as never,
+      task: "校园活动找谁拍照",
+      persons: [candidate],
+      relations: [],
+      events: [],
+      archiveVersion: "archive-planning",
+      recorder: new MemoryAgentRunRecorder({ runId: "recommendation-planning-resume" }),
+      resumeFrom: suspended.checkpoint,
+      transportRetry: { maxAttempts: 1, delaysMs: [] },
+    });
+    expect(resumed.status).toBe("completed");
+    expect(resumed.candidates[0]?.person.id).toBe("photo");
+    expect(resumed.rounds).toBe(2);
   });
 
   it("does not execute a model-requested tool when only the final answer round remains", async () => {
@@ -498,7 +731,7 @@ describe("archive disclosure", () => {
           JSON.stringify({
             type: "tool",
             tool: "get_profiles",
-            args: { personIds: ["legal"] },
+            args: { personRefs: ["ref_00000000000000000000000000000000"] },
           }),
         );
       });
@@ -525,9 +758,8 @@ describe("archive disclosure", () => {
     expect(recorder.events().filter((event) => event.kind === "tool_call")).toHaveLength(1);
   });
 
-  it("rejects a model decision that changes the locked first person before rendering", async () => {
+  it("ignores a model ranking claim and renders the already locked local order", async () => {
     const persons = [person("甲", "法律顾问 合同审查"), person("乙", "注册会计师 税务申报")];
-    const expectedIds = ["甲", "乙"];
     askModelMock
       .mockImplementationOnce(async (...args: unknown[]) => {
         (args[4] as (chunk: string) => void)(
@@ -553,26 +785,7 @@ describe("archive disclosure", () => {
         (args[4] as (chunk: string) => void)(
           JSON.stringify({
             type: "final",
-            decision: {
-              mode: "open",
-              orderedPersonIds: [...expectedIds].reverse(),
-              accessVerified: false,
-            },
             outreachDraft: "请找乙。",
-          }),
-        );
-      })
-      .mockImplementationOnce(async (...args: unknown[]) => {
-        expect(String(args[1])).toContain("invalid_final_decision");
-        (args[4] as (chunk: string) => void)(
-          JSON.stringify({
-            type: "final",
-            decision: {
-              mode: "open",
-              orderedPersonIds: expectedIds,
-              accessVerified: false,
-            },
-            outreachDraft: "你好，想请你帮我看看这份合同。",
           }),
         );
       });
@@ -585,7 +798,7 @@ describe("archive disclosure", () => {
       events: [],
     });
 
-    expect(result.rounds).toBe(3);
+    expect(result.rounds).toBe(2);
     expect(result.answer).toContain("1. 甲");
     expect(result.answer).not.toContain("请找乙");
   });
@@ -611,15 +824,29 @@ describe("local recommendation tools", () => {
       createdAt: 1,
     },
   ];
+  const archive = { persons, relations, events };
 
-  it("searches the complete local archive and returns stable person ids", async () => {
+  async function resolvePersonRef(name: string, recorder: MemoryAgentRunRecorder) {
+    const result = (await executeRecommendationTool(
+      "resolve_record_refs",
+      { refs: [{ kind: "person", name }] },
+      archive,
+      { recorder },
+    )) as { rows: Array<{ candidates: Array<{ handle: string }> }> };
+    return result.rows[0]!.candidates[0]!.handle;
+  }
+
+  it("searches the complete local archive and returns opaque person refs", async () => {
     const result = (await executeRecommendationTool(
       "search_profiles",
       { query: "合同 法律" },
-      { persons, relations, events },
-    )) as { rows: Array<{ id: string }> };
+      archive,
+    )) as { rows: Array<{ personRef: string; name: string }> };
 
-    expect(result.rows.map((row) => row.id)).toEqual(["legal"]);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({ name: "legal" });
+    expect(result.rows[0]?.personRef).toMatch(/^ref_[0-9a-f]{32}$/);
+    expect(result.rows[0]).not.toHaveProperty("id");
   });
 
   it("forms the capability candidate set over the full archive before ranking convenience", async () => {
@@ -654,27 +881,35 @@ describe("local recommendation tools", () => {
       },
       { persons: [...unrelated, capable], relations: [], events: [] },
     )) as {
-      rows: Array<{ personId: string; capabilityMatches: unknown[] }>;
+      rows: Array<{ personRef: string; personName: string; capabilityMatches: unknown[] }>;
     };
 
-    expect(result.rows.map((row) => row.personId)).toEqual(["venue-low-closeness"]);
+    expect(result.rows.map((row) => row.personName)).toEqual(["venue-low-closeness"]);
+    expect(result.rows[0]?.personRef).toMatch(/^ref_[0-9a-f]{32}$/);
+    expect(result.rows[0]).not.toHaveProperty("personId");
     expect(result.rows[0]?.capabilityMatches).toHaveLength(1);
   });
 
-  it("reveals connected relationships and events only for requested ids", async () => {
+  it("reveals connected relationships and events only for requested opaque refs", async () => {
+    const recorder = new MemoryAgentRunRecorder({ runId: "recommendation-detail-refs" });
+    const legalRef = await resolvePersonRef("legal", recorder);
     const relationResult = (await executeRecommendationTool(
       "get_relationships",
-      { personIds: ["legal"] },
-      { persons, relations, events },
+      { personRefs: [legalRef] },
+      archive,
+      { recorder },
     )) as { rows: unknown[] };
     const eventResult = (await executeRecommendationTool(
       "get_events",
-      { personIds: ["legal"] },
-      { persons, relations, events },
+      { personRefs: [legalRef] },
+      archive,
+      { recorder },
     )) as { rows: unknown[] };
 
     expect(relationResult.rows).toHaveLength(1);
     expect(eventResult.rows).toHaveLength(1);
+    expect(relationResult.rows[0]).not.toHaveProperty("id");
+    expect(eventResult.rows[0]).not.toHaveProperty("id");
   });
 
   it("returns a locked deterministic referral path instead of asking the model to invent one", async () => {
@@ -686,19 +921,29 @@ describe("local recommendation tools", () => {
       confidence: 0.95,
       basis: "原文：两人是同事",
     };
+    const recorder = new MemoryAgentRunRecorder({ runId: "recommendation-path-refs" });
+    const targetPersonRef = await resolvePersonRef("photo", recorder);
     const result = (await executeRecommendationTool(
       "find_connection_paths",
-      { targetPersonId: "photo", maxHops: 3 },
-      { persons, relations, events },
+      { targetPersonRef, maxHops: 3 },
+      archive,
+      { recorder },
     )) as {
       rankingLocked: boolean;
-      rows: Array<{ personId: string; path: { personIds: string[] } }>;
+      rows: Array<{
+        personRef: string;
+        personName: string;
+        path: { personRefs: string[]; personNames: string[] };
+      }>;
     };
 
     expect(result.rankingLocked).toBe(true);
     expect(result.rows[0]).toMatchObject({
-      personId: "legal",
-      path: { personIds: ["legal", "photo"] },
+      personName: "legal",
+      path: { personNames: ["legal", "photo"] },
     });
+    expect(result.rows[0]?.personRef).toMatch(/^ref_[0-9a-f]{32}$/);
+    expect(result.rows[0]?.path.personRefs).toHaveLength(2);
+    expect(result.rows[0]).not.toHaveProperty("personId");
   });
 });

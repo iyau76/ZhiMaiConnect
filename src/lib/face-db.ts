@@ -399,7 +399,8 @@ export interface ReminderRecord {
 }
 
 const DB_NAME = "openglass-faces";
-const DB_VERSION = 12;
+export const FACE_DB_VERSION = 13;
+const DB_VERSION = FACE_DB_VERSION;
 const PERSONS = "persons";
 const SIGHTINGS = "sightings";
 const RELATIONS = "relations";
@@ -417,7 +418,13 @@ const RELATION_VIEW_PREFERENCES = "relationViewPreferences";
 const REFERRAL_POLICIES = "referralPolicies";
 const COLLECTIONS = "collections";
 const COLLECTION_MEMBERSHIPS = "collectionMemberships";
-const APP_META = "appMeta";
+export const APP_META = "appMeta";
+export const AGENT_RUNS = "agentRuns";
+export const AGENT_RUN_EVENTS = "agentRunEvents";
+export const AGENT_OBSERVATIONS = "agentObservations";
+export const AGENT_CHECKPOINTS = "agentCheckpoints";
+export const MUTATION_PROPOSALS = "mutationProposals";
+export const MUTATION_RECEIPTS = "mutationReceipts";
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -478,6 +485,63 @@ function openDb() {
         db.createObjectStore(COLLECTION_MEMBERSHIPS, { keyPath: "id" });
       if (!db.objectStoreNames.contains(APP_META))
         db.createObjectStore(APP_META, { keyPath: "id" });
+
+      const transaction = request.transaction;
+      const agentRuns = db.objectStoreNames.contains(AGENT_RUNS)
+        ? transaction?.objectStore(AGENT_RUNS)
+        : db.createObjectStore(AGENT_RUNS, { keyPath: "id" });
+      if (agentRuns && !agentRuns.indexNames.contains("threadId"))
+        agentRuns.createIndex("threadId", "threadId");
+      if (agentRuns && !agentRuns.indexNames.contains("status"))
+        agentRuns.createIndex("status", "status");
+      if (agentRuns && !agentRuns.indexNames.contains("updatedAt"))
+        agentRuns.createIndex("updatedAt", "updatedAt");
+
+      const agentRunEvents = db.objectStoreNames.contains(AGENT_RUN_EVENTS)
+        ? transaction?.objectStore(AGENT_RUN_EVENTS)
+        : db.createObjectStore(AGENT_RUN_EVENTS, { keyPath: "id" });
+      if (agentRunEvents && !agentRunEvents.indexNames.contains("runId"))
+        agentRunEvents.createIndex("runId", "runId");
+      if (agentRunEvents && !agentRunEvents.indexNames.contains("runSequence"))
+        agentRunEvents.createIndex("runSequence", ["runId", "sequence"], { unique: true });
+      if (agentRunEvents && !agentRunEvents.indexNames.contains("kind"))
+        agentRunEvents.createIndex("kind", "kind");
+
+      const agentObservations = db.objectStoreNames.contains(AGENT_OBSERVATIONS)
+        ? transaction?.objectStore(AGENT_OBSERVATIONS)
+        : db.createObjectStore(AGENT_OBSERVATIONS, { keyPath: "id" });
+      if (agentObservations && !agentObservations.indexNames.contains("runId"))
+        agentObservations.createIndex("runId", "runId");
+      if (agentObservations && !agentObservations.indexNames.contains("callFingerprint"))
+        agentObservations.createIndex("callFingerprint", "callFingerprint");
+
+      const agentCheckpoints = db.objectStoreNames.contains(AGENT_CHECKPOINTS)
+        ? transaction?.objectStore(AGENT_CHECKPOINTS)
+        : db.createObjectStore(AGENT_CHECKPOINTS, { keyPath: "id" });
+      if (agentCheckpoints && !agentCheckpoints.indexNames.contains("runId"))
+        agentCheckpoints.createIndex("runId", "runId");
+      if (agentCheckpoints && !agentCheckpoints.indexNames.contains("runSequence"))
+        agentCheckpoints.createIndex("runSequence", ["runId", "afterSequence"]);
+      if (agentCheckpoints && !agentCheckpoints.indexNames.contains("status"))
+        agentCheckpoints.createIndex("status", "status");
+
+      const mutationProposals = db.objectStoreNames.contains(MUTATION_PROPOSALS)
+        ? transaction?.objectStore(MUTATION_PROPOSALS)
+        : db.createObjectStore(MUTATION_PROPOSALS, { keyPath: "id" });
+      if (mutationProposals && !mutationProposals.indexNames.contains("sourceRunId"))
+        mutationProposals.createIndex("sourceRunId", "sourceRunId");
+      if (mutationProposals && !mutationProposals.indexNames.contains("status"))
+        mutationProposals.createIndex("status", "status");
+      if (mutationProposals && !mutationProposals.indexNames.contains("updatedAt"))
+        mutationProposals.createIndex("updatedAt", "updatedAt");
+
+      const mutationReceipts = db.objectStoreNames.contains(MUTATION_RECEIPTS)
+        ? transaction?.objectStore(MUTATION_RECEIPTS)
+        : db.createObjectStore(MUTATION_RECEIPTS, { keyPath: "id" });
+      if (mutationReceipts && !mutationReceipts.indexNames.contains("sourceRunId"))
+        mutationReceipts.createIndex("sourceRunId", "sourceRunId");
+      if (mutationReceipts && !mutationReceipts.indexNames.contains("committedAt"))
+        mutationReceipts.createIndex("committedAt", "committedAt");
 
       // v9 只增加可选关系策略字段。用游标保守回填旧关系：不猜置信度，
       // 只从明确的 basis 前缀判断“原文/推断”，其它标为 unknown。
@@ -662,10 +726,22 @@ function openDb() {
       });
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => {
+        database.close();
+        dbPromise = null;
+      };
+      resolve(database);
+    };
     request.onerror = () => reject(request.error ?? new Error("无法打开本地数据库"));
   });
   return dbPromise;
+}
+
+/** Shared database handle for repositories that participate in the local archive transaction model. */
+export function openFacesDbDatabase() {
+  return openDb();
 }
 
 async function run<T>(
@@ -836,6 +912,15 @@ export interface ArchiveMutationWriteBatch extends RelationshipWriteBatch {
   collectionMemberships?: CollectionMembershipRecord[];
   deleteCollectionMembershipIds?: string[];
 }
+
+export interface ArchiveMutationDecisionGuard {
+  decisionId: string;
+  /** Coordinator proposals are optional for an already user-approved local write intent. */
+  proposalIds?: string[];
+  expectedRevision: number;
+}
+
+export type ArchiveMutationDecisionApplyResult = "applied" | "already_applied" | "conflict";
 
 /**
  * One consistent read of every durable archive store. Compatibility views,
@@ -1074,14 +1159,58 @@ async function replaceArchiveSnapshot(replacement: FaceDbArchiveReplacement) {
       id: "kinshipProjectionVersion",
       value: KINSHIP_PROJECTOR_VERSION,
     });
+    const archiveRevisionRequest = tx.objectStore(APP_META).get(ARCHIVE_MUTATION_REVISION_ID);
+    archiveRevisionRequest.onsuccess = () => {
+      tx.objectStore(APP_META).put({
+        id: ARCHIVE_MUTATION_REVISION_ID,
+        value: Number(archiveRevisionRequest.result?.value ?? 0) + 1,
+      });
+    };
   });
 }
 
-/** Commit a fully validated archive mutation as one IndexedDB transaction. */
-async function applyArchiveMutationBatch(batch: ArchiveMutationWriteBatch) {
+export function archiveMutationDecisionMarkerId(decisionId: string) {
+  return `archiveMutationDecision:${decisionId}`;
+}
+
+const ARCHIVE_MUTATION_REVISION_ID = "archiveMutationRevision";
+
+async function getArchiveMutationRevision() {
+  const db = await openDb();
+  return new Promise<number>((resolve, reject) => {
+    const tx = db.transaction(APP_META, "readonly");
+    const request = tx.objectStore(APP_META).get(ARCHIVE_MUTATION_REVISION_ID);
+    tx.onerror = () => reject(tx.error ?? new Error("读取档案事务版本失败"));
+    tx.onabort = () => reject(tx.error ?? new Error("读取档案事务版本已中止"));
+    tx.oncomplete = () => resolve(Number(request.result?.value ?? 0));
+  });
+}
+
+async function hasAppliedArchiveMutationDecision(decisionId: string) {
+  const db = await openDb();
+  return new Promise<boolean>((resolve, reject) => {
+    const tx = db.transaction(APP_META, "readonly");
+    const request = tx.objectStore(APP_META).get(archiveMutationDecisionMarkerId(decisionId));
+    tx.onerror = () => reject(tx.error ?? new Error("读取档案事务标记失败"));
+    tx.onabort = () => reject(tx.error ?? new Error("读取档案事务标记已中止"));
+    tx.oncomplete = () => resolve(Boolean(request.result));
+  });
+}
+
+/**
+ * Commit a fully validated archive mutation as one IndexedDB transaction.
+ * When a decision guard is present, the fact write and its idempotency marker
+ * share that transaction. Replaying an interrupted approved decision is then
+ * an exact no-op instead of a second archive write.
+ */
+async function applyArchiveMutationBatchInternal(
+  batch: ArchiveMutationWriteBatch,
+  guard?: ArchiveMutationDecisionGuard,
+): Promise<ArchiveMutationDecisionApplyResult> {
   const normalizedPersons = (batch.persons ?? []).map(normalizePersonRecord);
   for (const person of normalizedPersons) assertValidPersonName(person.name);
   const db = await openDb();
+  const guardedProposalIds = guard?.proposalIds ?? [];
   const stores = [
     PERSONS,
     RELATION_ASSERTIONS,
@@ -1098,13 +1227,15 @@ async function applyArchiveMutationBatch(batch: ArchiveMutationWriteBatch) {
     RELATION_VIEW_PREFERENCES,
     REFERRAL_POLICIES,
     APP_META,
+    ...(guardedProposalIds.length ? [MUTATION_PROPOSALS] : []),
   ];
 
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<ArchiveMutationDecisionApplyResult>((resolve, reject) => {
     const tx = db.transaction(stores, "readwrite");
+    let result: ArchiveMutationDecisionApplyResult = "applied";
     tx.onerror = () => reject(tx.error ?? new Error("档案变更事务失败"));
     tx.onabort = () => reject(tx.error ?? new Error("档案变更事务已中止"));
-    tx.oncomplete = () => resolve();
+    tx.oncomplete = () => resolve(result);
 
     const personStore = tx.objectStore(PERSONS);
     const assertionStore = tx.objectStore(RELATION_ASSERTIONS);
@@ -1112,11 +1243,45 @@ async function applyArchiveMutationBatch(batch: ArchiveMutationWriteBatch) {
     const assertionRequest = assertionStore.getAll();
     let currentPersons: PersonRecord[] | undefined;
     let currentAssertions: RelationAssertionRecord[] | undefined;
+    let markerLoaded = !guard;
+    let markerExists = false;
+    let archiveRevisionLoaded = false;
+    let archiveRevision = 0;
+    let proposalClaimsLoaded = guardedProposalIds.length === 0;
+    const proposalClaims: Array<{ id: string; status: string; decisionId?: string }> = [];
     let applied = false;
 
     const apply = () => {
-      if (applied || !currentPersons || !currentAssertions) return;
+      if (
+        applied ||
+        !currentPersons ||
+        !currentAssertions ||
+        !markerLoaded ||
+        !archiveRevisionLoaded ||
+        !proposalClaimsLoaded
+      )
+        return;
       applied = true;
+
+      if (markerExists) {
+        result = "already_applied";
+        return;
+      }
+      if (
+        guardedProposalIds.length > 0 &&
+        (proposalClaims.length !== guardedProposalIds.length ||
+          proposalClaims.some(
+            (proposal) =>
+              proposal.status !== "pending" || proposal.decisionId !== guard?.decisionId,
+          ))
+      ) {
+        result = "conflict";
+        return;
+      }
+      if (guard && archiveRevision !== guard.expectedRevision) {
+        result = "conflict";
+        return;
+      }
 
       const personsById = new Map(currentPersons.map((person) => [person.id, person]));
       for (const id of batch.deletePersonIds ?? []) {
@@ -1227,6 +1392,16 @@ async function applyArchiveMutationBatch(batch: ArchiveMutationWriteBatch) {
         id: "kinshipProjectionVersion",
         value: KINSHIP_PROJECTOR_VERSION,
       });
+      if (guard) {
+        tx.objectStore(APP_META).put({
+          id: archiveMutationDecisionMarkerId(guard.decisionId),
+          value: { proposalIds: [...guardedProposalIds] },
+        });
+      }
+      tx.objectStore(APP_META).put({
+        id: ARCHIVE_MUTATION_REVISION_ID,
+        value: archiveRevision + 1,
+      });
     };
 
     personRequest.onsuccess = () => {
@@ -1237,7 +1412,53 @@ async function applyArchiveMutationBatch(batch: ArchiveMutationWriteBatch) {
       currentAssertions = assertionRequest.result as RelationAssertionRecord[];
       apply();
     };
+    if (guard) {
+      const markerRequest = tx
+        .objectStore(APP_META)
+        .get(archiveMutationDecisionMarkerId(guard.decisionId));
+      markerRequest.onsuccess = () => {
+        markerExists = Boolean(markerRequest.result);
+        markerLoaded = true;
+        apply();
+      };
+      const proposalStore = guardedProposalIds.length
+        ? tx.objectStore(MUTATION_PROPOSALS)
+        : undefined;
+      const requests = guardedProposalIds.map((id) => proposalStore!.get(id));
+      let remaining = requests.length;
+      if (!remaining) {
+        proposalClaimsLoaded = true;
+        apply();
+      }
+      requests.forEach((request) => {
+        request.onsuccess = () => {
+          if (request.result) proposalClaims.push(request.result);
+          remaining -= 1;
+          if (!remaining) {
+            proposalClaimsLoaded = true;
+            apply();
+          }
+        };
+      });
+    }
+    const revisionRequest = tx.objectStore(APP_META).get(ARCHIVE_MUTATION_REVISION_ID);
+    revisionRequest.onsuccess = () => {
+      archiveRevision = Number(revisionRequest.result?.value ?? 0);
+      archiveRevisionLoaded = true;
+      apply();
+    };
   });
+}
+
+async function applyArchiveMutationBatch(batch: ArchiveMutationWriteBatch): Promise<void> {
+  await applyArchiveMutationBatchInternal(batch);
+}
+
+async function applyArchiveMutationBatchOnce(
+  batch: ArchiveMutationWriteBatch,
+  guard: ArchiveMutationDecisionGuard,
+) {
+  return applyArchiveMutationBatchInternal(batch, guard);
 }
 
 /**
@@ -1755,6 +1976,9 @@ export const facesDb = {
   putBatch,
   putRelationshipBatch,
   applyArchiveMutationBatch,
+  applyArchiveMutationBatchOnce,
+  hasAppliedArchiveMutationDecision,
+  getArchiveMutationRevision,
   readArchiveSnapshot,
   replaceArchiveSnapshot,
   listRelationAssertions: () =>

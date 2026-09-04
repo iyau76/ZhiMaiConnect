@@ -11,7 +11,8 @@ import type { Provenance } from "./provenance";
 import type { RelationPredicate, RelationQualifiers } from "./relation-ontology";
 
 const DEMO_PREFIX = "demo-zhimai-";
-const DEMO_AT = new Date(2026, 7, 20, 10).getTime();
+// Keep the fixture byte-for-byte stable across developer and CI time zones.
+const DEMO_AT = Date.UTC(2026, 7, 20, 2);
 const demoSource: Provenance = { kind: "manual", detail: "合成演示数据", at: DEMO_AT };
 
 type Seed = [
@@ -584,12 +585,17 @@ function demoReminders(people: PersonRecord[]): ReminderRecord[] {
   }));
 }
 
-export async function loadDemoData() {
+export function buildDemoData() {
   const people = demoPeople();
   const relations = demoRelations(people);
   const { collections, memberships } = demoCollections(people);
   const events = demoEvents(people);
   const reminders = demoReminders(people);
+  return { people, relations, collections, memberships, events, reminders };
+}
+
+export async function loadDemoData() {
+  const { people, relations, collections, memberships, events, reminders } = buildDemoData();
   await facesDb.applyArchiveMutationBatch({
     persons: people,
     assertions: relations,

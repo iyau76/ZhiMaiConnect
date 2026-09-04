@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { agentMutationRequestSchema } from "./archive-mutation-agent";
+import { ArchiveAgentReferenceSession } from "./archive-agent-reference-session";
+import type { AgentMutationRequest } from "./archive-mutation-agent";
 import { MemoryAgentRunRecorder, type AgentRunRecorder } from "./agent-run-log";
 import {
   AgentToolRegistry,
@@ -15,7 +16,14 @@ import type {
   PersonRecord,
   RelationRecord,
 } from "./face-db";
-import { rankCandidates, rankCapabilityCandidates, taskSafetyNotice } from "./recommendation";
+import {
+  rankCandidates,
+  rankCapabilityCandidates,
+  taskSafetyNotice,
+  type CandidateRecommendation,
+} from "./recommendation";
+import type { ResolvedRecordDomain } from "./archive-record-resolver";
+import { semanticRecordRefSchema } from "./intake-semantic-plan";
 import { callWebTool } from "./web-tools-client";
 
 export interface ArchiveAgentData {
@@ -28,13 +36,14 @@ export interface ArchiveAgentData {
 
 export interface ArchiveAgentServices {
   archive: ArchiveAgentData;
-  intakeStaging?: {
-    stagePersonUpdate(personId: string, changes: Record<string, unknown>): unknown;
-    stageEventUpdate(eventId: string, changes: Record<string, unknown>): unknown;
-    stageRelationUpdate(relationId: string, changes: Record<string, unknown>): unknown;
-  };
+  /**
+   * Stable namespace for a continuing conversation. Standalone agents omit
+   * this and receive run-scoped handles; a persisted chat thread supplies its
+   * thread id so locally reusable tool observations keep valid opaque refs.
+   */
+  referenceNamespace?: string;
   mutationPlanning?: {
-    propose(request: z.infer<typeof agentMutationRequestSchema>): unknown | Promise<unknown>;
+    propose(request: AgentMutationRequest): unknown | Promise<unknown>;
   };
 }
 
@@ -72,7 +81,7 @@ export function compactArchivePerson(person: PersonRecord) {
 }
 
 const PROFILE_INDEX_FIELDS = [
-  "id",
+  "personRef",
   "name",
   "entityRole",
   "relation",
@@ -230,6 +239,166 @@ function namesOf(data: ArchiveAgentData) {
   return new Map(data.persons.map((person) => [person.id, person.name]));
 }
 
+function referenceSessionFor(services: ArchiveAgentServices, runId: string) {
+  return new ArchiveAgentReferenceSession(
+    {
+      persons: services.archive.persons,
+      relations: services.archive.relations,
+      events: services.archive.events,
+      collections: services.archive.collections ?? [],
+      collectionMemberships: services.archive.collectionMemberships ?? [],
+    },
+    services.referenceNamespace ?? runId,
+  );
+}
+
+function archiveHandle(
+  session: ArchiveAgentReferenceSession,
+  domain: ResolvedRecordDomain,
+  stableId: string,
+  label: string,
+) {
+  return session.reference(domain, stableId, label).handle;
+}
+
+function restoreArchiveHandle(
+  session: ArchiveAgentReferenceSession,
+  handle: string,
+  domain: ResolvedRecordDomain,
+) {
+  const resolution = session.restoreHandle(handle, domain);
+  if (resolution.status !== "resolved") throw new Error(resolution.reason);
+  return resolution.stableId;
+}
+
+function restoreArchiveHandles(
+  session: ArchiveAgentReferenceSession,
+  handles: readonly string[],
+  domain: ResolvedRecordDomain,
+) {
+  return handles.map((handle) => restoreArchiveHandle(session, handle, domain));
+}
+
+function visibleArchivePerson(person: PersonRecord, session: ArchiveAgentReferenceSession) {
+  const { id, ...profile } = compactArchivePerson(person);
+  return {
+    personRef: archiveHandle(session, "person", id, profile.name),
+    ...profile,
+  };
+}
+
+function visibleDetailedArchivePerson(person: PersonRecord, session: ArchiveAgentReferenceSession) {
+  const { id, ...profile } = detailedArchivePerson(person);
+  return {
+    personRef: archiveHandle(session, "person", id, profile.name),
+    ...profile,
+  };
+}
+
+function visibleArchiveRelation(
+  relation: RelationRecord,
+  names: ReadonlyMap<string, string>,
+  session: ArchiveAgentReferenceSession,
+) {
+  const { id, fromId, toId, supportingAssertionIds, ...record } = compactArchiveRelation(
+    relation,
+    names,
+  );
+  return {
+    relationRef: archiveHandle(session, "relation", id, record.label),
+    ...record,
+    fromRef: archiveHandle(session, "person", fromId, record.from),
+    toRef: archiveHandle(session, "person", toId, record.to),
+    supportingAssertionRefs: supportingAssertionIds.map((assertionId) =>
+      archiveHandle(session, "relation", assertionId, "支持关系"),
+    ),
+  };
+}
+
+function visibleArchiveEvent(
+  event: LifeEventRecord,
+  names: ReadonlyMap<string, string>,
+  session: ArchiveAgentReferenceSession,
+) {
+  const { id, personIds, ...record } = compactArchiveEvent(event, names);
+  return {
+    eventRef: archiveHandle(session, "event", id, record.title),
+    ...record,
+    personRefs: personIds.map((personId, index) =>
+      archiveHandle(session, "person", personId, record.persons[index] ?? "未知人物"),
+    ),
+  };
+}
+
+function visibleRecommendationCandidate(
+  candidate: CandidateRecommendation,
+  session: ArchiveAgentReferenceSession,
+) {
+  return {
+    personRef: archiveHandle(session, "person", candidate.person.id, candidate.person.name),
+    personName: candidate.person.name,
+    score: candidate.score,
+    confidence: candidate.confidence,
+    reasons: candidate.reasons,
+    evidence: candidate.evidence,
+    risks: candidate.risks,
+    capabilityMatches: candidate.capabilityMatches,
+    ...(candidate.path
+      ? {
+          path: {
+            targetPersonRef: archiveHandle(
+              session,
+              "person",
+              candidate.path.targetId,
+              candidate.path.personNames.at(-1) ?? "目标人物",
+            ),
+            personRefs: candidate.path.personIds.map((personId, index) =>
+              archiveHandle(
+                session,
+                "person",
+                personId,
+                candidate.path?.personNames[index] ?? "未知人物",
+              ),
+            ),
+            personNames: candidate.path.personNames,
+            relationRefs: candidate.path.relationIds.map((relationId, index) =>
+              archiveHandle(
+                session,
+                "relation",
+                relationId,
+                candidate.path?.labels[index] ?? "关系",
+              ),
+            ),
+            labels: candidate.path.labels,
+            cost: candidate.path.cost,
+            direct: candidate.path.direct,
+          },
+        }
+      : {}),
+    ...(candidate.targetEntry
+      ? {
+          targetEntry: {
+            targetPersonRef: archiveHandle(
+              session,
+              "person",
+              candidate.targetEntry.targetId,
+              "目标人物",
+            ),
+            relationRefs: candidate.targetEntry.relationIds.map((relationId, index) =>
+              archiveHandle(
+                session,
+                "relation",
+                relationId,
+                candidate.targetEntry?.labels[index] ?? "关系",
+              ),
+            ),
+            labels: candidate.targetEntry.labels,
+          },
+        }
+      : {}),
+  };
+}
+
 const cursorSchema = z
   .object({
     cursor: z.number().int().nonnegative().optional(),
@@ -240,13 +409,62 @@ const cursorSchema = z
 const querySchema = z
   .object({
     query: z.string().trim().min(1).max(160),
+    cursor: z.number().int().nonnegative().optional(),
     limit: z.number().int().min(1).max(30).optional(),
   })
   .strict();
 
-const idsSchema = z
-  .object({ personIds: z.array(z.string().min(1).max(200)).min(1).max(20) })
+const archiveHandleSchema = z
+  .string()
+  .regex(/^ref_[0-9a-f]{32}$/)
+  .describe("当前 Agent 运行中由档案工具返回的 opaque handle");
+
+const personRefsSchema = z
+  .object({ personRefs: z.array(archiveHandleSchema).min(1).max(20) })
   .strict();
+
+const personRefsPageSchema = z
+  .object({
+    personRefs: z.array(archiveHandleSchema).min(1).max(20),
+    cursor: z.number().int().nonnegative().optional(),
+    limit: z.number().int().min(1).max(50).optional(),
+  })
+  .strict();
+
+const eventRefSchema = z.object({ eventRef: archiveHandleSchema }).strict();
+
+const relationRefSchema = z.object({ relationRef: archiveHandleSchema }).strict();
+
+const semanticRefsSchema = z
+  .object({
+    refs: z.array(semanticRecordRefSchema).min(1).max(50),
+    cursor: z.number().int().nonnegative().optional(),
+    limit: z.number().int().min(1).max(20).optional(),
+    candidateCursor: z.number().int().nonnegative().optional(),
+    candidateLimit: z.number().int().min(1).max(30).optional(),
+  })
+  .strict();
+
+const collectionsPageSchema = z
+  .object({
+    collectionRef: archiveHandleSchema.optional(),
+    cursor: z.number().int().nonnegative().optional(),
+    limit: z.number().int().min(1).max(30).optional(),
+  })
+  .strict();
+
+function pageOf<T>(rows: readonly T[], cursor: number, limit: number) {
+  const pageRows = rows.slice(cursor, cursor + limit);
+  const nextCursor = cursor + pageRows.length < rows.length ? cursor + pageRows.length : null;
+  return {
+    cursor,
+    rows: pageRows,
+    returnedCount: pageRows.length,
+    sourceCount: rows.length,
+    nextCursor,
+    exhausted: nextCursor === null,
+  };
+}
 
 const recommendationCapabilitySchema = z
   .object({
@@ -262,25 +480,87 @@ export const archiveAgentToolRegistry = new AgentToolRegistry<ArchiveAgentServic
 archiveAgentToolRegistry
   .register(
     defineAgentTool({
+      name: "resolve_record_refs",
+      label: "解析语义引用",
+      description:
+        "把姓名、别名、我、圈层、关系或事件等语义 recordRef 在完整本地档案中解析为本次运行可用的 opaque handle；不受人物分页位置影响，歧义和缺失按条返回。",
+      input: semanticRefsSchema,
+      permission: "private_read",
+      handler: (
+        { refs, cursor = 0, limit = 12, candidateCursor = 0, candidateLimit = 12 },
+        { services, runId },
+      ) => {
+        const session = referenceSessionFor(services, runId);
+        const resolutions = session.resolveMany(refs);
+        const page = pageOf(resolutions, cursor, limit);
+        return {
+          ...page,
+          rows: page.rows.map((resolution, index) => {
+            const candidatePage = pageOf(resolution.candidates, candidateCursor, candidateLimit);
+            return {
+              index: cursor + index,
+              status: resolution.status,
+              cardinality: resolution.status === "resolved" ? resolution.cardinality : undefined,
+              reason: resolution.status === "resolved" ? undefined : resolution.reason,
+              candidateCursor: candidatePage.cursor,
+              candidates: candidatePage.rows,
+              candidateCount: candidatePage.sourceCount,
+              nextCandidateCursor: candidatePage.nextCursor,
+              candidatesExhausted: candidatePage.exhausted,
+            };
+          }),
+        };
+      },
+    }),
+  )
+  .register(
+    defineAgentTool({
       name: "get_collections",
       label: "读取圈层与成员",
-      description: "读取关系圈层/场景集合及稳定 collectionId、personId；圈层批改前必须先调用。",
-      input: z.object({}).strict(),
+      description:
+        "分页读取圈层索引；传 collectionRef 时分页读取该圈层成员。返回的 nextCursor 非空时继续调用同一工具。",
+      input: collectionsPageSchema,
       permission: "private_read",
-      handler: (_input, { services }) => {
+      handler: ({ collectionRef, cursor = 0, limit = 12 }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
         const people = new Map(services.archive.persons.map((person) => [person.id, person.name]));
         const memberships = services.archive.collectionMemberships ?? [];
+        if (collectionRef) {
+          const collectionId = restoreArchiveHandle(session, collectionRef, "collection");
+          const collection = (services.archive.collections ?? []).find(
+            (candidate) => candidate.id === collectionId,
+          );
+          if (!collection) return { error: "圈层不存在" };
+          const memberRows = memberships
+            .filter((membership) => membership.collectionId === collection.id)
+            .map((membership) => {
+              const personName = people.get(membership.personId) ?? "未知人物";
+              return {
+                personRef: archiveHandle(session, "person", membership.personId, personName),
+                personName,
+              };
+            });
+          return {
+            mode: "collection_members",
+            collectionRef,
+            name: cleanArchiveText(collection.name, 100),
+            ...pageOf(memberRows, cursor, limit),
+          };
+        }
+        const collectionRows = (services.archive.collections ?? []).map((collection) => ({
+          collectionRef: archiveHandle(session, "collection", collection.id, collection.name),
+          name: cleanArchiveText(collection.name, 100),
+          kind: collection.kind,
+          color: collection.color,
+          memberCount: memberships.filter((membership) => membership.collectionId === collection.id)
+            .length,
+          createdAt: collection.createdAt,
+          updatedAt: collection.updatedAt,
+        }));
         return {
+          mode: "collection_index",
           hint: "圈层由 collections/memberships 表示，不以 profile.circle 为唯一真相",
-          rows: (services.archive.collections ?? []).map((collection) => ({
-            ...collection,
-            members: memberships
-              .filter((membership) => membership.collectionId === collection.id)
-              .map((membership) => ({
-                personId: membership.personId,
-                personName: people.get(membership.personId) ?? "未知人物",
-              })),
-          })),
+          ...pageOf(collectionRows, cursor, limit),
         };
       },
     }),
@@ -303,19 +583,24 @@ archiveAgentToolRegistry
     defineAgentTool({
       name: "list_profiles",
       label: "浏览人物索引",
-      description: "分页读取人物 ID 与非敏感摘要；关键词未命中时可用它继续浏览。",
+      description: "分页读取人物引用与非敏感摘要；关键词未命中时可用它继续浏览。",
       input: cursorSchema,
       permission: "private_read",
-      handler: ({ cursor = 0, limit = 12 }, { services }) => {
+      handler: ({ cursor = 0, limit = 12 }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
         const rows = services.archive.persons
           .slice(cursor, cursor + limit)
-          .map(compactArchivePerson);
+          .map((person) => visibleArchivePerson(person, session));
         return {
           ...profileProjection("profile_index"),
+          cursor,
           rows,
+          returnedCount: rows.length,
+          sourceCount: services.archive.persons.length,
           nextCursor:
             cursor + rows.length < services.archive.persons.length ? cursor + rows.length : null,
           total: services.archive.persons.length,
+          exhausted: cursor + rows.length >= services.archive.persons.length,
         };
       },
     }),
@@ -325,10 +610,11 @@ archiveAgentToolRegistry
       name: "search_profiles",
       label: "检索人物档案",
       description:
-        "按姓名、别名与档案正文做召回，返回稳定 personId。零结果只代表本次检索词未命中。",
+        "按姓名、别名与档案正文做召回，返回本次运行可用的 personRef。零结果只代表本次检索词未命中。",
       input: querySchema,
       permission: "private_read",
-      handler: ({ query, limit = 8 }, { services }) => {
+      handler: ({ query, cursor = 0, limit = 8 }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
         const matches = services.archive.persons
           .map((person) => ({ person, score: archivePersonSearchScore(query, person) }))
           .filter((item) => item.score > 0)
@@ -337,15 +623,16 @@ archiveAgentToolRegistry
               right.score - left.score ||
               left.person.name.localeCompare(right.person.name, "zh-CN"),
           );
+        const page = pageOf(matches, cursor, limit);
         return {
           ...profileProjection("profile_index"),
           query,
-          rows: matches.slice(0, limit).map((item) => ({
-            ...compactArchivePerson(item.person),
+          ...page,
+          rows: page.rows.map((item) => ({
+            ...visibleArchivePerson(item.person, session),
             matchScore: item.score,
           })),
           totalMatches: matches.length,
-          exhausted: matches.length <= limit,
         };
       },
     }),
@@ -354,34 +641,40 @@ archiveAgentToolRegistry
     defineAgentTool({
       name: "get_profiles",
       label: "读取人物详情",
-      description: "按稳定 personId 读取人物详情；不返回联系方式原文、人脸特征或照片。",
-      input: idsSchema,
+      description: "按本次运行的 personRef 读取人物详情；不返回联系方式原文、人脸特征或照片。",
+      input: personRefsSchema,
       permission: "private_read",
-      handler: ({ personIds }, { services }) => ({
-        ...profileProjection("profile_detail"),
-        rows: services.archive.persons
-          .filter((person) => personIds.includes(person.id))
-          .map(detailedArchivePerson),
-      }),
+      handler: ({ personRefs }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
+        const personIds = restoreArchiveHandles(session, personRefs, "person");
+        return {
+          ...profileProjection("profile_detail"),
+          rows: services.archive.persons
+            .filter((person) => personIds.includes(person.id))
+            .map((person) => visibleDetailedArchivePerson(person, session)),
+        };
+      },
     }),
   )
   .register(
     defineAgentTool({
       name: "get_relationships",
       label: "读取人物关系",
-      description: "按人物 ID 读取事实关系和本地派生关系，明确 recordType、语义谓词与支持事实 ID。",
-      input: idsSchema,
+      description:
+        "按本次运行的 personRef 读取事实关系和本地派生关系，明确 recordType、语义谓词与支持事实引用。",
+      input: personRefsPageSchema,
       permission: "private_read",
-      handler: ({ personIds }, { services }) => {
+      handler: ({ personRefs, cursor = 0, limit = 30 }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
+        const personIds = restoreArchiveHandles(session, personRefs, "person");
         const names = namesOf(services.archive);
+        const matches = services.archive.relations.filter(
+          (relation) => personIds.includes(relation.fromId) || personIds.includes(relation.toId),
+        );
+        const page = pageOf(matches, cursor, limit);
         return {
-          rows: services.archive.relations
-            .filter(
-              (relation) =>
-                personIds.includes(relation.fromId) || personIds.includes(relation.toId),
-            )
-            .slice(0, 120)
-            .map((relation) => compactArchiveRelation(relation, names)),
+          ...page,
+          rows: page.rows.map((relation) => visibleArchiveRelation(relation, names, session)),
         };
       },
     }),
@@ -390,18 +683,21 @@ archiveAgentToolRegistry
     defineAgentTool({
       name: "search_events",
       label: "检索事件",
-      description: "按标题、详情、地点、日期或人物名称检索事件并返回稳定 eventId。",
+      description: "按标题、详情、地点、日期或人物名称检索事件并返回本次运行的 eventRef。",
       input: querySchema,
       permission: "private_read",
-      handler: ({ query, limit = 10 }, { services }) => {
+      handler: ({ query, cursor = 0, limit = 10 }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
         const names = namesOf(services.archive);
         const term = normalizedSearch(query);
         const matches = services.archive.events.filter((event) =>
           normalizedSearch(JSON.stringify(compactArchiveEvent(event, names))).includes(term),
         );
+        const page = pageOf(matches, cursor, limit);
         return {
           query,
-          rows: matches.slice(0, limit).map((event) => compactArchiveEvent(event, names)),
+          ...page,
+          rows: page.rows.map((event) => visibleArchiveEvent(event, names, session)),
           totalMatches: matches.length,
         };
       },
@@ -411,18 +707,21 @@ archiveAgentToolRegistry
     defineAgentTool({
       name: "search_relations",
       label: "检索关系",
-      description: "按人物姓名、关系标签、规范谓词、依据或备注检索关系并返回稳定 ID。",
+      description: "按人物姓名、关系标签、规范谓词、依据或备注检索关系并返回 relationRef。",
       input: querySchema,
       permission: "private_read",
-      handler: ({ query, limit = 10 }, { services }) => {
+      handler: ({ query, cursor = 0, limit = 10 }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
         const names = namesOf(services.archive);
         const term = normalizedSearch(query);
         const matches = services.archive.relations.filter((relation) =>
           normalizedSearch(JSON.stringify(compactArchiveRelation(relation, names))).includes(term),
         );
+        const page = pageOf(matches, cursor, limit);
         return {
           query,
-          rows: matches.slice(0, limit).map((relation) => compactArchiveRelation(relation, names)),
+          ...page,
+          rows: page.rows.map((relation) => visibleArchiveRelation(relation, names, session)),
           totalMatches: matches.length,
         };
       },
@@ -432,13 +731,15 @@ archiveAgentToolRegistry
     defineAgentTool({
       name: "get_event",
       label: "读取单个事件",
-      description: "按稳定 eventId 读取一条事件，供变更前核对。",
-      input: z.object({ eventId: z.string().min(1).max(200) }).strict(),
+      description: "按本次运行的 eventRef 读取一条事件，供变更前核对。",
+      input: eventRefSchema,
       permission: "private_read",
-      handler: ({ eventId }, { services }) => {
+      handler: ({ eventRef }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
+        const eventId = restoreArchiveHandle(session, eventRef, "event");
         const event = services.archive.events.find((candidate) => candidate.id === eventId);
         return event
-          ? compactArchiveEvent(event, namesOf(services.archive))
+          ? visibleArchiveEvent(event, namesOf(services.archive), session)
           : { error: "事件不存在" };
       },
     }),
@@ -447,15 +748,17 @@ archiveAgentToolRegistry
     defineAgentTool({
       name: "get_relation",
       label: "读取单个关系",
-      description: "按稳定关系 ID 读取事实或派生关系，供变更前核对。",
-      input: z.object({ relationId: z.string().min(1).max(300) }).strict(),
+      description: "按本次运行的 relationRef 读取事实或派生关系，供变更前核对。",
+      input: relationRefSchema,
       permission: "private_read",
-      handler: ({ relationId }, { services }) => {
+      handler: ({ relationRef }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
+        const relationId = restoreArchiveHandle(session, relationRef, "relation");
         const relation = services.archive.relations.find(
           (candidate) => candidate.id === relationId,
         );
         return relation
-          ? compactArchiveRelation(relation, namesOf(services.archive))
+          ? visibleArchiveRelation(relation, namesOf(services.archive), session)
           : { error: "关系不存在" };
       },
     }),
@@ -464,103 +767,22 @@ archiveAgentToolRegistry
     defineAgentTool({
       name: "get_events",
       label: "读取人物事件",
-      description: "按人物 ID 读取共同事件与稳定 eventId，供核对或后续变更提案使用。",
-      input: idsSchema,
+      description: "按 personRef 读取共同事件与 eventRef，供核对或后续变更提案使用。",
+      input: personRefsPageSchema,
       permission: "private_read",
-      handler: ({ personIds }, { services }) => {
+      handler: ({ personRefs, cursor = 0, limit = 30 }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
+        const personIds = restoreArchiveHandles(session, personRefs, "person");
         const names = namesOf(services.archive);
+        const matches = services.archive.events
+          .filter((event) => event.personIds?.some((id) => personIds.includes(id)))
+          .slice()
+          .sort((left, right) => right.date.localeCompare(left.date));
+        const page = pageOf(matches, cursor, limit);
         return {
-          rows: services.archive.events
-            .filter((event) => event.personIds?.some((id) => personIds.includes(id)))
-            .slice()
-            .sort((left, right) => right.date.localeCompare(left.date))
-            .slice(0, 100)
-            .map((event) => compactArchiveEvent(event, names)),
+          ...page,
+          rows: page.rows.map((event) => visibleArchiveEvent(event, names, session)),
         };
-      },
-    }),
-  )
-  .register(
-    defineAgentTool({
-      name: "propose_archive_mutations",
-      label: "生成批量档案变更计划",
-      description:
-        "把人物、事实关系、事件、圈层或删除变更组合成一个待批准计划；不会直接写库。必须先读取目标稳定 ID。跨圈迁移使用一次 migrate_collection_members 声明源圈、目标圈和选中人物；目标不存在时省略 target.collectionId，compiler 会原子地创建目标、移出源圈并加入目标圈。delete_person 是完整的原子级联操作，会自动删除或解绑该人物关联的关系、事件、提醒、事务、项目、圈层成员和证据；删除人物时只提交一次 delete_person，不要再为其依赖追加 update_relation、update_event、organize_collection 或重复 delete_person。",
-      input: agentMutationRequestSchema,
-      permission: "proposal",
-      handler: (request, { services }) => {
-        if (!services.mutationPlanning) throw new Error("当前 Agent 不支持档案变更计划");
-        return services.mutationPlanning.propose(request);
-      },
-    }),
-  )
-  .register(
-    defineAgentTool({
-      name: "propose_person_deletion",
-      label: "生成原子人物删除计划",
-      description:
-        "为一个稳定 personId 生成待批准的原子删除计划。此工具会自动预览并级联处理关系、事件、提醒、待办、事务、项目、圈层成员和证据；不要先逐项修改依赖，也不要与 propose_archive_mutations 组合使用。",
-      input: z
-        .object({
-          personId: z.string().min(1).max(200),
-          reason: z.string().trim().min(1).max(500),
-        })
-        .strict(),
-      permission: "proposal",
-      handler: ({ personId, reason }, { services }) => {
-        if (!services.mutationPlanning) throw new Error("当前 Agent 不支持人物删除计划");
-        const person = services.archive.persons.find((candidate) => candidate.id === personId);
-        if (!person) throw new Error(`人物 ${personId} 不存在`);
-        return services.mutationPlanning.propose({
-          title: `删除 ${cleanArchiveText(person.name, 100)}`,
-          reason,
-          operations: [{ kind: "delete_person", personId, reason }],
-        });
-      },
-    }),
-  )
-  .register(
-    defineAgentTool({
-      name: "stage_person_update",
-      label: "暂存人物修改",
-      description: "在录入草稿中暂存人物字段修改；必须先定位稳定 personId，只形成待用户确认内容。",
-      input: z
-        .object({ personId: z.string().min(1).max(200), changes: z.record(z.unknown()) })
-        .strict(),
-      permission: "proposal",
-      handler: ({ personId, changes }, { services }) => {
-        if (!services.intakeStaging) throw new Error("当前 Agent 不支持录入暂存");
-        return services.intakeStaging.stagePersonUpdate(personId, changes);
-      },
-    }),
-  )
-  .register(
-    defineAgentTool({
-      name: "stage_event_update",
-      label: "暂存事件修改",
-      description: "在录入草稿中暂存事件修改；必须先定位稳定 eventId，只形成待用户确认内容。",
-      input: z
-        .object({ eventId: z.string().min(1).max(200), changes: z.record(z.unknown()) })
-        .strict(),
-      permission: "proposal",
-      handler: ({ eventId, changes }, { services }) => {
-        if (!services.intakeStaging) throw new Error("当前 Agent 不支持录入暂存");
-        return services.intakeStaging.stageEventUpdate(eventId, changes);
-      },
-    }),
-  )
-  .register(
-    defineAgentTool({
-      name: "stage_relation_update",
-      label: "暂存关系修改",
-      description: "在录入草稿中暂存事实关系修改；派生关系不可直接改，只形成待用户确认内容。",
-      input: z
-        .object({ relationId: z.string().min(1).max(300), changes: z.record(z.unknown()) })
-        .strict(),
-      permission: "proposal",
-      handler: ({ relationId, changes }, { services }) => {
-        if (!services.intakeStaging) throw new Error("当前 Agent 不支持录入暂存");
-        return services.intakeStaging.stageRelationUpdate(relationId, changes);
       },
     }),
   )
@@ -577,7 +799,8 @@ archiveAgentToolRegistry
         })
         .strict(),
       permission: "private_read",
-      handler: ({ task, capability, limit = 5 }, { services }) => {
+      handler: ({ task, capability, limit = 5 }, { services, runId }) => {
+        const session = referenceSessionFor(services, runId);
         const candidates = capability
           ? rankCapabilityCandidates(capability, services.archive.persons, services.archive.events)
           : rankCandidates(task, services.archive.persons, services.archive.events);
@@ -585,16 +808,9 @@ archiveAgentToolRegistry
           rankingLocked: true,
           safetyNotice: taskSafetyNotice(task),
           capability,
-          rows: candidates.slice(0, limit).map((candidate) => ({
-            personId: candidate.person.id,
-            personName: candidate.person.name,
-            score: candidate.score,
-            confidence: candidate.confidence,
-            reasons: candidate.reasons,
-            evidence: candidate.evidence,
-            risks: candidate.risks,
-            capabilityMatches: candidate.capabilityMatches,
-          })),
+          rows: candidates
+            .slice(0, limit)
+            .map((candidate) => visibleRecommendationCandidate(candidate, session)),
           note: capability
             ? "先在全库按槽位档案证据形成候选集合，再按证据强度与联系可行性排序；模型不能补人或调序。"
             : "候选、分数和顺序由本地证据算法锁定；模型只能解释，不能调序或添加人物。",
@@ -610,7 +826,7 @@ archiveAgentToolRegistry
         "从可实际联系的人出发，计算到目标人物的可审计路径；输出顺序与分数由本地算法锁定。",
       input: z
         .object({
-          targetPersonId: z.string().min(1).max(200),
+          targetPersonRef: archiveHandleSchema,
           task: z.string().max(800).optional(),
           maxHops: z.number().int().min(1).max(5).optional(),
           limit: z.number().int().min(1).max(20).optional(),
@@ -619,9 +835,11 @@ archiveAgentToolRegistry
         .strict(),
       permission: "private_read",
       handler: (
-        { targetPersonId, task = "", maxHops = 3, limit = 5, includeInferred = false },
-        { services },
+        { targetPersonRef, task = "", maxHops = 3, limit = 5, includeInferred = false },
+        { services, runId },
       ) => {
+        const session = referenceSessionFor(services, runId);
+        const targetPersonId = restoreArchiveHandle(session, targetPersonRef, "person");
         const rows = rankConnectionPaths({
           ...services.archive,
           targetId: targetPersonId,
@@ -630,18 +848,9 @@ archiveAgentToolRegistry
           limit,
           includeInferred,
           includePending: false,
-        }).map((candidate) => ({
-          personId: candidate.person.id,
-          personName: candidate.person.name,
-          score: candidate.score,
-          confidence: candidate.confidence,
-          reasons: candidate.reasons,
-          evidence: candidate.evidence,
-          risks: candidate.risks,
-          path: candidate.path,
-        }));
+        }).map((candidate) => visibleRecommendationCandidate(candidate, session));
         return {
-          targetPersonId,
+          targetPersonRef,
           rankingLocked: true,
           rows,
           note:
@@ -660,7 +869,7 @@ archiveAgentToolRegistry
         "当本人到目标没有已验证路径时，列出目标身边关系明确的人；结果不代表用户能联系到这些人。",
       input: z
         .object({
-          targetPersonId: z.string().min(1).max(200),
+          targetPersonRef: archiveHandleSchema,
           task: z.string().max(800).optional(),
           limit: z.number().int().min(1).max(20).optional(),
           includeInferred: z.boolean().optional(),
@@ -668,31 +877,26 @@ archiveAgentToolRegistry
         .strict(),
       permission: "private_read",
       handler: (
-        { targetPersonId, task = "", limit = 5, includeInferred = false },
-        { services },
-      ) => ({
-        targetPersonId,
-        accessVerified: false,
-        scoreMeaning: "target_side_affinity",
-        rows: rankTargetSideEntries({
-          ...services.archive,
-          targetId: targetPersonId,
-          task,
-          limit,
-          includeInferred,
-          includePending: false,
-        }).map((candidate) => ({
-          personId: candidate.person.id,
-          personName: candidate.person.name,
-          score: candidate.score,
-          confidence: candidate.confidence,
-          reasons: candidate.reasons,
-          evidence: candidate.evidence,
-          risks: candidate.risks,
-          targetEntry: candidate.targetEntry,
-        })),
-        note: "这些人只在目标侧有关系证据；不得声称用户已有联系渠道或把分数解释为可达概率。",
-      }),
+        { targetPersonRef, task = "", limit = 5, includeInferred = false },
+        { services, runId },
+      ) => {
+        const session = referenceSessionFor(services, runId);
+        const targetPersonId = restoreArchiveHandle(session, targetPersonRef, "person");
+        return {
+          targetPersonRef,
+          accessVerified: false,
+          scoreMeaning: "target_side_affinity",
+          rows: rankTargetSideEntries({
+            ...services.archive,
+            targetId: targetPersonId,
+            task,
+            limit,
+            includeInferred,
+            includePending: false,
+          }).map((candidate) => visibleRecommendationCandidate(candidate, session)),
+          note: "这些人只在目标侧有关系证据；不得声称用户已有联系渠道或把分数解释为可达概率。",
+        };
+      },
     }),
   )
   .register(
@@ -751,6 +955,7 @@ archiveAgentToolRegistry
   );
 
 const ARCHIVE_READ_TOOL_NAMES = [
+  "resolve_record_refs",
   "get_collections",
   "get_archive_manifest",
   "list_profiles",
@@ -787,23 +992,12 @@ export const ARCHIVE_AGENT_TOOL_SCOPES = {
     toolNames: PUBLIC_TOOL_NAMES,
   },
   assistantArchive: {
-    permissions: ["public_read", "private_read", "network", "proposal"],
-    toolNames: [
-      ...ARCHIVE_READ_TOOL_NAMES,
-      ...RECOMMENDATION_TOOL_NAMES,
-      "propose_archive_mutations",
-      "propose_person_deletion",
-      ...PUBLIC_TOOL_NAMES,
-    ],
+    permissions: ["public_read", "private_read", "network"],
+    toolNames: [...ARCHIVE_READ_TOOL_NAMES, ...RECOMMENDATION_TOOL_NAMES, ...PUBLIC_TOOL_NAMES],
   },
   intakeArchive: {
-    permissions: ["private_read", "proposal"],
-    toolNames: [
-      ...ARCHIVE_READ_TOOL_NAMES,
-      "stage_person_update",
-      "stage_event_update",
-      "stage_relation_update",
-    ],
+    permissions: ["private_read"],
+    toolNames: ARCHIVE_READ_TOOL_NAMES,
   },
   recommendation: {
     permissions: ["public_read", "private_read", "network"],

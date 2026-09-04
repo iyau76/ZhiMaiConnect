@@ -235,8 +235,14 @@ describe("AgentToolRegistry", () => {
     ).rejects.toBeInstanceOf(AgentToolPermissionError);
 
     expect(handler).not.toHaveBeenCalled();
-    expect(invalidRecorder.events().at(-1)?.status).toBe("failed");
-    expect(deniedRecorder.events().at(-1)?.status).toBe("blocked");
+    expect(invalidRecorder.events().at(-1)).toMatchObject({
+      status: "failed",
+      issueCategory: "contract",
+    });
+    expect(deniedRecorder.events().at(-1)).toMatchObject({
+      status: "blocked",
+      issueCategory: "contract",
+    });
   });
 
   it("rejects duplicate or non-canonical names", () => {

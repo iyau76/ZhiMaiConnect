@@ -25,7 +25,15 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { askText } from "@/lib/ai-text";
-import type { AgentRun } from "@/lib/agent-run-log";
+import { projectAgentRun, type AgentRun } from "@/lib/agent-run-log";
+import { indexedDbAgentRunLedger } from "@/lib/agent-run-ledger";
+import { browserAgentRunOwnerId } from "@/lib/agent-run-owner";
+import { LocalAgentSettingsStore } from "@/lib/agent-settings";
+import {
+  beginDurableAgentRun,
+  DurableRunResumeError,
+  type DurableAgentRunRecorder,
+} from "@/lib/durable-agent-run";
 import {
   mentionedArchivePeople,
   rankConnectionPaths,
@@ -47,8 +55,26 @@ import {
   type CandidateRecommendation,
 } from "@/lib/recommendation";
 import type { AgentTraceEvent } from "@/lib/agent-trace";
-import { runRecommendationAgent } from "@/lib/recommendation-agent";
+import { resolveSavedAgentBudget } from "@/lib/agent-observability";
+import {
+  createInitialRecommendationCheckpoint,
+  runRecommendationAgent,
+  type RecommendationAgentCheckpoint,
+  type RecommendationAgentResult,
+} from "@/lib/recommendation-agent";
+import {
+  parseRecommendationSessionState,
+  persistRecommendationResult,
+  RECOMMENDATION_THREAD_ID,
+  recommendationArchiveRevision,
+  recommendationProviderFingerprint,
+  restoreRecommendationCandidates,
+  type PersistedRecommendationResult,
+  type RecommendationSessionState,
+} from "@/lib/recommendation-session-state";
 import type { ProviderPreset } from "@/lib/vision-providers";
+
+const activeRecommendationRunIds = new Set<string>();
 
 export function RemindersPanel({
   preset,
@@ -78,7 +104,89 @@ export function RemindersPanel({
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentTrace, setAgentTrace] = useState<AgentTraceEvent[]>([]);
   const [latestAgentRun, setLatestAgentRun] = useState<AgentRun | null>(null);
+  const [suspendedRecommendation, setSuspendedRecommendation] =
+    useState<RecommendationAgentCheckpoint | null>(null);
   const agentAbortRef = useRef<AbortController | null>(null);
+  const agentBusyRef = useRef(false);
+  const archiveLoadedRef = useRef(false);
+  const hydrationGeneration = useRef(0);
+  const recommendationArchiveRef = useRef<{
+    persons: PersonRecord[];
+    relations: RelationRecord[];
+    events: LifeEventRecord[];
+  }>({ persons: [], relations: [], events: [] });
+  const recommendationResultRef = useRef<PersistedRecommendationResult | null>(null);
+
+  const hydrateRecommendation = useCallback(
+    async (archive: {
+      persons: PersonRecord[];
+      relations: RelationRecord[];
+      events: LifeEventRecord[];
+    }) => {
+      const generation = ++hydrationGeneration.current;
+      const runs = await indexedDbAgentRunLedger.listRuns({ threadId: RECOMMENDATION_THREAD_ID });
+      const ordered = [...runs].sort(
+        (left, right) => right.ordinal - left.ordinal || right.createdAt - left.createdAt,
+      );
+      let restored: RecommendationSessionState | undefined;
+      let restoredRun = ordered[0];
+      for (const run of ordered) {
+        if (!run.latestCheckpointId) continue;
+        const checkpoint = await indexedDbAgentRunLedger.getCheckpoint(run.latestCheckpointId);
+        restored = parseRecommendationSessionState(checkpoint?.state);
+        if (restored) {
+          restoredRun = run;
+          break;
+        }
+      }
+      if (!restored || !restoredRun || generation !== hydrationGeneration.current) return;
+      const events = await indexedDbAgentRunLedger.listEvents(restoredRun.id);
+      if (generation !== hydrationGeneration.current) return;
+
+      const runningHere =
+        restoredRun.status === "running" && activeRecommendationRunIds.has(restoredRun.id);
+      const persistedResult = restored.result;
+      recommendationResultRef.current = persistedResult;
+      const restoredCandidates = restoreRecommendationCandidates(persistedResult, archive.persons);
+      const resolution = persistedResult?.targetResolution;
+      setAsk(restored.task);
+      setAiArchiveMode(restored.aiArchiveMode);
+      setIncludeInferredPaths(restored.includeInferredPaths);
+      setSelectedTargetId(restored.selectedTargetId);
+      setAgentTrace(restored.trace);
+      setRecommendationNotice(
+        runningHere ? "分析正在后台继续；完成后本页会自动更新。" : restored.notice,
+      );
+      setAskAnswer(persistedResult?.answer ?? "");
+      setCandidates(restoredCandidates);
+      setCandidateMode("agent");
+      setTargetChoices(
+        resolution?.mode === "ambiguous"
+          ? resolution.candidatePersonIds.flatMap((id) => {
+              const person = archive.persons.find((candidate) => candidate.id === id);
+              return person ? [person] : [];
+            })
+          : [],
+      );
+      setSuspendedRecommendation(
+        !runningHere &&
+          (restoredRun.status === "suspended" || restoredRun.status === "running") &&
+          restoredRun.resumable
+          ? (restored.suspendedRequest?.checkpoint ?? null)
+          : null,
+      );
+      setLatestAgentRun(
+        projectAgentRun(events, {
+          id: restoredRun.id,
+          title: restoredRun.title,
+          agentName: restoredRun.agentName,
+          model: restoredRun.providerRef.model,
+          status: restoredRun.status,
+        }),
+      );
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     const [p, r, e, rel] = await Promise.all([
@@ -91,13 +199,26 @@ export function RemindersPanel({
     setReminders(r);
     setEvents(e);
     setRelations(rel);
-  }, []);
+    const archive = { persons: p, relations: rel, events: e };
+    recommendationArchiveRef.current = archive;
+    if (!archiveLoadedRef.current) {
+      archiveLoadedRef.current = true;
+      await hydrateRecommendation(archive);
+    }
+  }, [hydrateRecommendation]);
 
   useEffect(() => {
     if (active) void load();
   }, [active, load]);
 
-  useEffect(() => () => agentAbortRef.current?.abort(), []);
+  useEffect(() => {
+    const unsubscribe = indexedDbAgentRunLedger.subscribe(() => {
+      if (!agentBusyRef.current && archiveLoadedRef.current) {
+        void hydrateRecommendation(recommendationArchiveRef.current);
+      }
+    });
+    return unsubscribe;
+  }, [hydrateRecommendation]);
 
   const items = useMemo(() => upcoming(persons, 60), [persons]);
   const stale = useMemo(() => staleContacts(persons, events, 90).slice(0, 6), [persons, events]);
@@ -206,6 +327,7 @@ export function RemindersPanel({
     setCandidateMode("local");
     setAgentTrace([]);
     setAskAnswer("");
+    setSuspendedRecommendation(null);
     setSelectedTargetId(targetId);
     setRecommendationNotice(
       getLang() === "en"
@@ -230,6 +352,7 @@ export function RemindersPanel({
       setTargetChoices(mentionedPeople);
       setSelectedTargetId("");
       setCandidateMode("local");
+      setSuspendedRecommendation(null);
       setRecommendationNotice(
         t(
           "本地只召回了问题中出现的人名，不猜测谁是目标。若要查联系路径，请选择目标；也可让 AI 理解完整问题。",
@@ -245,6 +368,7 @@ export function RemindersPanel({
     setCandidateMode("local");
     setAgentTrace([]);
     setAskAnswer("");
+    setSuspendedRecommendation(null);
     if (!ranked.length) toast.error(t("人物库还是空的，请先录入人物资料"));
   };
 
@@ -259,6 +383,7 @@ export function RemindersPanel({
     setRecommendationNotice(t("开放求助模式：使用合成演示数据进行本地确定性筛选。"));
     setAgentTrace([]);
     setAskAnswer("");
+    setSuspendedRecommendation(null);
     if (ranked.length) {
       toast.success(t("已用本地规则生成演示候选；人物与结果均须使用合成演示数据"));
     } else {
@@ -280,69 +405,274 @@ export function RemindersPanel({
     }
   };
 
-  const analyzeFullArchive = async () => {
-    if (!ask.trim() || agentBusy) return;
-    const targetPersonId = selectedTargetId || undefined;
+  const noticeForRecommendation = (result: RecommendationAgentResult) => {
+    const resolution = result.targetResolution;
+    if (result.status === "suspended") {
+      return `分析已暂停；前 ${result.rounds} 轮与工具结果已经保存在本机。`;
+    }
+    if (resolution?.mode === "ambiguous") return resolution.question ?? result.answer;
+    if (resolution?.mode === "target" && result.candidates.some((candidate) => candidate.path)) {
+      return t("目标模式：候选、分数和路径由本地确定性工具锁定，AI 只负责解释与措辞。");
+    }
+    if (resolution?.mode === "target") {
+      return t("未找到本人到目标的已验证路径；AI 已核对档案，当前候选仅是目标侧潜在线索。");
+    }
+    return t("开放求助模式：AI 已按需读取档案，候选仍需人工复核。");
+  };
+
+  const applyRecommendationResult = (
+    result: RecommendationAgentResult,
+    input: {
+      task: string;
+      presetId: string;
+      includeInferredPaths: boolean;
+      selectedTargetId: string;
+    },
+  ) => {
+    const resolution = result.targetResolution;
+    const notice = noticeForRecommendation(result);
+    setCandidates(result.candidates);
+    setCandidateMode("agent");
+    setAskAnswer(result.answer);
+    setLatestAgentRun({ ...result.run, status: result.status });
+    setRecommendationNotice(notice);
+    setSuspendedRecommendation(result.checkpoint ?? null);
+    if (resolution?.mode === "ambiguous") {
+      setTargetChoices(
+        resolution.candidatePersonIds.flatMap((id) => {
+          const person = persons.find((row) => row.id === id);
+          return person ? [person] : [];
+        }),
+      );
+      setSelectedTargetId("");
+    } else {
+      setTargetChoices([]);
+      setSelectedTargetId(resolution?.targetPersonId ?? input.selectedTargetId);
+    }
+    const state: RecommendationSessionState = {
+      version: 1,
+      runId: result.run.id,
+      task: input.task,
+      presetId: input.presetId,
+      aiArchiveMode: true,
+      includeInferredPaths: input.includeInferredPaths,
+      selectedTargetId:
+        resolution?.mode === "ambiguous"
+          ? ""
+          : (resolution?.targetPersonId ?? input.selectedTargetId),
+      trace: result.checkpoint?.trace ?? [],
+      notice,
+      result: persistRecommendationResult(result),
+      suspendedRequest: result.checkpoint
+        ? { checkpoint: result.checkpoint, presetId: input.presetId }
+        : null,
+      updatedAt: Date.now(),
+    };
+    recommendationResultRef.current = state.result;
+    return state;
+  };
+
+  const runDurableRecommendation = async (resumeFrom?: RecommendationAgentCheckpoint) => {
+    const task = resumeFrom?.task ?? ask.trim();
+    if (!task || agentBusyRef.current) return;
+    const targetPersonId = (resumeFrom?.requestedTargetPersonId ?? selectedTargetId) || undefined;
+    const inferred = resumeFrom?.includeInferredPaths ?? includeInferredPaths;
     agentAbortRef.current?.abort();
     const controller = new AbortController();
     agentAbortRef.current = controller;
+    agentBusyRef.current = true;
     setAgentBusy(true);
-    setAskAnswer("");
-    setCandidates([]);
-    setAgentTrace([]);
+    setSuspendedRecommendation(null);
+    const initialTrace = resumeFrom?.trace ?? [];
+    let liveTrace = [...initialTrace];
+    setAgentTrace(initialTrace);
+    if (!resumeFrom) {
+      recommendationResultRef.current = null;
+      setAskAnswer("");
+      setCandidates([]);
+      setTargetChoices([]);
+    }
+    const archive = { persons, relations, events };
+    const archiveVersion = recommendationArchiveRevision(archive);
+    const budget = resolveSavedAgentBudget("standard");
+    let durable: DurableAgentRunRecorder | undefined;
     try {
+      durable = await beginDurableAgentRun({
+        repository: indexedDbAgentRunLedger,
+        threadId: RECOMMENDATION_THREAD_ID,
+        agentName: "recommendation",
+        entrypoint: "reminders.recommendation",
+        title: `这事该拜托谁：${task.slice(0, 40)}`,
+        request: {
+          task,
+          targetSelected: Boolean(targetPersonId),
+          includeInferredPaths: inferred,
+        },
+        providerRef: {
+          presetId: preset.id,
+          kind: preset.kind,
+          model: preset.model,
+          configFingerprint: recommendationProviderFingerprint(preset),
+        },
+        includeArchive: true,
+        budget,
+        archiveVersion,
+        resumeRunId: resumeFrom?.sourceRunId,
+        resumeMode: resumeFrom ? "model" : undefined,
+        ownerId: browserAgentRunOwnerId(),
+        retainEventPayload: new LocalAgentSettingsStore().load().savePrivatePayload,
+      });
+      const initialCheckpoint =
+        resumeFrom ??
+        createInitialRecommendationCheckpoint({
+          runId: durable.runId,
+          task,
+          archiveVersion,
+          includeInferredPaths: inferred,
+          targetPersonId,
+          maxRounds: budget.maxRounds,
+        });
+      const initialState: RecommendationSessionState = {
+        version: 1,
+        runId: durable.runId,
+        task,
+        presetId: preset.id,
+        aiArchiveMode: true,
+        includeInferredPaths: inferred,
+        selectedTargetId: targetPersonId ?? "",
+        trace: initialTrace,
+        notice: resumeFrom
+          ? `已恢复前 ${resumeFrom.nextRound - 1} 轮，准备从第 ${resumeFrom.nextRound} 轮继续。`
+          : "分析任务已保存在本机；离开页面后仍可回来查看或继续。",
+        result: resumeFrom ? recommendationResultRef.current : null,
+        suspendedRequest: { checkpoint: initialCheckpoint, presetId: preset.id },
+        updatedAt: Date.now(),
+      };
+      await durable.checkpoint({
+        state: initialState,
+        checkpointKind: "awaiting_model",
+        nextAction: "invoke_model",
+        resumable: true,
+        dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+      });
+      activeRecommendationRunIds.add(durable.runId);
       const result = await runRecommendationAgent({
         preset,
-        task: ask.trim(),
+        task,
         persons,
         relations,
         events,
         targetPersonId,
-        includeInferredPaths,
+        includeInferredPaths: inferred,
         signal: controller.signal,
-        onTrace: (event) => setAgentTrace((current) => [...current.slice(-19), event]),
+        archiveVersion,
+        budget,
+        recorder: durable,
+        resumeFrom,
+        onCheckpoint: async (checkpoint) => {
+          liveTrace = [...checkpoint.trace];
+          await durable!.checkpoint({
+            state: {
+              ...initialState,
+              trace: checkpoint.trace,
+              notice: `分析进行到第 ${checkpoint.nextRound} 轮；已取得的工具结果均已保存。`,
+              suspendedRequest: { checkpoint, presetId: preset.id },
+              updatedAt: Date.now(),
+            } satisfies RecommendationSessionState,
+            checkpointKind: "awaiting_model",
+            nextAction: "invoke_model",
+            resumable: true,
+            dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+          });
+        },
+        onTrace: (event) => {
+          liveTrace = [...liveTrace, event];
+          setAgentTrace((current) => [...current.slice(-23), event]);
+        },
       });
-      setCandidates(result.candidates);
-      setCandidateMode("agent");
-      setAskAnswer(result.answer);
-      setLatestAgentRun(result.run);
-      if (result.targetResolution.mode === "ambiguous") {
-        setTargetChoices(
-          result.targetResolution.candidatePersonIds.flatMap((id) => {
-            const person = persons.find((row) => row.id === id);
-            return person ? [person] : [];
-          }),
-        );
-        setSelectedTargetId("");
-        setRecommendationNotice(result.targetResolution.question ?? result.answer);
+      result.checkpoint = result.checkpoint
+        ? { ...result.checkpoint, trace: liveTrace }
+        : result.checkpoint;
+      const state = applyRecommendationResult(result, {
+        task,
+        presetId: preset.id,
+        includeInferredPaths: inferred,
+        selectedTargetId: targetPersonId ?? "",
+      });
+      state.trace = liveTrace;
+      await durable.settle({
+        status: result.status,
+        state,
+        checkpointKind: result.status === "suspended" ? "awaiting_model" : "safe_boundary",
+        nextAction: result.status === "suspended" ? "invoke_model" : "finalize",
+        resumable: result.status === "suspended",
+        dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+      });
+      if (result.status === "suspended") {
+        toast.error(result.answer);
+      } else if (result.targetResolution?.mode === "ambiguous") {
         toast.success(t("AI 已理解问题，请选择目标人物后继续"));
-        return;
+      } else {
+        toast.success(
+          result.disclosureMode === "full"
+            ? `AI 已完成全档案分析（${result.rounds} 轮）`
+            : `AI 已通过渐进披露完成分析（${result.rounds} 轮）`,
+        );
       }
-      setTargetChoices([]);
-      setSelectedTargetId(result.targetResolution.targetPersonId ?? "");
-      setRecommendationNotice(
-        result.targetResolution.mode === "target" &&
-          result.candidates.some((candidate) => candidate.path)
-          ? t("目标模式：候选、分数和路径由本地确定性工具锁定，AI 只负责解释与措辞。")
-          : result.targetResolution.mode === "target"
-            ? t("未找到本人到目标的已验证路径；AI 已核对档案，当前候选仅是目标侧潜在线索。")
-            : t("开放求助模式：AI 已按需读取档案，候选仍需人工复核。"),
-      );
-      toast.success(
-        result.disclosureMode === "full"
-          ? `AI 已完成全档案分析（${result.rounds} 轮）`
-          : `AI 已通过渐进披露完成分析（${result.rounds} 轮）`,
-      );
     } catch (error) {
-      if (!controller.signal.aborted) {
-        const message = error instanceof Error ? error.message : t("AI 全库分析失败");
-        setAgentTrace((current) => [...current.slice(-19), { kind: "error", text: message }]);
+      const aborted = controller.signal.aborted;
+      const message = error instanceof Error ? error.message : t("AI 全库分析失败");
+      const failedTrace = [...liveTrace, { kind: "error" as const, text: message }];
+      if (durable) {
+        const failedState: RecommendationSessionState = {
+          version: 1,
+          runId: durable.runId,
+          task,
+          presetId: preset.id,
+          aiArchiveMode: true,
+          includeInferredPaths: inferred,
+          selectedTargetId: targetPersonId ?? "",
+          trace: failedTrace,
+          notice: aborted
+            ? "分析已由用户取消。"
+            : error instanceof DurableRunResumeError
+              ? `${message} 请按当前档案重新发起分析。`
+              : message,
+          result: aborted ? recommendationResultRef.current : null,
+          suspendedRequest: null,
+          updatedAt: Date.now(),
+        };
+        await durable
+          .settle({
+            status: aborted ? "cancelled" : "failed",
+            state: failedState,
+            checkpointKind: "safe_boundary",
+            nextAction: "finalize",
+            resumable: false,
+            dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+          })
+          .catch(() => undefined);
+      }
+      if (!aborted) {
+        setAgentTrace(failedTrace.slice(-24));
+        setSuspendedRecommendation(
+          error instanceof DurableRunResumeError ? (resumeFrom ?? null) : null,
+        );
         toast.error(message);
       }
     } finally {
+      if (durable) activeRecommendationRunIds.delete(durable.runId);
       if (agentAbortRef.current === controller) agentAbortRef.current = null;
+      agentBusyRef.current = false;
       setAgentBusy(false);
     }
+  };
+
+  const analyzeFullArchive = async () => runDurableRecommendation();
+
+  const resumeRecommendation = async () => {
+    if (!suspendedRecommendation) return;
+    await runDurableRecommendation(suspendedRecommendation);
   };
 
   const open = reminders.filter((item) => !item.done);
@@ -561,6 +891,7 @@ export function RemindersPanel({
             setRecommendationNotice("");
             setAskAnswer("");
             setAgentTrace([]);
+            setSuspendedRecommendation(null);
           }}
           rows={3}
           placeholder={t("例如：我想找人帮忙看一下租房合同，谁比较合适？")}
@@ -616,6 +947,7 @@ export function RemindersPanel({
               checked={includeInferredPaths}
               onCheckedChange={(checked) => {
                 setIncludeInferredPaths(checked);
+                setSuspendedRecommendation(null);
                 if (selectedTargetId) {
                   window.setTimeout(() => runTargetRecommendation(selectedTargetId, checked), 0);
                 }
@@ -633,13 +965,20 @@ export function RemindersPanel({
             {t("本地筛选候选")}
           </Button>
           {aiArchiveMode && (
-            <Button onClick={() => void analyzeFullArchive()} disabled={!ask.trim() || agentBusy}>
+            <Button
+              onClick={() =>
+                void (suspendedRecommendation ? resumeRecommendation() : analyzeFullArchive())
+              }
+              disabled={!ask.trim() || agentBusy}
+            >
               {agentBusy ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
               ) : (
                 <BrainCircuit className="size-4" aria-hidden="true" />
               )}
-              {t("AI 全库分析")}
+              {suspendedRecommendation
+                ? `从第 ${suspendedRecommendation.nextRound} 轮继续`
+                : t("AI 全库分析")}
             </Button>
           )}
           {candidateMode === "local" && candidates.length > 0 && (

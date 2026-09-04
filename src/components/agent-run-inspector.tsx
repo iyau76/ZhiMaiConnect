@@ -29,6 +29,7 @@ import {
 import {
   redactAgentPayload,
   type AgentRun,
+  type AgentRunIssueCategory,
   type AgentRunStatus,
   type AgentStep,
   type AgentStepKind,
@@ -75,6 +76,10 @@ const DEFAULT_LABELS: AgentRunInspectorLabels = {
 const RUN_STATUS: Record<AgentRunStatus, { label: string; className: string }> = {
   pending: { label: "等待", className: "bg-muted text-muted-foreground" },
   running: { label: "运行中", className: "bg-primary/10 text-primary" },
+  awaiting_approval: {
+    label: "等待签字",
+    className: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  },
   completed: {
     label: "完成",
     className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
@@ -97,6 +102,14 @@ const STEP_STATUS: Record<AgentStepStatus, string> = {
   completed: "完成",
   failed: "失败",
   skipped: "已跳过",
+};
+
+const ISSUE_CATEGORY: Record<AgentRunIssueCategory, string> = {
+  transport: "传输",
+  budget: "预算",
+  context_omission: "上下文省略",
+  contract: "输出契约",
+  transaction: "本地事务",
 };
 
 const STEP_KIND: Record<
@@ -263,6 +276,11 @@ function AgentStepRow({
             </p>
           )}
         </div>
+        {step.issueCategory && (
+          <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
+            {ISSUE_CATEGORY[step.issueCategory]}
+          </span>
+        )}
         <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
           <StepStatusIcon status={status} />
           {STEP_STATUS[status]}

@@ -37,11 +37,18 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { startRecording, transcribeAudio, type Recorder } from "@/lib/audio-client";
-import { AGENT_PROMPT_MAX_CHARACTERS } from "@/lib/ai-request-contract";
 import { IMPORT_LIMITS, importFiles } from "@/lib/doc-import";
-import { claimIntakeJob, getIntakeJob, startIntakeJob, subscribeIntakeJob } from "@/lib/intake-job";
+import {
+  claimIntakeJob,
+  getIntakeJob,
+  restoreIntakeJob,
+  startIntakeJob,
+  subscribeIntakeJob,
+  type IntakeJobTrace,
+} from "@/lib/intake-job";
 import {
   facesDb,
+  type ArchiveMutationWriteBatch,
   type CollectionMembershipRecord,
   type CollectionRecord,
   type EvidenceRecord,
@@ -52,11 +59,12 @@ import {
   type RelationRecord,
   type ReminderRecord,
 } from "@/lib/face-db";
+import type { ArchiveMutationPlan } from "@/lib/archive-mutation-plan";
 import { matchIdentity } from "@/lib/identity-match";
 import { parseFuzzyLocal } from "@/lib/fuzzy-date";
 import { getLang, t } from "@/lib/i18n";
 import { isSelfReference, SELF_PERSON_ID } from "@/lib/person-identity";
-import { ensureIntakeWorkspace, intakeWorkspaceView } from "@/lib/intake-workspace";
+import { ensureIntakeWorkspace } from "@/lib/intake-workspace";
 import {
   enforceSensitiveFieldGrounding,
   isSensitivePersonField,
@@ -65,7 +73,6 @@ import {
 } from "@/lib/intake-grounding";
 import {
   diffIngestPerson,
-  fitPromptMaterial,
   isValidIsoDate,
   makeExtractionAudit,
   makeOfflineDemoCandidate,
@@ -90,18 +97,52 @@ import {
   undoLatestIntakeBatch,
   type IntakeUndoBatch,
 } from "@/lib/intake-undo";
-import { resolveRelationSemanticsForPeople } from "@/lib/relation-ontology";
 import {
-  isInferredRelationBasis,
-  KINSHIP_RULES_EN,
-  KINSHIP_RULES_ZH,
-  relationNeedsInferenceReview,
-} from "@/lib/kinship-rules";
+  createIntakeCommitIntent,
+  executeIntakeCommitIntent,
+  type IntakeCommitIntent,
+} from "@/lib/intake-commit-intent";
+import { resolveRelationSemanticsForPeople } from "@/lib/relation-ontology";
+import { isInferredRelationBasis, relationNeedsInferenceReview } from "@/lib/kinship-rules";
 import { makeSource } from "@/lib/provenance";
+import { browserAgentRunOwnerId } from "@/lib/agent-run-owner";
 import { cn } from "@/lib/utils";
-import { runIntakeAgent, type IntakePromptSections } from "@/lib/intake-agent";
-import type { AgentRun } from "@/lib/agent-run-log";
-import type { ProviderPreset } from "@/lib/vision-providers";
+import {
+  createInitialIntakeAgentCheckpoint,
+  IntakeAgentSuspendedError,
+  runIntakeAgent,
+  type IntakeAgentCheckpoint,
+  type IntakeAgentResult,
+  type IntakePromptSections,
+} from "@/lib/intake-agent";
+import {
+  INTAKE_THREAD_ID,
+  intakeCheckpointResumeMode,
+  parseIntakeSessionState,
+  reviewSnapshotFromResult,
+  type IntakeSessionState,
+} from "@/lib/intake-session-state";
+import {
+  transitionSemanticIntakeLifecycle,
+  type SemanticIntakeIssue,
+  type SemanticIntakeTaskSnapshot,
+} from "@/lib/intake-task-state";
+import {
+  indexedDbAgentRunLedger,
+  indexedDbMutationArtifactRepository,
+} from "@/lib/agent-run-ledger";
+import {
+  beginDurableAgentRun,
+  cancelDurableAgentRun,
+  continueDurableAgentRun,
+  DurableRunResumeError,
+  type DurableAgentRunRecorder,
+} from "@/lib/durable-agent-run";
+import { resolveSavedAgentBudget } from "@/lib/agent-observability";
+import { LocalAgentSettingsStore } from "@/lib/agent-settings";
+import { MutationCommitCoordinator } from "@/lib/mutation-commit-coordinator";
+import { projectAgentRun, type AgentRun } from "@/lib/agent-run-log";
+import { providerPresetFingerprint, type ProviderPreset } from "@/lib/vision-providers";
 
 /** 一个人物档案里希望齐全的字段 */
 const REQUIRED: Array<{ key: keyof DraftPerson; zh: string; en: string }> = [
@@ -119,10 +160,40 @@ function missingOf(person: DraftPerson) {
   });
 }
 
-const SCHEMA = `{"people":[{"name":"","note":"","age":"","gender":"","birthday":"","circle":"","closeness":null,"likes":[],"dislikes":[],"gifts":[],"metAt":"","contact":"","address":"","title":"","department":"","org":"","projects":[],"reportsTo":"","employeeId":"","tags":[],"identities":[{"platform":"","account":"","alias":"","validFrom":"","validTo":""}],"confidence":null}],"facts":[{"person":"","key":"","value":"","validFrom":"","validTo":"","confidence":null}],"relations":[{"from":"","to":"","label":"","note":"","basis":"","confidence":null}],"events":[{"title":"","detail":"","timeText":"原文时间短语","date":"","dateEnd":"","precision":"day|month|year|range","place":"","people":[],"kind":"","confidence":null}],"reminders":[{"title":"","detail":"","due":"","people":[],"kind":"birthday|festival|gift|custom","confidence":null}],"evidence":[{"kind":"note|audio|exhibit|frame","title":"","text":"","origin":"","confidence":null}],"summary":""}`;
-
 const CREATE_NEW_PERSON = "__create_new_person__";
 const CREATE_NEW_EVENT = "__create_new_event__";
+const intakeMutationCoordinator = new MutationCommitCoordinator({
+  artifactRepository: indexedDbMutationArtifactRepository,
+  scope: "intake",
+});
+
+interface IntakeReviewResult extends Pick<
+  IntakeAgentResult,
+  "proposal" | "resolutionIssues" | "intakeState"
+> {
+  draft: Draft;
+  sourceRunId: string;
+  proposalEntryId?: string;
+}
+
+class IntakeCommitConflictError extends Error {
+  constructor() {
+    super("档案在批准后发生了变化，请重新预览本次录入");
+    this.name = "IntakeCommitConflictError";
+  }
+}
+
+function intakeReceiptHasChanges(batch: IntakeUndoBatch) {
+  return (
+    batch.createdPersonIds.length > 0 ||
+    batch.createdRelationIds.length > 0 ||
+    batch.createdEvidenceIds.length > 0 ||
+    batch.createdEventIds.length > 0 ||
+    batch.createdReminderIds.length > 0 ||
+    batch.previousPeople.length > 0 ||
+    (batch.previousEvents?.length ?? 0) > 0
+  );
+}
 
 function withIdentityDecision(person: DraftPerson, persons: PersonRecord[]): DraftPerson {
   if (
@@ -214,10 +285,6 @@ function prepareIdentityDecisions(
   };
 }
 
-function serializeDraftForPrompt(draft: Draft) {
-  return JSON.stringify(intakeWorkspaceView(draft));
-}
-
 function decorateDraft(result: Draft, sourceSummary: string, material: string): Draft {
   const extractedAt = Date.now();
   const decorate = <T extends DraftAuditFields>(item: T): T => ({
@@ -243,64 +310,13 @@ function decorateDraft(result: Draft, sourceSummary: string, material: string): 
   };
 }
 
-function buildPrompt(text: string, known: string[], previous: Draft | null) {
-  const zh = getLang() !== "en";
-  const today = new Date().toISOString().slice(0, 10);
-  const base = zh
-    ? `你是个人人脉整理助手。把下面这段自然语言材料整理成结构化 JSON，只输出 JSON，不要解释、不要 markdown。
-严格使用这个结构：${SCHEMA}
-规则：
- - 材料里没写的普通事实字段留空字符串或空数组；模型只抽取原文明说的关系，本地规则在提交后统一推导。
-- title、部门、单位、项目、地址、忌口、礼物等人物字段只保留材料明确写出的值；“喜欢摄影”不能改写成“摄影师”。
-- people 只承载人物自身属性，不承载人与人的关系。任何关系称谓都统一写进 relations；与用户本人的关系以「我」作为其中一个端点。
-- 所属、称谓或主谓结构指向两个具体人物时，必须建立独立关系。例如“甲的学妹乙”“甲和乙是前同事”都不能只写进人物 note，也不能只把两人列进同一个事件。
-- circle 只能是：家人 / 亲戚 / 朋友 / 同学 / 同事 / 邻居 / 其它。closeness 仅在材料明确给出 1-5 数值时填写，否则留空；不要根据关系称呼推断。
-- birthday 用 MM-DD 或 YYYY-MM-DD。likes 喜好、dislikes 忌口或不喜欢、gifts 送过的礼物。
-- identities 只记录材料明确出现的平台、账号、当时昵称与生效/失效时间；不要根据姓名猜账号或时间。
-- facts 只放材料明确表达、但不属于固定人物字段的事实；person 指人物姓名，key 是短字段名，value 是原文可支持的值。validFrom/validTo 仅在材料给出有效期时填写。
-- evidence 只保留能核对抽取结果的短摘要或必要原文片段，不要复制整份聊天、文档或转写稿，text 最多 500 字。
- - relations 写人和人之间原文明说的关系。每条 basis 都写“原文：最短支持片段”，不要输出推导关系。材料同时给出关系两端时，不得遗漏这条关系。
-- 今天是 ${today}。events 放已经发生或计划发生、值得进入日历/时间线的事情；timeText 逐字复制原文时间短语，date 用 yyyy-mm-dd。相对时间依据今天换算；只知道月份或年份时分别补为当月 01 日或当年 01-01，并把 precision 标为 month 或 year；一段时间用 range 和 dateEnd。people 写相关人物姓名。
-- reminders 放需要用户采取行动的待办，如「给小雨回电话」；due 仅在材料明确给出日期时使用 yyyy-mm-dd，people 写相关人物姓名。不要把同一件事同时放进 events 和 reminders，除非材料同时明确表达日历事件和后续行动。
-- confidence 是你对每一条抽取准确性的自评（0 到 1），无法判断时留空；它只是提示，不能代替用户确认。
-- summary 用一两句话说明这份材料讲了什么。
-${KINSHIP_RULES_ZH}`
-    : `You organise a personal contact network. Convert the text below into structured JSON. Output JSON only, no markdown, no explanation.
-Use exactly this structure: ${SCHEMA}
-Rules:
- - Leave ordinary fact fields empty when the text does not state them. Extract explicit relations only; deterministic local rules derive kinship after commit.
-- Keep role, department, organisation, projects, address, dislikes and gifts only when explicitly stated. An interest in photography does not make someone a photographer.
-- people contains attributes of the person only. Put every interpersonal tie in relations, including ties to the user, using “me” as one endpoint.
-- A possessive, kinship title, or subject-predicate phrase that identifies two people requires a separate relation. Do not hide it only in a person's note or merely list both people on an event.
-- circle is one of family / relatives / friends / classmates / colleagues / neighbours / other. Set closeness only when the material explicitly gives a 1-5 score; never infer it from a relationship label.
-- birthday as MM-DD or YYYY-MM-DD. likes, dislikes, gifts are short arrays.
-- identities contains only explicitly stated platform/account/alias and validity dates. Never guess an account or date from a name.
-- facts contains only explicit facts that do not fit a fixed person field; person is the person's name and validity dates are included only when stated.
-- evidence is a short source summary or the minimum excerpt needed for review (at most 500 characters), never a copy of the complete chat, document, or transcript.
- - relations = explicitly stated ties between people. Every basis starts with “Original:” and quotes the shortest supporting text. Do not output inferred ties. Never omit a tie when the material supplies both endpoints.
-- Today is ${today}. Events are past or planned moments worth putting on a calendar/timeline. Copy the exact source phrase into timeText and normalize relative time to yyyy-mm-dd; use precision month/year/range when needed. people contains related names.
-- reminders are actions the user still needs to take. Set due only when the material gives a date. Do not duplicate one fact across events and reminders unless both a calendar moment and a follow-up action are explicit.
-- confidence is the model's 0-1 self-assessment for each extracted item and never replaces user confirmation.
-- summary = one or two sentences about the material.
-${KINSHIP_RULES_EN}`;
-
-  const knownLine = zh
-    ? `\n已有档案：${known.join("、").slice(0, 1_000) || "无"}`
-    : `\nExisting profiles: ${known.join(", ").slice(0, 1_000) || "none"}`;
-  const prev = previous
-    ? (zh
-        ? `\n\n这是上一轮整理结果，请在它基础上合并补充：\n`
-        : `\n\nMerge and extend this previous draft:\n`) + serializeDraftForPrompt(previous)
-    : "";
-  const prefix = `${base}${knownLine}${prev}\n\n${zh ? "材料" : "Material"}：\n`;
-  const fitted = fitPromptMaterial(prefix, text, AGENT_PROMPT_MAX_CHARACTERS);
+function buildPrompt(text: string, known: string[]) {
+  const sourceMaterial = text.slice(0, IMPORT_LIMITS.maxExtractedCharacters);
   const sections: IntakePromptSections = {
-    instructions: base,
-    knownContext: knownLine.trim(),
-    previousDraft: previous ? JSON.parse(serializeDraftForPrompt(previous)) : undefined,
-    sourceMaterial: text.slice(0, IMPORT_LIMITS.maxExtractedCharacters),
+    knownContext: known.join("、").slice(0, 1_000),
+    sourceMaterial,
   };
-  return { ...fitted, sections };
+  return { prompt: sourceMaterial, materialCharacters: sourceMaterial.length, sections };
 }
 
 /** 未提交的录入内容随状态变化写入本地，切换页签后可以继续。 */
@@ -311,6 +327,11 @@ interface StashShape {
   raw: string;
   supplement: string;
   draft: Draft | null;
+  proposalEntryId?: string | null;
+  /** Legacy v1 stash field; migrated into the durable proposal store on read. */
+  proposal?: ArchiveMutationPlan | null;
+  resolutionIssues?: SemanticIntakeIssue[];
+  intakeState?: SemanticIntakeTaskSnapshot | null;
   attached: { name: string; block: string }[];
   at: number;
 }
@@ -604,6 +625,18 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   const [existingPeople, setExistingPeople] = useState<PersonRecord[]>([]);
   const [existingEvents, setExistingEvents] = useState<LifeEventRecord[]>([]);
   const [existingRelations, setExistingRelations] = useState<RelationRecord[]>([]);
+  const [existingCollections, setExistingCollections] = useState<CollectionRecord[]>([]);
+  const [existingCollectionMemberships, setExistingCollectionMemberships] = useState<
+    CollectionMembershipRecord[]
+  >([]);
+  const [existingReminders, setExistingReminders] = useState<ReminderRecord[]>([]);
+  const [existingEvidence, setExistingEvidence] = useState<EvidenceRecord[]>([]);
+  const [proposal, setProposal] = useState<ArchiveMutationPlan | null>(null);
+  const [proposalEntryId, setProposalEntryId] = useState<string | null>(null);
+  const [proposalArtifactsLoaded, setProposalArtifactsLoaded] = useState(false);
+  const [resolutionIssues, setResolutionIssues] = useState<SemanticIntakeIssue[]>([]);
+  const [intakeState, setIntakeState] = useState<SemanticIntakeTaskSnapshot | null>(null);
+  const [approvingProposal, setApprovingProposal] = useState(false);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
   const [allowArchiveTools, setAllowArchiveTools] = useState(true);
   const [reading, setReading] = useState<string | null>(null);
@@ -616,8 +649,32 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
   const [latestAgentRun, setLatestAgentRun] = useState<AgentRun | null>(null);
+  const [durableIntake, setDurableIntake] = useState<IntakeSessionState | null>(null);
+  const hydrationGeneration = useRef(0);
   const recorderRef = useRef<Recorder | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const refreshArchiveSnapshot = useCallback(async () => {
+    const [people, events, relations, collections, memberships, reminders, evidence] =
+      await Promise.all([
+        facesDb.listPersons(),
+        facesDb.listLifeEvents(),
+        facesDb.listRelationshipViews({ includeDerived: false }),
+        facesDb.listCollections(),
+        facesDb.listCollectionMemberships(),
+        facesDb.listReminders(),
+        facesDb.listEvidence(),
+      ]);
+    setExistingPeople(people);
+    setExistingEvents(events);
+    setExistingRelations(relations);
+    setExistingCollections(collections);
+    setExistingCollectionMemberships(memberships);
+    setExistingReminders(reminders);
+    setExistingEvidence(evidence);
+    setKnown(people.map((row) => row.name));
+    setPeopleLoaded(true);
+  }, []);
 
   useEffect(() => {
     const stored = readStash();
@@ -632,25 +689,111 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           )
         : null,
     );
+    setResolutionIssues(stored.resolutionIssues ?? []);
+    setIntakeState(stored.intakeState ?? null);
     setAttached(stored.attached);
     setStashedAt(stored.at);
     setDraftPersisted(Boolean(stored.draft));
   }, []);
 
   useEffect(() => {
-    void Promise.all([
-      facesDb.listPersons(),
-      facesDb.listLifeEvents(),
-      facesDb.listRelationshipViews({ includeDerived: false }),
-    ])
-      .then(([people, events, relations]) => {
-        setExistingPeople(people);
-        setExistingEvents(events);
-        setExistingRelations(relations);
-        setKnown(people.map((row) => row.name));
-      })
-      .finally(() => setPeopleLoaded(true));
+    let cancelled = false;
+    const restoreProposal = async () => {
+      const stored = readStash();
+      const artifacts = await intakeMutationCoordinator.hydrate();
+      let entry = stored?.proposalEntryId
+        ? artifacts.proposals.find((candidate) => candidate.id === stored.proposalEntryId)
+        : undefined;
+      entry ??= artifacts.proposals.at(-1);
+      if (!entry && stored?.proposal) {
+        entry = intakeMutationCoordinator.enqueue(stored.proposal);
+        await intakeMutationCoordinator.flushPersistence();
+      }
+      if (cancelled) return;
+      setProposal(entry?.plan ?? null);
+      setProposalEntryId(entry?.id ?? null);
+      setProposalArtifactsLoaded(true);
+    };
+    void restoreProposal().catch((error: unknown) => {
+      if (cancelled) return;
+      setProposalArtifactsLoaded(true);
+      toast.error(`${t("无法恢复尚未批准的圈层提案")}：${(error as Error).message}`);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    void refreshArchiveSnapshot();
+  }, [refreshArchiveSnapshot]);
+
+  useEffect(() => {
+    if (!peopleLoaded || !proposalArtifactsLoaded) return;
+    let cancelled = false;
+    const generation = ++hydrationGeneration.current;
+    const hydrateRun = async () => {
+      const runs = await indexedDbAgentRunLedger.listRuns({ threadId: INTAKE_THREAD_ID });
+      const ordered = [...runs].sort(
+        (left, right) => right.ordinal - left.ordinal || right.createdAt - left.createdAt,
+      );
+      const active = ordered.find((run) =>
+        ["running", "suspended", "awaiting_approval"].includes(run.status),
+      );
+      const visibleRun = active ?? ordered[0];
+      if (!visibleRun) return;
+      const [events, checkpoint] = await Promise.all([
+        indexedDbAgentRunLedger.listEvents(visibleRun.id),
+        visibleRun.latestCheckpointId
+          ? indexedDbAgentRunLedger.getCheckpoint(visibleRun.latestCheckpointId)
+          : Promise.resolve(undefined),
+      ]);
+      const restored = parseIntakeSessionState(checkpoint?.state);
+      if (cancelled || generation !== hydrationGeneration.current) return;
+      setLatestAgentRun(
+        projectAgentRun(events, {
+          id: visibleRun.id,
+          title: visibleRun.title,
+          agentName: visibleRun.agentName,
+          model: visibleRun.providerRef.model,
+          status: visibleRun.status,
+        }),
+      );
+      if (restored?.intakeReceipt) {
+        rememberIntakeBatch(restored.intakeReceipt);
+        setLatestBatch(restored.intakeReceipt);
+      }
+      if (!active || !restored) return;
+      setDurableIntake(restored);
+      if (!job.busy) {
+        const stored = readStash();
+        restoreIntakeJob({
+          trace: restored.trace,
+          text: stored?.raw ?? null,
+          extra: restored.extra,
+        });
+      }
+      if (restored.review) {
+        if (restored.review.draft) {
+          setDraft(prepareIdentityDecisions(restored.review.draft, existingPeople, existingEvents));
+        }
+        setResolutionIssues(restored.review.resolutionIssues);
+        setIntakeState(restored.review.intakeState);
+        const entryId = restored.review.proposalEntryId;
+        const entry = entryId
+          ? intakeMutationCoordinator.pending().find((candidate) => candidate.id === entryId)
+          : undefined;
+        setProposal(entry?.plan ?? null);
+        setProposalEntryId(entry?.id ?? null);
+      }
+    };
+    void hydrateRun().catch((error: unknown) => {
+      if (!cancelled) toast.error(`${t("无法恢复上次的录入任务")}：${(error as Error).message}`);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [existingEvents, existingPeople, job.busy, peopleLoaded, proposalArtifactsLoaded]);
 
   useEffect(() => {
     if (!peopleLoaded) return;
@@ -674,11 +817,33 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   );
 
   /** 草稿状态变化后立即短暂防抖写入；15 秒仅作为静态页面兜底。 */
-  const snapshot = useRef({ raw, supplement, draft, attached });
-  snapshot.current = { raw, supplement, draft, attached };
+  const snapshot = useRef({
+    raw,
+    supplement,
+    draft,
+    proposalEntryId,
+    resolutionIssues,
+    intakeState,
+    attached,
+  });
+  snapshot.current = {
+    raw,
+    supplement,
+    draft,
+    proposalEntryId,
+    resolutionIssues,
+    intakeState,
+    attached,
+  };
   const persistSnapshot = useCallback(() => {
     const now = snapshot.current;
-    const empty = !now.raw.trim() && !now.supplement.trim() && !now.draft && !now.attached.length;
+    const empty =
+      !now.raw.trim() &&
+      !now.supplement.trim() &&
+      !now.draft &&
+      !now.proposalEntryId &&
+      !now.intakeState &&
+      !now.attached.length;
     if (empty) {
       window.localStorage.removeItem(DRAFT_KEY);
       setDraftPersisted(false);
@@ -695,7 +860,16 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     setDraftPersisted(false);
     const timer = window.setTimeout(persistSnapshot, 250);
     return () => window.clearTimeout(timer);
-  }, [attached, draft, persistSnapshot, raw, supplement]);
+  }, [
+    attached,
+    draft,
+    intakeState,
+    persistSnapshot,
+    proposalEntryId,
+    raw,
+    resolutionIssues,
+    supplement,
+  ]);
 
   useEffect(() => {
     const timer = window.setInterval(persistSnapshot, 15000);
@@ -721,10 +895,40 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     );
   };
 
-  const clearLocalDraft = () => {
+  const clearLocalDraft = async () => {
+    if (proposalEntryId) {
+      try {
+        intakeMutationCoordinator.discard([proposalEntryId]);
+        await intakeMutationCoordinator.flushPersistence();
+      } catch (error) {
+        toast.error(`${t("清除圈层提案失败")}：${(error as Error).message}`);
+        return;
+      }
+    }
+    if (durableIntake) {
+      try {
+        const archiveVersion = await facesDb.getArchiveMutationRevision();
+        await cancelDurableAgentRun({
+          repository: indexedDbAgentRunLedger,
+          runId: durableIntake.runId,
+          archiveVersion,
+          ownerId: browserAgentRunOwnerId(),
+          state: { ...durableIntake, phase: "rejected", updatedAt: Date.now() },
+          reason: "user_cleared_intake",
+        });
+      } catch (error) {
+        toast.error(`${t("清除录入任务失败")}：${(error as Error).message}`);
+        return;
+      }
+    }
     setRaw("");
     setSupplement("");
     setDraft(null);
+    setProposal(null);
+    setProposalEntryId(null);
+    setResolutionIssues([]);
+    setIntakeState(null);
+    setDurableIntake(null);
     setAttached([]);
     setStashedAt(null);
     window.localStorage.removeItem(DRAFT_KEY);
@@ -835,15 +1039,45 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   };
 
   /** 交给模块层跑：切到别的页签也继续整理，回来自动显示结果 */
-  const organize = (extra?: string) => {
-    const fullText = extra ? `${raw}\n\n${extra}` : raw;
+  const organize = async (extra?: string, resumeState?: IntakeSessionState) => {
+    const effectiveExtra = resumeState?.extra ?? extra ?? null;
+    const fullText = effectiveExtra ? `${raw}\n\n${effectiveExtra}` : raw;
     if (!fullText.trim()) {
       toast.error(t("先把知道的情况写下来，怎么写都行"));
       return;
     }
-    const base = extra && draft ? ensureIntakeWorkspace(draft) : null;
-    const materialSource = base ? (extra ?? "") : fullText;
-    const builtPrompt = buildPrompt(materialSource, allowArchiveTools ? known : [], base);
+    if (!proposalArtifactsLoaded) return;
+    if (!resumeState && proposalEntryId) {
+      try {
+        intakeMutationCoordinator.discard([proposalEntryId]);
+        await intakeMutationCoordinator.flushPersistence();
+        setProposal(null);
+        setProposalEntryId(null);
+      } catch (error) {
+        toast.error(`${t("无法替换尚未批准的圈层提案")}：${(error as Error).message}`);
+        return;
+      }
+    }
+    if (!resumeState && durableIntake) {
+      try {
+        const archiveVersion = await facesDb.getArchiveMutationRevision();
+        await cancelDurableAgentRun({
+          repository: indexedDbAgentRunLedger,
+          runId: durableIntake.runId,
+          archiveVersion,
+          ownerId: browserAgentRunOwnerId(),
+          state: { ...durableIntake, phase: "rejected", updatedAt: Date.now() },
+          reason: "replaced_by_new_intake",
+        });
+        setDurableIntake(null);
+      } catch (error) {
+        toast.error(`${t("无法结束上一次录入任务")}：${(error as Error).message}`);
+        return;
+      }
+    }
+    const base = effectiveExtra && draft ? ensureIntakeWorkspace(draft) : null;
+    const materialSource = base ? (effectiveExtra ?? "") : fullText;
+    const builtPrompt = buildPrompt(materialSource, allowArchiveTools ? known : []);
     if (materialSource.length > builtPrompt.materialCharacters) {
       toast.warning(
         `${t("发送给 AI 的材料本次保留")} ${builtPrompt.materialCharacters.toLocaleString()} / ${materialSource.length.toLocaleString()} ${t("个字符；超出部分未发送，原文仍保留在输入框中。")}`,
@@ -853,37 +1087,286 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       raw.includes("来自录音转写") || raw.includes("Transcript") ? t("录音转写") : "",
       attached.length ? `${t("文件")}：${attached.map((item) => item.name).join("、")}` : "",
       raw.trim() ? t("手动输入") : "",
-      extra ? t("补充说明") : "",
+      effectiveExtra ? t("补充说明") : "",
     ].filter(Boolean);
     const sourceSummary = [...new Set(sourceParts)].join(" · ");
+    if (!resumeState) {
+      setProposal(null);
+      setResolutionIssues([]);
+      setIntakeState(null);
+    }
+    const initialTrace = resumeState ? t("正在从上次安全断点继续") : t("正在准备整理材料");
     startIntakeJob({
       text: fullText,
-      extra: extra ?? null,
-      initialTrace: t("正在准备整理材料"),
+      extra: effectiveExtra,
+      initialTrace,
+      priorTrace: resumeState?.trace,
       run: async (report) => {
-        report(
+        let durable: DurableAgentRunRecorder | undefined;
+        let latestCheckpoint = resumeState?.checkpoint;
+        let durableTrace: IntakeJobTrace[] = [
+          ...(resumeState?.trace ?? []),
+          { kind: "status" as const, text: initialTrace, at: Date.now() },
+        ].slice(-24);
+        const reportDurable = (text: string, kind: IntakeJobTrace["kind"] = "status") => {
+          durableTrace = [...durableTrace.slice(-23), { kind, text, at: Date.now() }];
+          report(text, kind);
+        };
+        reportDurable(
           `${t("已准备待整理材料")} · ${builtPrompt.materialCharacters.toLocaleString()} ${t("个字符")}`,
         );
-        const parsed = await runIntakeAgent({
-          preset,
-          extractionPrompt: builtPrompt.sections,
-          persons: allowArchiveTools ? existingPeople : [],
-          events: allowArchiveTools ? existingEvents : [],
-          relations: allowArchiveTools ? existingRelations : [],
-          workspace: base ?? undefined,
-          includeArchive: allowArchiveTools,
-          sourceMaterial: materialSource,
-          onTrace: (event) => report(event.text, event.kind),
-          onRun: setLatestAgentRun,
+        const archiveVersion = await facesDb.getArchiveMutationRevision();
+        const budget = resolveSavedAgentBudget("deep");
+        const retainEventPayload = new LocalAgentSettingsStore().load().savePrivatePayload;
+        const sessionAt = (
+          runId: string,
+          checkpoint: IntakeAgentCheckpoint,
+          phase: IntakeSessionState["phase"],
+          additions: Partial<IntakeSessionState> = {},
+        ): IntakeSessionState => ({
+          version: 1,
+          runId,
+          phase,
+          checkpoint,
+          trace: durableTrace,
+          extra: effectiveExtra,
+          pendingProposalRefs: resumeState?.pendingProposalRefs ?? [],
+          receiptRefs: resumeState?.receiptRefs ?? [],
+          updatedAt: Date.now(),
+          ...additions,
         });
-        report(t("模型输出完成，正在解析结构化草稿"), "check");
-        report(t("正在核对人物字段与原文证据"), "check");
-        const result = decorateDraft(parsed, sourceSummary, fullText);
-        report(
-          `${t("整理完成")} · ${result.people?.length ?? 0} ${t("人")} · ${result.relations?.length ?? 0} ${t("条关系")} · ${result.events?.length ?? 0} ${t("个事件")}`,
-          "done",
-        );
-        return result;
+        const checkpointBoundary = (checkpoint: IntakeAgentCheckpoint) =>
+          checkpoint.nextAction === "understand" || checkpoint.nextAction === "classify_collections"
+            ? {
+                checkpointKind: "awaiting_model" as const,
+                nextAction: "invoke_model" as const,
+              }
+            : checkpoint.nextAction === "compile"
+              ? {
+                  checkpointKind: "safe_boundary" as const,
+                  nextAction: "execute_tool" as const,
+                }
+              : {
+                  checkpointKind: "safe_boundary" as const,
+                  nextAction: "finalize" as const,
+                };
+        const runAbort = new AbortController();
+        let persistenceFailure: unknown;
+        try {
+          durable = await beginDurableAgentRun({
+            repository: indexedDbAgentRunLedger,
+            threadId: INTAKE_THREAD_ID,
+            agentName: "intake",
+            entrypoint: "intake.organize",
+            title: "随手写，AI 来整理",
+            request: {
+              source: "local-intake-draft",
+              materialCharacters: builtPrompt.materialCharacters,
+              supplement: Boolean(effectiveExtra),
+            },
+            providerRef: {
+              presetId: preset.id,
+              kind: preset.kind,
+              model: preset.model,
+              configFingerprint: providerPresetFingerprint(preset),
+            },
+            includeArchive: allowArchiveTools,
+            budget,
+            archiveVersion,
+            resumeRunId: resumeState?.runId,
+            resumeMode: resumeState
+              ? intakeCheckpointResumeMode(resumeState.checkpoint)
+              : undefined,
+            initialCheckpoint: resumeState
+              ? undefined
+              : (runId) => {
+                  latestCheckpoint = createInitialIntakeAgentCheckpoint({
+                    sourceRunId: runId,
+                    preset,
+                    extractionPrompt: builtPrompt.sections,
+                    persons: allowArchiveTools ? existingPeople : [],
+                    events: allowArchiveTools ? existingEvents : [],
+                    relations: allowArchiveTools ? existingRelations : [],
+                    collections: allowArchiveTools ? existingCollections : [],
+                    collectionMemberships: allowArchiveTools ? existingCollectionMemberships : [],
+                    reminders: allowArchiveTools ? existingReminders : [],
+                    evidence: allowArchiveTools ? existingEvidence : [],
+                    workspace: base ?? undefined,
+                    includeArchive: allowArchiveTools,
+                    sourceMaterial: materialSource,
+                    budget,
+                  });
+                  const boundary = checkpointBoundary(latestCheckpoint);
+                  return {
+                    kind: boundary.checkpointKind,
+                    status: "active",
+                    nextAction: { kind: boundary.nextAction },
+                    state: sessionAt(runId, latestCheckpoint, "running"),
+                    observationIds: [],
+                    dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+                    budget: {
+                      rounds: 0,
+                      toolCalls: 0,
+                      inputTokens: { total: 0, actual: 0, estimated: 0 },
+                      outputTokens: { total: 0, actual: 0, estimated: 0 },
+                    },
+                  };
+                },
+            ownerId: browserAgentRunOwnerId(),
+            retainEventPayload,
+            onPersistenceError: (error) => {
+              persistenceFailure ??= error;
+              runAbort.abort(error);
+            },
+          });
+        } catch (error) {
+          if (resumeState && error instanceof DurableRunResumeError) {
+            await cancelDurableAgentRun({
+              repository: indexedDbAgentRunLedger,
+              runId: resumeState.runId,
+              archiveVersion,
+              ownerId: browserAgentRunOwnerId(),
+              state: { ...resumeState, phase: "failed", updatedAt: Date.now() },
+              reason: error.code.toLowerCase(),
+            }).catch(() => undefined);
+            setDurableIntake(null);
+          }
+          throw error;
+        }
+        if (!latestCheckpoint) throw new Error("录入任务没有建立初始断点");
+        setDurableIntake(sessionAt(durable.runId, latestCheckpoint, "running"));
+
+        try {
+          const parsed = await runIntakeAgent({
+            preset,
+            extractionPrompt: builtPrompt.sections,
+            persons: allowArchiveTools ? existingPeople : [],
+            events: allowArchiveTools ? existingEvents : [],
+            relations: allowArchiveTools ? existingRelations : [],
+            collections: allowArchiveTools ? existingCollections : [],
+            collectionMemberships: allowArchiveTools ? existingCollectionMemberships : [],
+            reminders: allowArchiveTools ? existingReminders : [],
+            evidence: allowArchiveTools ? existingEvidence : [],
+            workspace: base ?? undefined,
+            includeArchive: allowArchiveTools,
+            sourceMaterial: materialSource,
+            signal: runAbort.signal,
+            budget,
+            recorder: durable,
+            resumeFrom: latestCheckpoint,
+            onTrace: (event) => reportDurable(event.text, event.kind),
+            onCheckpoint: async (checkpoint) => {
+              latestCheckpoint = checkpoint;
+              const state = sessionAt(durable!.runId, checkpoint, "running");
+              const boundary = checkpointBoundary(checkpoint);
+              await durable!.settle({
+                status: "running",
+                state,
+                ...boundary,
+                resumable: true,
+                dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+              });
+              setDurableIntake(state);
+            },
+            onRun: (run) => setLatestAgentRun(run),
+          });
+          if (!latestCheckpoint) throw new Error("录入任务没有生成可恢复断点");
+          reportDurable(t("模型输出完成，正在解析结构化草稿"), "check");
+          reportDurable(t("正在核对人物字段与原文证据"), "check");
+          const decorated = decorateDraft(parsed, sourceSummary, fullText);
+          let entryId: string | undefined;
+          if (parsed.proposal) {
+            const existing = intakeMutationCoordinator
+              .pending()
+              .find((entry) => entry.plan.id === parsed.proposal?.id);
+            const entry =
+              existing ??
+              intakeMutationCoordinator.enqueue(parsed.proposal, {
+                sourceRunId: durable.runId,
+              });
+            await intakeMutationCoordinator.flushPersistence();
+            entryId = entry.id;
+          }
+          const draftProposalRef = reviewItemsOf(decorated).length
+            ? `intake-draft:${durable.runId}`
+            : undefined;
+          const pendingProposalRefs = [entryId, draftProposalRef].filter((item): item is string =>
+            Boolean(item),
+          );
+          const linkedState = pendingProposalRefs.length
+            ? transitionSemanticIntakeLifecycle(parsed.intakeState, {
+                type: "proposals_enqueued",
+                proposalRefs: pendingProposalRefs,
+              })
+            : parsed.intakeState;
+          const linkedResult: IntakeAgentResult = { ...parsed, intakeState: linkedState };
+          const review = reviewSnapshotFromResult({
+            result: linkedResult,
+            draft: decorated,
+            runId: durable.runId,
+            proposalEntryId: entryId,
+          });
+          reportDurable(
+            `${t("整理完成")} · ${decorated.people?.length ?? 0} ${t("人")} · ${decorated.relations?.length ?? 0} ${t("条关系")} · ${decorated.events?.length ?? 0} ${t("个事件")}`,
+            "done",
+          );
+          const phase = pendingProposalRefs.length ? "awaiting_approval" : "committed";
+          const state = sessionAt(durable.runId, latestCheckpoint, phase, {
+            pendingProposalRefs,
+            review,
+          });
+          await durable.settle({
+            status: pendingProposalRefs.length ? "awaiting_approval" : "completed",
+            state,
+            checkpointKind: pendingProposalRefs.length ? "awaiting_approval" : "safe_boundary",
+            nextAction: pendingProposalRefs.length ? "await_approval" : "finalize",
+            proposalRefs: pendingProposalRefs,
+            resumable: false,
+            dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+          });
+          setDurableIntake(state);
+          return {
+            draft: decorated,
+            proposal: parsed.proposal,
+            proposalEntryId: entryId,
+            resolutionIssues: parsed.resolutionIssues,
+            intakeState: linkedState,
+            sourceRunId: durable.runId,
+          } satisfies IntakeReviewResult;
+        } catch (caught) {
+          const error = persistenceFailure ?? caught;
+          if (error instanceof IntakeAgentSuspendedError) {
+            const state = sessionAt(durable.runId, error.checkpoint, "suspended");
+            const boundary = checkpointBoundary(error.checkpoint);
+            await durable.settle({
+              status: "suspended",
+              state,
+              ...boundary,
+              resumable: true,
+              dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+            });
+            setDurableIntake(state);
+            throw error;
+          }
+          if (latestCheckpoint) {
+            const state = sessionAt(durable.runId, latestCheckpoint, "failed");
+            durable.record({
+              kind: "finalize",
+              status: "failed",
+              payload: { reason: resumeState ? "resume_failed" : "failed" },
+            });
+            await durable.settle({
+              status: "failed",
+              state,
+              checkpointKind: "safe_boundary",
+              nextAction: "finalize",
+              resumable: false,
+              dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+            });
+            setDurableIntake(state);
+          }
+          throw error;
+        }
       },
     });
   };
@@ -891,20 +1374,28 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   /** 认领后台整理好的结果（可能是在别的页签跑完的） */
   useEffect(() => {
     if (job.result) {
-      if (!peopleLoaded) return;
-      setDraft(prepareIdentityDecisions(job.result as Draft, existingPeople, existingEvents));
-      if (job.extra) {
-        setRaw(job.text ?? "");
-        setSupplement("");
-      }
-      claimIntakeJob();
-      toast.success(t("已整理成档案草稿"));
+      if (!peopleLoaded || !proposalArtifactsLoaded) return;
+      const result = job.result as IntakeReviewResult;
+      const acceptResult = () => {
+        setDraft(prepareIdentityDecisions(result.draft, existingPeople, existingEvents));
+        setProposal(result.proposal ?? null);
+        setProposalEntryId(result.proposalEntryId ?? null);
+        setResolutionIssues(result.resolutionIssues);
+        setIntakeState(result.intakeState);
+        if (job.extra) {
+          setRaw(job.text ?? "");
+          setSupplement("");
+        }
+        claimIntakeJob();
+        toast.success(t("已整理成档案草稿"));
+      };
+      acceptResult();
     } else if (job.error) {
       const message = job.error;
       claimIntakeJob();
       toast.error(message);
     }
-  }, [existingEvents, existingPeople, job, peopleLoaded]);
+  }, [existingEvents, existingPeople, job, peopleLoaded, proposalArtifactsLoaded]);
 
   const patchPerson = (index: number, patch: Partial<DraftPerson>) => {
     setDraft((prev) => {
@@ -1201,15 +1692,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         toast.info(t("没有可撤销的录入批次"));
         return;
       }
-      const [nextPeople, nextEvents, nextRelations] = await Promise.all([
-        facesDb.listPersons(),
-        facesDb.listLifeEvents(),
-        facesDb.listRelationshipViews({ includeDerived: false }),
-      ]);
-      setExistingPeople(nextPeople);
-      setExistingEvents(nextEvents);
-      setExistingRelations(nextRelations);
-      setKnown(nextPeople.map((person) => person.name));
+      await refreshArchiveSnapshot();
       setLatestBatch(null);
       toast.success(t("已撤销最近一次录入批次"));
     } catch (error) {
@@ -1219,15 +1702,361 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     }
   };
 
-  const loadOfflineDemoDraft = () => {
+  const recordDurableProposalDecision = async (input: {
+    proposalRef: string;
+    decision: "committed" | "rejected";
+    receiptRef?: string;
+    intakeReceipt?: IntakeUndoBatch;
+    session?: IntakeSessionState;
+    lifecycleState?: SemanticIntakeTaskSnapshot;
+  }) => {
+    const currentSession = input.session ?? durableIntake;
+    const currentLifecycle = input.lifecycleState ?? intakeState;
+    if (!currentSession || !currentLifecycle) return;
+    const pendingProposalRefs = currentSession.pendingProposalRefs.filter(
+      (reference) => reference !== input.proposalRef,
+    );
+    const receiptRefs = input.receiptRef
+      ? [...new Set([...currentSession.receiptRefs, input.receiptRef])]
+      : currentSession.receiptRefs;
+    const decidingDraft = input.proposalRef.startsWith("intake-draft:");
+    let nextIntakeState = currentLifecycle;
+    let phase: IntakeSessionState["phase"] = "awaiting_approval";
+    let status: "awaiting_approval" | "completed" | "cancelled" = "awaiting_approval";
+    if (!pendingProposalRefs.length) {
+      if (input.decision === "rejected") {
+        nextIntakeState = transitionSemanticIntakeLifecycle(currentLifecycle, { type: "reject" });
+        phase = "rejected";
+        status = "cancelled";
+      } else {
+        if (nextIntakeState.phase === "AWAITING_APPROVAL") {
+          nextIntakeState = transitionSemanticIntakeLifecycle(nextIntakeState, {
+            type: "approve",
+          });
+          nextIntakeState = transitionSemanticIntakeLifecycle(nextIntakeState, {
+            type: "commit_started",
+          });
+        } else if (nextIntakeState.phase === "COMMIT_FAILED") {
+          nextIntakeState = transitionSemanticIntakeLifecycle(nextIntakeState, {
+            type: "retry_commit",
+          });
+        }
+        nextIntakeState = transitionSemanticIntakeLifecycle(nextIntakeState, {
+          type: "commit_succeeded",
+          receiptRefs,
+        });
+        phase = "committed";
+        status = "completed";
+      }
+    }
+    const review = currentSession.review
+      ? {
+          ...currentSession.review,
+          intakeState: nextIntakeState,
+          ...(decidingDraft ? { draft: undefined } : {}),
+          ...(input.proposalRef === currentSession.review.proposalEntryId
+            ? { proposalEntryId: undefined }
+            : {}),
+        }
+      : undefined;
+    const { commitIntent, ...sessionWithoutCommitIntent } = currentSession;
+    const state: IntakeSessionState = {
+      ...(commitIntent?.proposalRef === input.proposalRef
+        ? sessionWithoutCommitIntent
+        : currentSession),
+      phase,
+      pendingProposalRefs,
+      receiptRefs,
+      ...(input.intakeReceipt ? { intakeReceipt: structuredClone(input.intakeReceipt) } : {}),
+      ...(review && pendingProposalRefs.length ? { review } : {}),
+      updatedAt: Date.now(),
+    };
+    const archiveVersion = await facesDb.getArchiveMutationRevision();
+    await continueDurableAgentRun({
+      repository: indexedDbAgentRunLedger,
+      runId: currentSession.runId,
+      archiveVersion,
+      ownerId: browserAgentRunOwnerId(),
+      retainEventPayload: new LocalAgentSettingsStore().load().savePrivatePayload,
+      events: [
+        {
+          kind: "approval",
+          status: input.decision === "committed" ? "succeeded" : "blocked",
+          payload: { proposalRef: input.proposalRef, decision: input.decision },
+        },
+        ...(input.receiptRef
+          ? [
+              {
+                kind: "commit" as const,
+                status: "succeeded" as const,
+                payload: { receiptRef: input.receiptRef },
+              },
+            ]
+          : []),
+      ],
+      settle: {
+        status,
+        state,
+        checkpointKind: status === "awaiting_approval" ? "awaiting_approval" : "safe_boundary",
+        nextAction: status === "awaiting_approval" ? "await_approval" : "finalize",
+        receiptRefs,
+        resumable: false,
+        dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+      },
+    });
+    setDurableIntake(state);
+    setIntakeState(nextIntakeState);
+  };
+
+  const recordDurableCommitStarted = async (input: {
+    proposalRef: string;
+    commitIntent?: IntakeCommitIntent;
+  }) => {
+    if (!durableIntake || !intakeState || durableIntake.pendingProposalRefs.length !== 1) {
+      return undefined;
+    }
+    let nextIntakeState = intakeState;
+    if (nextIntakeState.phase === "AWAITING_APPROVAL") {
+      nextIntakeState = transitionSemanticIntakeLifecycle(nextIntakeState, { type: "approve" });
+      nextIntakeState = transitionSemanticIntakeLifecycle(nextIntakeState, {
+        type: "commit_started",
+      });
+    } else if (nextIntakeState.phase === "COMMIT_FAILED") {
+      nextIntakeState = transitionSemanticIntakeLifecycle(nextIntakeState, {
+        type: "retry_commit",
+      });
+    } else {
+      return undefined;
+    }
+    const review = durableIntake.review
+      ? { ...durableIntake.review, intakeState: nextIntakeState }
+      : undefined;
+    const state: IntakeSessionState = {
+      ...durableIntake,
+      ...(review ? { review } : {}),
+      ...(input.commitIntent ? { commitIntent: structuredClone(input.commitIntent) } : {}),
+      updatedAt: Date.now(),
+    };
+    const archiveVersion = await facesDb.getArchiveMutationRevision();
+    await continueDurableAgentRun({
+      repository: indexedDbAgentRunLedger,
+      runId: durableIntake.runId,
+      archiveVersion,
+      ownerId: browserAgentRunOwnerId(),
+      retainEventPayload: new LocalAgentSettingsStore().load().savePrivatePayload,
+      events: [
+        {
+          kind: "approval",
+          status: "succeeded",
+          payload: { proposalRef: input.proposalRef, decision: "approved" },
+        },
+        {
+          kind: "commit",
+          status: "started",
+          payload: {
+            proposalRef: input.proposalRef,
+            decisionId: input.commitIntent?.decisionId,
+          },
+        },
+      ],
+      settle: {
+        status: "awaiting_approval",
+        state,
+        checkpointKind: "awaiting_approval",
+        nextAction: "await_approval",
+        resumable: false,
+        dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+      },
+    });
+    setDurableIntake(state);
+    setIntakeState(nextIntakeState);
+    return { session: state, lifecycleState: nextIntakeState };
+  };
+
+  const recordDurableCommitFailed = async (input: {
+    proposalRef: string;
+    message: string;
+    session: IntakeSessionState;
+    lifecycleState: SemanticIntakeTaskSnapshot;
+    clearCommitIntent?: boolean;
+  }) => {
+    const nextIntakeState = transitionSemanticIntakeLifecycle(input.lifecycleState, {
+      type: "commit_failed",
+      message: input.message,
+    });
+    const review = input.session.review
+      ? { ...input.session.review, intakeState: nextIntakeState }
+      : undefined;
+    const { commitIntent: _commitIntent, ...sessionWithoutCommitIntent } = input.session;
+    const state: IntakeSessionState = {
+      ...(input.clearCommitIntent ? sessionWithoutCommitIntent : input.session),
+      ...(review ? { review } : {}),
+      updatedAt: Date.now(),
+    };
+    const archiveVersion = await facesDb.getArchiveMutationRevision();
+    await continueDurableAgentRun({
+      repository: indexedDbAgentRunLedger,
+      runId: input.session.runId,
+      archiveVersion,
+      ownerId: browserAgentRunOwnerId(),
+      events: [
+        {
+          kind: "commit",
+          status: "failed",
+          issueCategory: "transaction",
+          payload: { proposalRef: input.proposalRef, message: input.message },
+        },
+      ],
+      settle: {
+        status: "awaiting_approval",
+        state,
+        checkpointKind: "awaiting_approval",
+        nextAction: "await_approval",
+        resumable: false,
+        dependencyRefs: [{ scope: "archive", version: archiveVersion }],
+      },
+    });
+    setDurableIntake(state);
+    setIntakeState(nextIntakeState);
+  };
+
+  const approveSemanticProposal = async () => {
+    if (!proposal || !proposalEntryId || approvingProposal) return;
+    const signedAt = Date.now();
+    setApprovingProposal(true);
+    let lifecycleStart:
+      { session: IntakeSessionState; lifecycleState: SemanticIntakeTaskSnapshot } | undefined;
+    try {
+      lifecycleStart = await recordDurableCommitStarted({ proposalRef: proposalEntryId });
+    } catch (error) {
+      toast.error(`${t("无法记录批准动作")}：${(error as Error).message}`);
+      setApprovingProposal(false);
+      return;
+    }
+    let receipt;
+    try {
+      receipt = await intakeMutationCoordinator.commit({
+        authorizationMode: "standard",
+        proposalIds: [proposalEntryId],
+        signature: { signer: "user", signedAt },
+      });
+    } catch (error) {
+      if (lifecycleStart) {
+        await recordDurableCommitFailed({
+          proposalRef: proposalEntryId,
+          message: error instanceof Error ? error.message : t("圈层变更写入失败"),
+          ...lifecycleStart,
+        }).catch(() => undefined);
+      }
+      toast.error(error instanceof Error ? error.message : t("圈层变更写入失败"));
+      setApprovingProposal(false);
+      return;
+    }
+    try {
+      await recordDurableProposalDecision({
+        proposalRef: proposalEntryId,
+        decision: "committed",
+        receiptRef: receipt.id,
+        ...lifecycleStart,
+      });
+      setProposal(null);
+      setProposalEntryId(null);
+      if (!draft) {
+        setResolutionIssues([]);
+        setIntakeState(null);
+      }
+      await refreshArchiveSnapshot();
+      toast.success(t("圈层变更已批准并写入"));
+    } catch (error) {
+      setProposal(null);
+      setProposalEntryId(null);
+      await refreshArchiveSnapshot();
+      toast.warning(`${t("圈层已经写入，执行记录等待恢复")}：${(error as Error).message}`);
+    } finally {
+      setApprovingProposal(false);
+    }
+  };
+
+  const discardSemanticReview = async () => {
+    if (!proposalEntryId) return;
+    try {
+      intakeMutationCoordinator.discard([proposalEntryId]);
+      await intakeMutationCoordinator.flushPersistence();
+      await recordDurableProposalDecision({
+        proposalRef: proposalEntryId,
+        decision: "rejected",
+      });
+      setProposal(null);
+      setProposalEntryId(null);
+      if (!draft) {
+        setResolutionIssues([]);
+        setIntakeState(null);
+      }
+    } catch (error) {
+      toast.error(`${t("放弃圈层提案失败")}：${(error as Error).message}`);
+    }
+  };
+
+  const discardDraftReview = async () => {
+    const draftProposalRef = durableIntake?.pendingProposalRefs.find((reference) =>
+      reference.startsWith("intake-draft:"),
+    );
+    try {
+      if (draftProposalRef) {
+        await recordDurableProposalDecision({
+          proposalRef: draftProposalRef,
+          decision: "rejected",
+        });
+      }
+      setDraft(null);
+      if (!proposal) {
+        setResolutionIssues([]);
+        setIntakeState(null);
+      }
+    } catch (error) {
+      toast.error(`${t("丢弃草稿失败")}：${(error as Error).message}`);
+    }
+  };
+
+  const loadOfflineDemoDraft = async () => {
     if (
-      (raw.trim() || draft) &&
+      (raw.trim() || draft || proposal) &&
       !window.confirm(t("这会替换当前未提交内容。确定载入合成的离线演示草稿吗？"))
     ) {
       return;
     }
+    if (proposalEntryId) {
+      try {
+        intakeMutationCoordinator.discard([proposalEntryId]);
+        await intakeMutationCoordinator.flushPersistence();
+      } catch (error) {
+        toast.error(`${t("替换圈层提案失败")}：${(error as Error).message}`);
+        return;
+      }
+    }
+    if (durableIntake) {
+      try {
+        const archiveVersion = await facesDb.getArchiveMutationRevision();
+        await cancelDurableAgentRun({
+          repository: indexedDbAgentRunLedger,
+          runId: durableIntake.runId,
+          archiveVersion,
+          ownerId: browserAgentRunOwnerId(),
+          state: { ...durableIntake, phase: "rejected", updatedAt: Date.now() },
+          reason: "replaced_by_offline_demo",
+        });
+      } catch (error) {
+        toast.error(`${t("替换录入任务失败")}：${(error as Error).message}`);
+        return;
+      }
+    }
     setRaw(OFFLINE_DEMO_MATERIAL);
     setSupplement("");
+    setProposal(null);
+    setProposalEntryId(null);
+    setResolutionIssues([]);
+    setIntakeState(null);
+    setDurableIntake(null);
     setAttached([]);
     setDraft(
       prepareIdentityDecisions(
@@ -1289,8 +2118,81 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     setAcceptAllOpen(false);
   };
 
+  const finishCommittedIntakeUi = async (intent: IntakeCommitIntent) => {
+    setDraft(null);
+    setRaw("");
+    setSupplement("");
+    setAttached([]);
+    setStashedAt(null);
+    if (!proposal) {
+      setResolutionIssues([]);
+      setIntakeState(null);
+    }
+    window.localStorage.removeItem(DRAFT_KEY);
+    await refreshArchiveSnapshot();
+    if (intakeReceiptHasChanges(intent.receipt)) {
+      rememberIntakeBatch(intent.receipt);
+      setLatestBatch(intent.receipt);
+    }
+    const summary = intent.summary;
+    toast.success(
+      `${t("新建")} ${summary.createdPeople} · ${t("更新")} ${summary.updatedPeople} · ${t("事实")} ${summary.facts} · ${t("关系")} ${summary.relations} · ${t("新增事件")} ${summary.createdEvents} · ${t("更新事件")} ${summary.updatedEvents} · ${t("提醒")} ${summary.reminders} · ${t("材料")} ${summary.evidence}`,
+    );
+  };
+
+  const resumeDurableDraftCommit = async (
+    session: IntakeSessionState,
+    lifecycleState: SemanticIntakeTaskSnapshot,
+  ) => {
+    const intent = session.commitIntent;
+    if (!intent) return;
+    const result = await executeIntakeCommitIntent(intent);
+    if (result === "conflict") throw new IntakeCommitConflictError();
+    await recordDurableProposalDecision({
+      proposalRef: intent.proposalRef,
+      decision: "committed",
+      receiptRef: `intake-batch:${intent.receipt.id}`,
+      intakeReceipt: intent.receipt,
+      session,
+      lifecycleState,
+    });
+    await finishCommittedIntakeUi(intent);
+  };
+
   const commit = async () => {
-    if (!draft || saving) return;
+    if (!draft || saving || approvingProposal) return;
+    if (durableIntake?.commitIntent && intakeState) {
+      const session = durableIntake;
+      const intent = durableIntake.commitIntent;
+      const lifecycleState = intakeState;
+      setSaving(true);
+      try {
+        await resumeDurableDraftCommit(session, lifecycleState);
+      } catch (error) {
+        const alreadyApplied = await facesDb
+          .hasAppliedArchiveMutationDecision(intent.decisionId)
+          .catch(() => false);
+        if (alreadyApplied) {
+          toast.warning(`${t("档案已经保存，执行记录等待恢复")}：${(error as Error).message}`);
+        } else {
+          await recordDurableCommitFailed({
+            proposalRef: intent.proposalRef,
+            message: (error as Error).message,
+            session,
+            lifecycleState,
+            clearCommitIntent: error instanceof IntakeCommitConflictError,
+          }).catch(() => undefined);
+          toast.error((error as Error).message);
+        }
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    if (proposalEntryId) {
+      toast.info(t("请先批准或放弃圈层变更，再保存人物与事件草稿"));
+      return;
+    }
     const commitDraft = structuredClone(draft);
     const pendingAtCommit = reviewItemsOf(commitDraft).filter(
       (item) => item._audit?.confirmationStatus !== "accepted",
@@ -1344,21 +2246,20 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       previousPeople: [],
       previousEvents: [],
     };
-    const batchHasChanges = () =>
-      batch.createdPersonIds.length > 0 ||
-      batch.createdRelationIds.length > 0 ||
-      batch.createdEvidenceIds.length > 0 ||
-      batch.createdEventIds.length > 0 ||
-      batch.createdReminderIds.length > 0 ||
-      batch.previousPeople.length > 0 ||
-      (batch.previousEvents?.length ?? 0) > 0;
+    let archiveApplied = false;
+    let durableDecisionRecorded = false;
+    let commitIntent: IntakeCommitIntent | undefined;
+    let draftProposalRef: string | undefined;
+    let lifecycleStart:
+      { session: IntakeSessionState; lifecycleState: SemanticIntakeTaskSnapshot } | undefined;
     try {
-      const [current, currentEvents, currentAssertions, currentCollections] = await Promise.all([
-        facesDb.listPersons(),
-        facesDb.listLifeEvents(),
-        facesDb.listRelationAssertions(),
-        facesDb.listCollections(),
-      ]);
+      const [current, currentEvents, currentAssertions, expectedArchiveRevision] =
+        await Promise.all([
+          facesDb.listPersons(),
+          facesDb.listLifeEvents(),
+          facesDb.listRelationAssertions(),
+          facesDb.getArchiveMutationRevision(),
+        ]);
       const byId = new Map(current.map((person) => [person.id, person]));
       const eventById = new Map(currentEvents.map((event) => [event.id, event]));
       const originalById = new Map(current.map((person) => [person.id, person]));
@@ -1368,9 +2269,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       const pendingEvidence: EvidenceRecord[] = [];
       const pendingEvents = new Map<string, LifeEventRecord>();
       const pendingReminders: ReminderRecord[] = [];
-      const pendingCollections = new Map<string, CollectionRecord>();
-      const pendingCollectionMemberships: CollectionMembershipRecord[] = [];
-      const circleAssignments: Array<{ personId: string; name: string }> = [];
       const exactNameBuckets = new Map<string, PersonRecord[]>();
       current.forEach((person) => {
         const key = person.name.trim();
@@ -1557,8 +2455,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           byId.set(record.id, record);
           rememberDraftName(name, record);
           if (item._draftId) resolvedDraftIds.set(item._draftId, record);
-          if (item.circle?.trim())
-            circleAssignments.push({ personId: record.id, name: item.circle.trim() });
           continue;
         }
 
@@ -1608,8 +2504,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           byId.set(record.id, record);
           rememberDraftName(name, record);
           if (item._draftId) resolvedDraftIds.set(item._draftId, record);
-          if (item.circle?.trim())
-            circleAssignments.push({ personId: record.id, name: item.circle.trim() });
           updated += 1;
           continue;
         }
@@ -1632,39 +2526,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         exactNameBuckets.set(name, [...(exactNameBuckets.get(name) ?? []), record]);
         rememberDraftName(name, record);
         if (item._draftId) resolvedDraftIds.set(item._draftId, record);
-        if (item.circle?.trim())
-          circleAssignments.push({ personId: record.id, name: item.circle.trim() });
         created += 1;
-      }
-
-      const collectionByName = new Map(
-        currentCollections.map((collection) => [
-          collection.name.trim().toLocaleLowerCase("zh-CN"),
-          collection,
-        ]),
-      );
-      for (const assignment of circleAssignments) {
-        const key = assignment.name.toLocaleLowerCase("zh-CN");
-        let collection = collectionByName.get(key) ?? pendingCollections.get(key);
-        if (!collection) {
-          const now = Date.now();
-          collection = {
-            id: `collection:${crypto.randomUUID()}`,
-            name: assignment.name,
-            kind: "relationship_circle",
-            createdAt: now,
-            updatedAt: now,
-          };
-          pendingCollections.set(key, collection);
-          collectionByName.set(key, collection);
-        }
-        pendingCollectionMemberships.push({
-          id: `${collection.id}\u0000${assignment.personId}`,
-          collectionId: collection.id,
-          personId: assignment.personId,
-          source: "ai_approved",
-          createdAt: Date.now(),
-        });
       }
 
       let facts = 0;
@@ -1923,46 +2785,100 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         reminders += 1;
       }
 
-      await facesDb.applyArchiveMutationBatch({
+      draftProposalRef = durableIntake?.pendingProposalRefs.find((reference) =>
+        reference.startsWith("intake-draft:"),
+      );
+      const mutationBatch: ArchiveMutationWriteBatch = {
         persons: [...pendingPeople.values()],
         assertions: [...pendingAssertions.values()],
         evidence: pendingEvidence,
         evidenceLinks: pendingRelationEvidenceLinks,
         lifeEvents: [...pendingEvents.values()],
         reminders: pendingReminders,
-        collections: [...pendingCollections.values()],
-        collectionMemberships: pendingCollectionMemberships,
-      });
+      };
+      if (draftProposalRef) {
+        commitIntent = createIntakeCommitIntent({
+          decisionId: `intake-decision:${durableIntake!.runId}`,
+          proposalRef: draftProposalRef,
+          expectedArchiveRevision,
+          batch: mutationBatch,
+          receipt: batch,
+          summary: {
+            createdPeople: created,
+            updatedPeople: updated,
+            facts,
+            relations: links,
+            createdEvents: events,
+            updatedEvents: eventUpdates,
+            reminders,
+            evidence: docs,
+          },
+        });
+        lifecycleStart = await recordDurableCommitStarted({
+          proposalRef: draftProposalRef,
+          commitIntent,
+        });
+      }
 
-      setDraft(null);
-      setRaw("");
-      setSupplement("");
-      setAttached([]);
-      setStashedAt(null);
-      try {
+      const applyResult = commitIntent
+        ? await executeIntakeCommitIntent(commitIntent)
+        : await facesDb.applyArchiveMutationBatch(mutationBatch).then(() => "applied" as const);
+      if (applyResult === "conflict") throw new IntakeCommitConflictError();
+      archiveApplied = true;
+
+      if (draftProposalRef) {
+        await recordDurableProposalDecision({
+          proposalRef: draftProposalRef,
+          decision: "committed",
+          receiptRef: `intake-batch:${batch.id}`,
+          intakeReceipt: batch,
+          ...lifecycleStart,
+        });
+      }
+      durableDecisionRecorded = true;
+
+      if (commitIntent) {
+        await finishCommittedIntakeUi(commitIntent);
+      } else {
+        setDraft(null);
+        setRaw("");
+        setSupplement("");
+        setAttached([]);
+        setStashedAt(null);
+        setResolutionIssues([]);
+        setIntakeState(null);
         window.localStorage.removeItem(DRAFT_KEY);
-      } catch {
-        /* ignore */
+        await refreshArchiveSnapshot();
+        if (intakeReceiptHasChanges(batch)) {
+          rememberIntakeBatch(batch);
+          setLatestBatch(batch);
+        }
+        toast.success(
+          `${t("新建")} ${created} · ${t("更新")} ${updated} · ${t("事实")} ${facts} · ${t("关系")} ${links} · ${t("新增事件")} ${events} · ${t("更新事件")} ${eventUpdates} · ${t("提醒")} ${reminders} · ${t("材料")} ${docs}`,
+        );
       }
-      const nextPeople = [...byId.values()];
-      const [nextEvents, nextRelations] = await Promise.all([
-        facesDb.listLifeEvents(),
-        facesDb.listRelationshipViews(),
-      ]);
-      setExistingPeople(nextPeople);
-      setExistingEvents(nextEvents);
-      setExistingRelations(nextRelations);
-      setKnown(nextPeople.map((person) => person.name));
-      if (batchHasChanges()) {
-        batch.committedAt = Date.now();
-        rememberIntakeBatch(batch);
-        setLatestBatch(batch);
-      }
-      toast.success(
-        `${t("新建")} ${created} · ${t("更新")} ${updated} · ${t("事实")} ${facts} · ${t("关系")} ${links} · ${t("新增事件")} ${events} · ${t("更新事件")} ${eventUpdates} · ${t("提醒")} ${reminders} · ${t("材料")} ${docs}`,
-      );
     } catch (error) {
-      if (batchHasChanges()) {
+      const guardedWriteApplied = commitIntent
+        ? await facesDb
+            .hasAppliedArchiveMutationDecision(commitIntent.decisionId)
+            .catch(() => false)
+        : false;
+      if (lifecycleStart && draftProposalRef && !durableDecisionRecorded && !guardedWriteApplied) {
+        await recordDurableCommitFailed({
+          proposalRef: draftProposalRef,
+          message: (error as Error).message,
+          ...lifecycleStart,
+          clearCommitIntent: error instanceof IntakeCommitConflictError,
+        }).catch(() => undefined);
+      }
+      if (commitIntent && guardedWriteApplied && !durableDecisionRecorded) {
+        toast.warning(`${t("档案已经保存，执行记录等待恢复")}：${(error as Error).message}`);
+      } else if (
+        !commitIntent &&
+        archiveApplied &&
+        !durableDecisionRecorded &&
+        intakeReceiptHasChanges(batch)
+      ) {
         try {
           await rollbackIntakeBatch(batch);
           toast.error(`${(error as Error).message} · ${t("本批次已自动回滚，未留下部分数据")}`);
@@ -1972,6 +2888,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           setLatestBatch(batch);
           toast.error(`${(error as Error).message} · ${t("自动回滚失败，可用下方按钮撤销")}`);
         }
+      } else if (archiveApplied && durableDecisionRecorded) {
+        toast.warning(`${t("档案已经保存，页面刷新未完成")}：${(error as Error).message}`);
       } else {
         toast.error((error as Error).message);
       }
@@ -2062,7 +2980,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         <Textarea
           value={raw}
           onChange={(event) => setRaw(event.target.value)}
-          disabled={saving}
+          disabled={saving || busy}
           rows={8}
           className="mt-4 text-sm"
           placeholder=""
@@ -2099,7 +3017,15 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           <Button
             className="rounded-full px-5"
             onClick={() => void organize()}
-            disabled={busy || !!reading || recording || transcribing || saving}
+            disabled={
+              busy ||
+              !!reading ||
+              recording ||
+              transcribing ||
+              saving ||
+              approvingProposal ||
+              !proposalArtifactsLoaded
+            }
           >
             {busy ? (
               <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
@@ -2119,7 +3045,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
           <Button
             variant="outline"
             className="rounded-full px-4"
-            disabled={!!reading || busy || recording || transcribing || saving}
+            disabled={!!reading || busy || recording || transcribing || saving || approvingProposal}
             onClick={() => fileRef.current?.click()}
           >
             {reading ? (
@@ -2134,7 +3060,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             variant={recording ? "destructive" : "outline"}
             className="rounded-full px-4"
             onClick={() => void toggleRecording()}
-            disabled={((busy || !!reading || transcribing) && !recording) || saving}
+            disabled={
+              ((busy || !!reading || transcribing) && !recording) || saving || approvingProposal
+            }
           >
             {recording ? (
               <>
@@ -2152,8 +3080,16 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             type="button"
             variant="outline"
             className="rounded-full px-4"
-            onClick={loadOfflineDemoDraft}
-            disabled={busy || !!reading || recording || transcribing || saving}
+            onClick={() => void loadOfflineDemoDraft()}
+            disabled={
+              busy ||
+              !!reading ||
+              recording ||
+              transcribing ||
+              saving ||
+              approvingProposal ||
+              !proposalArtifactsLoaded
+            }
           >
             <Sparkles className="size-3.5" aria-hidden="true" />
             {t("离线演示草稿")}
@@ -2171,20 +3107,25 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             <Button
               variant="ghost"
               className="rounded-full px-4"
-              onClick={() => setDraft(null)}
-              disabled={saving}
+              onClick={() => void discardDraftReview()}
+              disabled={saving || approvingProposal}
             >
               <X className="size-3.5" aria-hidden="true" />
               {t("丢弃草稿")}
             </Button>
           )}
-          {(raw.trim() || supplement.trim() || draft || attached.length > 0) && (
+          {(raw.trim() ||
+            supplement.trim() ||
+            draft ||
+            proposal ||
+            intakeState ||
+            attached.length > 0) && (
             <Button
               type="button"
               variant="ghost"
               className="rounded-full px-4 text-destructive hover:text-destructive"
-              onClick={clearLocalDraft}
-              disabled={saving}
+              onClick={() => void clearLocalDraft()}
+              disabled={saving || approvingProposal}
             >
               <Trash2 className="size-3.5" aria-hidden="true" />
               {t("清除本地录入材料")}
@@ -2196,7 +3137,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               variant="outline"
               className="rounded-full px-4"
               onClick={() => void undoLastCommit()}
-              disabled={saving || undoing}
+              disabled={saving || approvingProposal || undoing}
             >
               {undoing ? (
                 <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
@@ -2246,6 +3187,29 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             />
           </div>
         )}
+        {!busy &&
+          durableIntake &&
+          (durableIntake.phase === "running" || durableIntake.phase === "suspended") && (
+            <div
+              className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/50 bg-amber-400/5 px-3 py-2"
+              data-testid="intake-resume"
+            >
+              <p className="text-[11px] text-muted-foreground">
+                {t("上次整理停在安全断点，已经完成的模型步骤与圈层批次不会重跑。")}
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                className="rounded-full"
+                onClick={() => void organize(durableIntake.extra ?? undefined, durableIntake)}
+              >
+                <ArrowRight className="size-3.5" aria-hidden="true" />
+                {durableIntake.checkpoint.nextAction === "complete"
+                  ? t("恢复整理结果")
+                  : t("从断点继续")}
+              </Button>
+            </div>
+          )}
         {latestAgentRun && !job.busy && (
           <div className="mt-3">
             <AgentRunInspector run={latestAgentRun} />
@@ -2253,10 +3217,112 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         )}
       </div>
 
+      {intakeState && (
+        <section
+          className="space-y-3 rounded-2xl border border-border bg-card/60 p-4"
+          data-testid="intake-semantic-state"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">{t("本次理解与解析")}</span>
+            <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
+              {intakeState.phase}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              {intakeState.tasks.filter((task) => task.status === "proposed").length} /{" "}
+              {intakeState.tasks.length} {t("项已形成待确认结果")}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5" data-testid="intake-semantic-tasks">
+            {intakeState.tasks.map((task) => (
+              <span
+                key={task.task.id}
+                className={cn(
+                  "rounded-full border px-2 py-1 text-[10px]",
+                  task.status === "needs_input"
+                    ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-200"
+                    : "border-border text-muted-foreground",
+                )}
+              >
+                {task.task.domain} · {task.task.intent} · {task.status}
+              </span>
+            ))}
+          </div>
+          {resolutionIssues.length > 0 && (
+            <div className="space-y-2" data-testid="intake-resolution-issues">
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {t("以下条目需要补充或消歧；其它条目仍可继续核对和批准。")}
+              </p>
+              {resolutionIssues.map((issue, index) => {
+                const task = issue.taskId
+                  ? intakeState.tasks.find((item) => item.task.id === issue.taskId)
+                  : undefined;
+                return (
+                  <div
+                    key={`${issue.taskId ?? issue.stage}-${issue.path ?? issue.code}-${index}`}
+                    className="rounded-xl border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px]"
+                    data-resolution-task={issue.taskId ?? "plan"}
+                  >
+                    <p className="font-medium text-foreground">
+                      {task ? `${task.task.domain} · ${task.task.intent}` : issue.stage}：
+                      {issue.message}
+                    </p>
+                    {issue.candidates?.length ? (
+                      <p className="mt-1 text-muted-foreground">
+                        {t("可选档案")}：
+                        {issue.candidates.map((candidate) => candidate.label).join("、")}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {proposal && (
+        <section
+          className="space-y-3 rounded-2xl border border-primary/40 bg-primary/5 p-4"
+          data-testid="intake-formal-proposal"
+        >
+          <div>
+            <p className="text-sm font-medium">{proposal.title}</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              {proposal.operations.length} {t("项圈层与成员变更已由本地档案解析；批准后才会写入。")}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              className="rounded-full px-4"
+              onClick={() => void approveSemanticProposal()}
+              disabled={saving || approvingProposal}
+            >
+              {approvingProposal ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Check className="size-3.5" aria-hidden="true" />
+              )}
+              {t("批准圈层变更")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="rounded-full px-4"
+              onClick={() => void discardSemanticReview()}
+              disabled={approvingProposal}
+            >
+              <X className="size-3.5" aria-hidden="true" />
+              {t("放弃圈层变更")}
+            </Button>
+          </div>
+        </section>
+      )}
+
       {draft && (
         <fieldset
           className="min-w-0 space-y-4 rounded-2xl border border-border bg-card/60 p-5 disabled:opacity-80"
-          disabled={saving}
+          disabled={saving || approvingProposal}
         >
           {draft.summary && (
             <p className="text-[11px] leading-relaxed text-muted-foreground">{draft.summary}</p>
@@ -2425,7 +3491,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
               <Button
                 variant="outline"
                 className="mt-2 rounded-full px-4"
-                disabled={busy || !supplement.trim()}
+                disabled={busy || !supplement.trim() || !proposalArtifactsLoaded}
                 onClick={() => void organize(supplement.trim())}
               >
                 {busy ? (
@@ -2508,7 +3574,6 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
                       ["relation", t("和我的关系")],
                       ["birthday", t("生日")],
                       ["contact", t("联系方式")],
-                      ["circle", t("圈子")],
                     ] as Array<[keyof DraftPerson, string]>
                   ).map(([key, label]) => (
                     <Input
@@ -3312,7 +4377,11 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             </div>
           )}
 
-          <Button className="rounded-full px-5" onClick={() => void commit()} disabled={saving}>
+          <Button
+            className="rounded-full px-5"
+            onClick={() => void commit()}
+            disabled={saving || approvingProposal}
+          >
             {saving ? (
               <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
             ) : (

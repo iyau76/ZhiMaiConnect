@@ -1,9 +1,19 @@
 export type AgentRunStatus =
-  "pending" | "running" | "completed" | "suspended" | "failed" | "cancelled" | "budget_exceeded";
+  | "pending"
+  | "running"
+  | "awaiting_approval"
+  | "completed"
+  | "suspended"
+  | "failed"
+  | "cancelled"
+  | "budget_exceeded";
 
 export type AgentStepKind = "model" | "tool" | "validation" | "proposal" | "approval" | "system";
 
 export type AgentStepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+
+export type AgentRunIssueCategory =
+  "transport" | "budget" | "context_omission" | "contract" | "transaction";
 
 export interface AgentTokenUsage {
   input?: number;
@@ -40,6 +50,7 @@ export interface AgentStep {
   startedAt?: number;
   endedAt?: number;
   durationMs?: number;
+  issueCategory?: AgentRunIssueCategory;
 }
 
 /** Lightweight adapter target; existing Agent implementations can map to it incrementally. */
@@ -59,7 +70,7 @@ export interface AgentRun {
   steps: readonly AgentStep[];
 }
 
-const DEFAULT_SENSITIVE_KEYS = [
+const CREDENTIAL_KEYS = [
   "apiKey",
   "api_key",
   "authorization",
@@ -76,6 +87,10 @@ const DEFAULT_SENSITIVE_KEYS = [
   "sessionToken",
   "session_token",
   "credential",
+];
+
+const DEFAULT_SENSITIVE_KEYS = [
+  ...CREDENTIAL_KEYS,
   "email",
   "phone",
   "mobile",
@@ -87,17 +102,60 @@ function normalizedKey(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function redactString(value: string) {
-  const redacted = value
+const AGENT_CREDENTIAL_PATTERNS = [
+  /\bBearer\s+[A-Za-z0-9._~+/=-]+/i,
+  /\bsk-(?:ant-|or-v1-)?[A-Za-z0-9_-]{8,}\b/i,
+  /\bAIza[A-Za-z0-9_-]{20,}\b/,
+  /\b(?:xai-|gsk_|hf_|ghp_)[A-Za-z0-9_-]{16,}\b/i,
+];
+
+export function containsAgentCredential(value: string) {
+  return AGENT_CREDENTIAL_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function redactCredentialString(value: string) {
+  return value
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]")
-    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[REDACTED_EMAIL]")
-    .replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d(?:[- ]?\d){8}(?!\d)/g, "[REDACTED_PHONE]")
+    .replace(/\bsk-(?:ant-|or-v1-)?[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED]")
+    .replace(/\bAIza[A-Za-z0-9_-]{20,}\b/g, "[REDACTED]")
+    .replace(/\b(?:xai-|gsk_|hf_|ghp_)[A-Za-z0-9_-]{16,}\b/gi, "[REDACTED]")
     .replace(
       /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|password|secret)\s*[:=]\s*)[^\s,;]+/gi,
       "$1[REDACTED]",
     );
+}
+
+function redactString(value: string) {
+  const redacted = redactCredentialString(value)
+    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[REDACTED_EMAIL]")
+    .replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d(?:[- ]?\d){8}(?!\d)/g, "[REDACTED_PHONE]");
   return redacted.length > 8_000 ? `${redacted.slice(0, 8_000)}…[TRUNCATED]` : redacted;
+}
+
+/** Redact credentials while preserving full local task context and personal fields. */
+export function redactAgentCredentials<T>(value: T): T {
+  const sensitive = new Set(CREDENTIAL_KEYS.map(normalizedKey));
+  const seen = new WeakMap<object, unknown>();
+  const visit = (current: unknown): unknown => {
+    if (typeof current === "string") return redactCredentialString(current);
+    if (!current || typeof current !== "object") return current;
+    if (current instanceof Date) return new Date(current);
+    const known = seen.get(current);
+    if (known) return known;
+    if (Array.isArray(current)) {
+      const clone: unknown[] = [];
+      seen.set(current, clone);
+      current.forEach((item) => clone.push(visit(item)));
+      return clone;
+    }
+    const clone: Record<string, unknown> = {};
+    seen.set(current, clone);
+    Object.entries(current as Record<string, unknown>).forEach(([key, item]) => {
+      clone[key] = sensitive.has(normalizedKey(key)) ? "[REDACTED]" : visit(item);
+    });
+    return clone;
+  };
+  return visit(value) as T;
 }
 
 /**
@@ -198,6 +256,7 @@ export interface AgentRunEvent {
   /** Correlates one tool_call with its validation and tool_result events. */
   invocationId?: string;
   durationMs?: number;
+  issueCategory?: AgentRunIssueCategory;
   payload?: unknown;
   usage?: AgentRunEventTokenUsage;
 }
@@ -243,15 +302,29 @@ export function summarizeAgentRunTokens(events: readonly AgentRunEvent[]): Agent
 export class MemoryAgentRunRecorder implements AgentRunRecorder {
   readonly runId: string;
   private readonly now: () => number;
-  private readonly rows: AgentRunEvent[] = [];
+  private readonly rows: AgentRunEvent[];
 
-  constructor(options: { runId?: string; now?: () => number } = {}) {
-    this.runId = options.runId ?? crypto.randomUUID();
+  constructor(
+    options: {
+      runId?: string;
+      now?: () => number;
+      /** Existing durable events when this recorder continues a suspended run. */
+      initialEvents?: readonly AgentRunEvent[];
+    } = {},
+  ) {
+    const initialEvents = [...(options.initialEvents ?? [])].sort(
+      (left, right) => left.sequence - right.sequence,
+    );
+    this.runId = options.runId ?? initialEvents[0]?.runId ?? crypto.randomUUID();
+    if (initialEvents.some((event) => event.runId !== this.runId)) {
+      throw new TypeError("All initial Agent events must belong to the recorder run");
+    }
     this.now = options.now ?? Date.now;
+    this.rows = initialEvents.map((event) => structuredClone(event));
   }
 
   record(input: AgentRunEventInput): AgentRunEvent {
-    const sequence = this.rows.length + 1;
+    const sequence = (this.rows.at(-1)?.sequence ?? 0) + 1;
     const { redact, payload, at, ...details } = input;
     const toolRedacted = redact ? redact(payload) : payload;
     const event: AgentRunEvent = {
@@ -338,6 +411,7 @@ function projectEventStep(event: AgentRunEvent): AgentStep {
     startedAt: event.at,
     endedAt: event.status === "started" ? undefined : event.at,
     durationMs: event.durationMs,
+    issueCategory: event.issueCategory,
   };
 }
 
@@ -368,6 +442,7 @@ function projectAgentSteps(events: readonly AgentRunEvent[]) {
       if (requestStep) {
         requestStep.output = event.payload;
         requestStep.status = event.status ? EVENT_STEP_STATUS[event.status] : requestStep.status;
+        requestStep.issueCategory = event.issueCategory ?? requestStep.issueCategory;
         requestStep.endedAt = event.at;
         requestStep.durationMs =
           event.durationMs ?? Math.max(0, event.at - (requestStep.startedAt ?? event.at));
@@ -412,6 +487,7 @@ function projectAgentSteps(events: readonly AgentRunEvent[]) {
       if (callStep) {
         callStep.output = event.payload;
         callStep.status = event.status ? EVENT_STEP_STATUS[event.status] : callStep.status;
+        callStep.issueCategory = event.issueCategory ?? callStep.issueCategory;
         callStep.endedAt = event.at;
         callStep.durationMs =
           event.durationMs ?? Math.max(0, event.at - (callStep.startedAt ?? event.at));

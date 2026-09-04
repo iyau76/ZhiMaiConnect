@@ -343,6 +343,7 @@ const EN: Record<string, string> = {
   高优先级: "High priority",
   设置: "Settings",
   "主题、无障碍与语言": "Theme, accessibility, language",
+  "外观、数据与 Agent": "Appearance, data, Agent",
   浅色主题: "Light themes",
   深色主题: "Dark themes",
   "色觉辅助 / 对比度": "Colour vision / contrast",
@@ -352,9 +353,12 @@ const EN: Record<string, string> = {
   调成你顺眼的: "Make it look ",
   样子: "the way you like",
   "这一页：外观与无障碍": "This page: appearance and accessibility",
+  "这一页：外观、数据与 Agent 高级设置": "This page: appearance, data and advanced Agent settings",
   "浅色 / 深色主题各有几套，随时切换。": "Several light and dark themes, switch any time.",
   "色觉辅助可以避开红绿或蓝黄配色，还能开高对比和大字号。":
     "Colour-vision modes avoid red-green or blue-yellow coding; high contrast and large text are here too.",
+  "Agent 的写入授权、运行预算和本机日志也在这里管理。":
+    "Manage Agent write approval, run budgets and local logs here too.",
   图片备注: "Photo notes",
   加图片: "Add photo",
   说明一句: "One-line caption",
@@ -1210,6 +1214,8 @@ const EN: Record<string, string> = {
   "总时限 ms": "Total time ms",
   "修改任一字段会切换为 custom 并立即保存。":
     "Changing any field switches to custom and saves immediately.",
+  "这里设置的是整次任务的累计上限，不会扩大单轮上下文。修改任一字段会切换为 custom 并立即保存。":
+    "These are cumulative limits for the whole run; they do not enlarge one round's context. Changing any field switches to custom and saves immediately.",
   "最近运行（最多 50 次 / 30 天）": "Recent runs (up to 50 / 30 days)",
   清除日志: "Clear logs",
   "保存档案正文（敏感）": "Save archive payloads (sensitive)",

@@ -127,6 +127,51 @@ test("待确认条目是软提醒，直接入库后关系仍保留 pending 状�
   expect(assertions.every((relation) => relation.confirmationStatus === "pending")).toBe(true);
 });
 
+test("录入批准在写入中断后可跨刷新续交且不会重跑模型或重复人物", async ({ page, mockNetwork }) => {
+  await openApp(page);
+  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
+  await intake
+    .getByRole("textbox")
+    .fill("唐悦是我的大学摄影社搭档，生日 3 月 12 日，微信 tangyue_photo。");
+  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
+
+  await page.evaluate(async () => {
+    const relationshipModule = await import("/src/lib/face-db.ts");
+    relationshipModule.facesDb.applyArchiveMutationBatchOnce = async () => {
+      throw new Error("合成的提交中断");
+    };
+  });
+  await page.getByRole("button", { name: "确认入库" }).click();
+  await expect(page.getByText("合成的提交中断", { exact: true })).toBeVisible();
+  expect(await readIndexedDbStore(page, "persons")).toEqual([]);
+  const interruptedCheckpoints = await readIndexedDbStore<{
+    state?: { commitIntent?: { decisionId?: string } };
+  }>(page, "agentCheckpoints");
+  expect(
+    interruptedCheckpoints.some((checkpoint) =>
+      checkpoint.state?.commitIntent?.decisionId?.startsWith("intake-decision:"),
+    ),
+  ).toBe(true);
+
+  await page.reload();
+  await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
+  await page.getByRole("button", { name: "确认入库" }).click();
+  await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
+
+  let people = await readIndexedDbStore<{ id: string; name: string }>(page, "persons");
+  expect(people).toHaveLength(1);
+  expect(people[0].name).toBe("唐悦");
+  expect(mockNetwork.visionRequests).toHaveLength(1);
+
+  await page.reload();
+  await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible({ timeout: 30_000 });
+  people = await readIndexedDbStore<{ id: string; name: string }>(page, "persons");
+  expect(people).toHaveLength(1);
+  await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
+});
+
 test("批量接受只确认来源对齐关系，名称子串误配保持可见且可单独处理", async ({ page }) => {
   await openApp(page);
   await page.evaluate(() => sessionStorage.removeItem("openglass.cloud-transfer-consents"));
@@ -176,6 +221,7 @@ test("批量接受只确认来源对齐关系，名称子串误配保持可见�
   await expect(relationCards.nth(1).getByRole("button", { name: "已接受" })).toBeDisabled();
 
   await page.getByRole("button", { name: "确认入库" }).click();
+  await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
   const assertions = await readIndexedDbStore<{
     confirmationStatus?: string;
     evidence?: { basis?: string };
@@ -337,15 +383,16 @@ test("补充并重新整理会保留人工字段及其来源", async ({ page, mo
 
   const person = page.locator('[data-draft-kind="person"]');
   await person.getByRole("combobox", { name: "亲密度", exact: true }).selectOption("4");
+  await expect(person.getByText(/亲密度\s*·\s*人工填写/)).toBeVisible();
   await person.getByPlaceholder("和我的关系").fill("");
   const supplement = page.getByPlaceholder(/补一句就行/);
   await supplement.fill("补充说明：唐悦愿意帮校园记忆展拍摄。 ");
   await page.getByRole("button", { name: "补充并重新整理" }).click();
 
+  await expect.poll(() => mockNetwork.visionRequests.length).toBe(2);
   await expect(person.getByRole("combobox", { name: "亲密度", exact: true })).toHaveValue("4");
   await expect(person.getByPlaceholder("和我的关系")).toHaveValue("");
   await expect(person.getByText(/亲密度\s*·\s*人工填写/)).toBeVisible();
-  expect(mockNetwork.visionRequests).toHaveLength(2);
 });
 
 test("人物卡可以手动新建圈层并把未分圈层人物加入其中", async ({ page }) => {

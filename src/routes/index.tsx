@@ -3,6 +3,7 @@ import { Bell, CalendarDays, ClipboardList, Cpu, PenLine, Settings, Users } from
 import { useEffect, useState } from "react";
 
 import { AppearanceControls, LanguageToggle } from "@/components/appearance-controls";
+import { AgentControlCenter } from "@/components/agent-control-center";
 import { CalendarPanel } from "@/components/calendar-panel";
 import { DemoDataControls } from "@/components/demo-data-controls";
 import { IntakePanel } from "@/components/intake-panel";
@@ -66,7 +67,7 @@ function getNav(): Array<{ id: View; label: string; hint: string; icon: typeof U
     { id: "calendar", label: t("日历"), hint: t("哪天和谁做了什么"), icon: CalendarDays },
     { id: "plan", label: t("计划"), hint: t("目标拆解与行动项"), icon: ClipboardList },
     { id: "models", label: t("AI 助理"), hint: t("模型设置与建议"), icon: Cpu },
-    { id: "settings", label: t("设置"), hint: t("主题、无障碍与语言"), icon: Settings },
+    { id: "settings", label: t("设置"), hint: t("外观、数据与 Agent"), icon: Settings },
   ];
 }
 
@@ -131,10 +132,11 @@ const HEADINGS: Record<
     kicker: "You · Settings",
     a: "调成你顺眼的",
     b: "样子",
-    guide: "这一页：外观与无障碍",
+    guide: "这一页：外观、数据与 Agent 高级设置",
     points: [
       "浅色 / 深色主题各有几套，随时切换。",
       "色觉辅助可以避开红绿或蓝黄配色，还能开高对比和大字号。",
+      "Agent 的写入授权、运行预算和本机日志也在这里管理。",
     ],
   },
   models: {
@@ -222,10 +224,13 @@ function Index() {
     }
     if (workspaceView === "settings") {
       return (
-        <div className="max-w-2xl space-y-5 rounded-xl border border-border bg-card p-5">
-          <AppearanceControls />
-          <DemoDataControls />
-          <PreflightPanel preset={activePreset} />
+        <div className="max-w-5xl space-y-5">
+          <div className="space-y-5 rounded-xl border border-border bg-card p-5">
+            <AppearanceControls />
+            <DemoDataControls />
+            <PreflightPanel preset={activePreset} />
+          </div>
+          <AgentControlCenter />
         </div>
       );
     }

@@ -11,6 +11,10 @@ import type {
 
 const DB_NAME = "openglass-faces";
 const EXPECTED_STORES = [
+  "agentCheckpoints",
+  "agentObservations",
+  "agentRunEvents",
+  "agentRuns",
   "appMeta",
   "caseEvents",
   "collectionMemberships",
@@ -18,6 +22,8 @@ const EXPECTED_STORES = [
   "derivedRelations",
   "evidence",
   "lifeEvents",
+  "mutationProposals",
+  "mutationReceipts",
   "persons",
   "projects",
   "referralPolicies",
@@ -81,14 +87,53 @@ beforeEach(() => {
 });
 
 describe("facesDb schema", () => {
-  it("creates a fresh version 12 database with every object store", async () => {
+  it("creates a fresh version 13 database with every object store and Agent ledger indexes", async () => {
     const { facesDb } = await import("./face-db");
 
     await expect(facesDb.listPersons()).resolves.toEqual([]);
 
     const database = await openRawDatabase();
-    expect(database.version).toBe(12);
+    expect(database.version).toBe(13);
     expect(Array.from(database.objectStoreNames)).toEqual(EXPECTED_STORES);
+    const transaction = database.transaction(
+      [
+        "agentRuns",
+        "agentRunEvents",
+        "agentObservations",
+        "agentCheckpoints",
+        "mutationProposals",
+        "mutationReceipts",
+      ],
+      "readonly",
+    );
+    expect(Array.from(transaction.objectStore("agentRuns").indexNames)).toEqual([
+      "status",
+      "threadId",
+      "updatedAt",
+    ]);
+    expect(Array.from(transaction.objectStore("agentRunEvents").indexNames)).toEqual([
+      "kind",
+      "runId",
+      "runSequence",
+    ]);
+    expect(Array.from(transaction.objectStore("agentObservations").indexNames)).toEqual([
+      "callFingerprint",
+      "runId",
+    ]);
+    expect(Array.from(transaction.objectStore("agentCheckpoints").indexNames)).toEqual([
+      "runId",
+      "runSequence",
+      "status",
+    ]);
+    expect(Array.from(transaction.objectStore("mutationProposals").indexNames)).toEqual([
+      "sourceRunId",
+      "status",
+      "updatedAt",
+    ]);
+    expect(Array.from(transaction.objectStore("mutationReceipts").indexNames)).toEqual([
+      "committedAt",
+      "sourceRunId",
+    ]);
     database.close();
   });
 
@@ -104,7 +149,7 @@ describe("facesDb schema", () => {
     await expect(facesDb.listPersons()).resolves.toEqual([legacyPerson]);
 
     const upgradedDatabase = await openRawDatabase();
-    expect(upgradedDatabase.version).toBe(12);
+    expect(upgradedDatabase.version).toBe(13);
     expect(Array.from(upgradedDatabase.objectStoreNames)).toEqual(EXPECTED_STORES);
     upgradedDatabase.close();
   });
@@ -128,7 +173,7 @@ describe("facesDb schema", () => {
     );
 
     const database = await openRawDatabase();
-    expect(database.version).toBe(12);
+    expect(database.version).toBe(13);
     database.close();
   });
 
@@ -904,5 +949,26 @@ describe("competition demo data", () => {
     await expect(facesDb.listReminders()).resolves.toEqual([userReminder]);
     await expect(facesDb.listCollections()).resolves.toEqual([userCollection]);
     await expect(facesDb.listCollectionMemberships()).resolves.toEqual([userMembership]);
+  });
+
+  it("replays one approved local write intent as an exact no-op", async () => {
+    const { facesDb } = await import("./face-db");
+    const expectedRevision = await facesDb.getArchiveMutationRevision();
+    const approvedPerson = person("approved-intake-person");
+    const guard = {
+      decisionId: "intake-decision:run-1",
+      expectedRevision,
+    };
+
+    await expect(
+      facesDb.applyArchiveMutationBatchOnce({ persons: [approvedPerson] }, guard),
+    ).resolves.toBe("applied");
+    await expect(
+      facesDb.applyArchiveMutationBatchOnce({ persons: [approvedPerson] }, guard),
+    ).resolves.toBe("already_applied");
+
+    await expect(facesDb.listPersons()).resolves.toEqual([approvedPerson]);
+    await expect(facesDb.hasAppliedArchiveMutationDecision(guard.decisionId)).resolves.toBe(true);
+    await expect(facesDb.getArchiveMutationRevision()).resolves.toBe(expectedRevision + 1);
   });
 });
