@@ -1,5 +1,9 @@
 import { expect, test as base, type Page, type Route } from "@playwright/test";
 
+const publicAppHostname = process.env.PLAYWRIGHT_BASE_URL
+  ? new URL(process.env.PLAYWRIGHT_BASE_URL).hostname
+  : undefined;
+
 export interface MockNetworkState {
   blockedExternalUrls: string[];
   unhandledApiUrls: string[];
@@ -10,6 +14,21 @@ export interface MockNetworkState {
 }
 
 function intakePlanReply(prompt: string) {
+  if (prompt.includes("请整理当前人物库的全部圈层")) {
+    return JSON.stringify({
+      version: 1,
+      type: "semantic_plan",
+      summary: "按现有档案整理全部人物圈层",
+      tasks: [
+        {
+          id: "classify-all-people",
+          domain: "collection",
+          intent: "classify",
+          target: { kind: "person_selection", scope: "all" },
+        },
+      ],
+    });
+  }
   if (prompt.includes("尤二姐是尤氏继母的女儿")) {
     return JSON.stringify({
       version: 1,
@@ -132,6 +151,24 @@ function intakePlanReply(prompt: string) {
 function visionReply(body: Record<string, unknown>) {
   if (body.action === "test") return "连接正常";
   const prompt = typeof body.prompt === "string" ? body.prompt : "";
+  if (prompt.includes("collection_classification_batch") && prompt.includes("本批数据：")) {
+    const marker = "本批数据：";
+    const batch = JSON.parse(prompt.slice(prompt.lastIndexOf(marker) + marker.length).trim()) as {
+      taskRef: string;
+      batchRef: string;
+      people: Array<{ ref: string }>;
+    };
+    return JSON.stringify({
+      version: 1,
+      type: "collection_classification_batch",
+      taskRef: batch.taskRef,
+      batchRef: batch.batchRef,
+      assignments: batch.people.map((person) => ({
+        ref: person.ref,
+        collections: [{ name: "校园伙伴" }],
+      })),
+    });
+  }
   if (prompt.includes("只输出一个 semantic_plan JSON")) {
     return intakePlanReply(prompt);
   }
@@ -196,6 +233,32 @@ function visionReply(body: Record<string, unknown>) {
     });
   }
   if (prompt.includes("通用问答智能体")) {
+    if (prompt.includes("把唐悦的职位改成影像顾问")) {
+      if (!prompt.includes('"tool":"get_profiles"')) {
+        const personRef = /"personRef"\s*:\s*"(ref_[a-f0-9]+)"/u.exec(prompt)?.[1];
+        if (!personRef) throw new Error("唐悦修改夹具未收到不透明 personRef");
+        return JSON.stringify({
+          type: "tool",
+          summary: "先核对唐悦现有档案",
+          tool: "get_profiles",
+          args: { personRefs: [personRef] },
+        });
+      }
+      return JSON.stringify({
+        type: "proposal",
+        title: "把唐悦的职位更新为影像顾问",
+        reason: "用户明确要求修改职位",
+        operations: [
+          {
+            operationRef: "tangyue-title",
+            kind: "update_person",
+            target: { kind: "person", name: "唐悦" },
+            reason: "用户明确要求修改职位",
+            changes: { set: { profile: { title: "影像顾问" } } },
+          },
+        ],
+      });
+    }
     if (prompt.includes("把甲和乙的关系改成前同事")) {
       if (!prompt.includes('"tool":"get_relation"')) {
         const relationRef = /"relationRef"\s*:\s*"(ref_[a-f0-9]+)"/u.exec(prompt)?.[1];
@@ -367,7 +430,11 @@ async function handleRoute(route: Route, state: MockNetworkState) {
     return;
   }
 
-  if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
+  if (
+    url.hostname !== "127.0.0.1" &&
+    url.hostname !== "localhost" &&
+    url.hostname !== publicAppHostname
+  ) {
     state.blockedExternalUrls.push(url.href);
     await route.abort("blockedbyclient");
     return;
