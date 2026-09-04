@@ -22,18 +22,33 @@ export interface RecommendationCapabilityMatch {
   matchedTerms: string[];
   evidence: string[];
   discovery: "lexical" | "semantic" | "both";
+  /** Position assigned by the local ledger after evidence verification. */
+  localRank?: number;
 }
 
 /**
  * A model may nominate a person because it understands a stored fact even when
  * the task and that fact share no words. The person id is restored locally from
- * an opaque reference; quoted evidence still has to exist in the fact ledger.
+ * an opaque reference; evidence field values are always read back from the
+ * fact ledger instead of accepting model-authored prose.
  */
 export interface RecommendationSemanticCandidate {
   personId: string;
-  evidenceQuotes: string[];
+  evidenceFields: RecommendationCapabilityEvidenceField[];
   reason?: string;
 }
+
+export const RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS = [
+  "relation",
+  "title",
+  "org",
+  "department",
+  "tags",
+  "projects",
+] as const;
+
+export type RecommendationCapabilityEvidenceField =
+  (typeof RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS)[number];
 
 export interface CandidateRecommendation {
   person: PersonRecord;
@@ -197,9 +212,10 @@ function normalizedEvidence(value: string) {
 
 /**
  * Verify a model-authored capability slot against the local fact ledger. The
- * slot label and deliverable remain part of the contract, so local matching
- * combines their lexical concepts with the model's synonym list. Every match
- * must still occur in a stored profile fact.
+ * slot label and explicit search terms remain part of the contract. The model
+ * chooses the retrieval vocabulary; the ledger only admits terms that occur in
+ * stored profile facts. Free-form deliverables are not split into broad
+ * character fragments because that turns incidental wording into admission.
  */
 export function matchCapabilityEvidence(
   slot: RecommendationCapabilitySlot,
@@ -207,18 +223,12 @@ export function matchCapabilityEvidence(
 ): RecommendationCapabilityMatch | undefined {
   const facts = personFacts(person);
   const normalizedFacts = facts.map((fact) => ({ fact, normalized: normalizedEvidence(fact) }));
-  const lexicalTerms = [slot.label, slot.deliverable]
-    .flatMap((value) => value.split(/[的了和及与并或将把为在对从由需可应各该]/u))
-    .flatMap((value) => {
-      const normalized = normalizedEvidence(value);
-      if (normalized.length < 2) return [];
-      const terms = normalized.length <= 8 ? [normalized] : [];
-      for (let index = 0; index < normalized.length - 1; index += 1) {
-        terms.push(normalized.slice(index, index + 2));
-      }
-      return terms;
-    });
-  const evidenceTerms = [...new Set([...slot.searchTerms, ...lexicalTerms])].slice(0, 40);
+  const normalizedLabel = normalizedEvidence(slot.label);
+  const labelTags = (person.profile?.tags ?? []).filter((tag) => {
+    const normalized = normalizedEvidence(tag);
+    return normalized.length >= 2 && normalizedLabel.includes(normalized);
+  });
+  const evidenceTerms = [...new Set([slot.label, ...labelTags, ...slot.searchTerms])].slice(0, 20);
   const matchedTerms = evidenceTerms.filter((term) => {
     const normalizedTerm = normalizedEvidence(term);
     return Boolean(
@@ -247,12 +257,20 @@ function verifiedSemanticEvidence(
   person: PersonRecord,
 ) {
   if (!candidate || candidate.personId !== person.id) return [];
-  const facts = personFacts(person).map((fact) => ({ fact, normalized: normalizedEvidence(fact) }));
-  const verified = candidate.evidenceQuotes.flatMap((quote) => {
-    const normalizedQuote = normalizedEvidence(quote);
-    if (normalizedQuote.length < 2) return [];
-    const fact = facts.find((entry) => entry.normalized.includes(normalizedQuote));
-    return fact ? [fact.fact] : [];
+  const profile = person.profile ?? {};
+  const values: Record<RecommendationCapabilityEvidenceField, readonly (string | undefined)[]> = {
+    relation: [profile.relation],
+    title: [profile.title],
+    org: [profile.org],
+    department: [profile.department],
+    tags: profile.tags ?? [],
+    projects: profile.projects ?? [],
+  };
+  const verified = candidate.evidenceFields.flatMap((field) => {
+    return values[field].flatMap((value) => {
+      const fact = value?.trim();
+      return fact ? [`${field}：${fact}`] : [];
+    });
   });
   return [...new Set(verified)].slice(0, 3);
 }
@@ -441,8 +459,8 @@ export function rankCandidates(
 
 /**
  * Rank one model-authored capability slot over the complete archive. Semantic
- * inclusion is decided only by exact local evidence matches; legacy task
- * aliases and task-domain regexes never participate in this path.
+ * inclusion comes from explicit lexical terms or a model-nominated local field;
+ * legacy task aliases and task-domain regexes never participate in this path.
  */
 export function rankCapabilityCandidates(
   slot: RecommendationCapabilitySlot,
@@ -467,15 +485,23 @@ export function rankCapabilityCandidates(
           : semanticEvidence.length
             ? "semantic"
             : "lexical";
+      const evidenceKeys = new Set<string>();
+      const evidence = [...semanticEvidence, ...(lexicalMatch?.evidence ?? [])]
+        .filter((item) => {
+          const key = normalizedEvidence(
+            item.replace(/^(?:relation|title|org|department|tags|projects)[：:]/iu, ""),
+          );
+          if (!key || evidenceKeys.has(key)) return false;
+          evidenceKeys.add(key);
+          return true;
+        })
+        .slice(0, 3);
       const match: RecommendationCapabilityMatch = {
         slotId: slot.id,
         label: slot.label,
         deliverable: slot.deliverable,
         matchedTerms: lexicalMatch?.matchedTerms ?? [],
-        evidence: [...new Set([...(lexicalMatch?.evidence ?? []), ...semanticEvidence])].slice(
-          0,
-          3,
-        ),
+        evidence,
         discovery,
       };
       const interactions = recentEvents(person.id, events);
@@ -490,7 +516,11 @@ export function rankCapabilityCandidates(
         ? Math.max(1, Math.min(5, rawCloseness as number))
         : 1;
       const hasContact = Boolean(person.profile?.contact?.trim());
-      let score = match.matchedTerms.length * 18 + match.evidence.length * 5;
+      const labelMatched = match.matchedTerms.some(
+        (term) => normalizedEvidence(term) === normalizedEvidence(slot.label),
+      );
+      let score =
+        match.matchedTerms.length * 18 + match.evidence.length * 5 + (labelMatched ? 18 : 0);
       if (semanticEvidence.length) score += 34 + Math.min(12, semanticEvidence.length * 4);
       score += hasContact ? 10 : 0;
       score += (closeness - 1) * 2;

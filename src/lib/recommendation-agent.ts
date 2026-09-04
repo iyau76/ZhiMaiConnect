@@ -30,8 +30,10 @@ import { automaticConnectionHopLimit, mentionedArchivePeople } from "./connectio
 import { renderGroundedRecommendation } from "./agent-output-grounding";
 import type { LifeEventRecord, PersonRecord, RelationRecord } from "./face-db";
 import {
+  RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS,
   taskSafetyNotice,
   type CandidateRecommendation,
+  type RecommendationCapabilityEvidenceField,
   type RecommendationCapabilityMatch,
   type RecommendationCapabilitySlot,
 } from "./recommendation";
@@ -116,7 +118,7 @@ type RecommendationPlan =
 interface RecommendationSemanticCandidateClaim {
   slotId: string;
   personId: string;
-  evidenceQuotes: string[];
+  evidenceFields: RecommendationCapabilityEvidenceField[];
   reason?: string;
 }
 
@@ -354,21 +356,25 @@ function capabilityPlanFrom(value: unknown, session: ArchiveAgentReferenceSessio
       if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
       const claim = candidate as Record<string, unknown>;
       const personRef = clipped(claim.personRef, 100);
-      const evidenceQuotes = Array.isArray(claim.evidenceQuotes)
+      const evidenceFields = Array.isArray(claim.evidenceFields)
         ? [
             ...new Set(
-              claim.evidenceQuotes
-                .map((quote) => clipped(quote, 300))
-                .filter((quote) => quote.length > 0),
+              claim.evidenceFields
+                .map((field) => clipped(field, 30))
+                .filter((field): field is RecommendationCapabilityEvidenceField =>
+                  RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS.includes(
+                    field as RecommendationCapabilityEvidenceField,
+                  ),
+                ),
             ),
           ].slice(0, 5)
         : [];
-      if (!personRef || !evidenceQuotes.length) continue;
+      if (!personRef || !evidenceFields.length) continue;
       try {
         semanticCandidates.push({
           slotId: id,
           personId: stableIdFor(session, personRef, "person"),
-          evidenceQuotes,
+          evidenceFields,
           reason: clipped(claim.reason, 200) || undefined,
         });
       } catch {
@@ -435,11 +441,11 @@ function recommendationPlanningPrompt(
 - 确实无法判断多个已提及人物中谁是目标：mode="ambiguous"，用 candidates 列出语义人物引用并给出一句具体问题。不要因为出现多个人名就自动判歧义。
 - 没有提及档案人物时只能是 open。
 
-开放任务要拆成可由不同人承担的能力槽，每个槽必须对应一个独立交付物。简单任务只建一个槽；复合任务保留全部不可缺少的分工。searchTerms 填写 3 到 10 个可能真实出现在人物职位、标签、项目或备注中的检索表达。若索引中有人在语义上适合，即使措辞与任务不同，也把他放进该槽的 candidates；personRef 必须逐字复制索引值，evidenceQuotes 必须逐字复制该人物索引中的真实字段值。不要把关系亲疏或有联系方式当作能力证据。索引不完整时不得假装看过未展示的人物，本地仍会用 searchTerms 检索全库。
+开放任务要拆成可由不同人承担的能力槽，每个槽必须对应一个独立交付物。简单任务只建一个槽；复合任务保留全部不可缺少的分工。searchTerms 填写 3 到 10 个可能真实出现在人物职位、标签、项目或备注中的检索表达。若索引中有人在语义上适合，即使措辞与任务不同，也把他放进该槽的 candidates；personRef 必须逐字复制索引值，evidenceFields 从 relation/title/org/department/tags/projects 中选择，本地会读取这些字段的真实值。不要把关系亲疏或有联系方式当作能力证据。索引不完整时不得假装看过未展示的人物，本地仍会用 searchTerms 检索全库。
 
 只输出一个 JSON 对象，不要 Markdown：
 目标：{"type":"recommendation_plan","mode":"target","target":{"kind":"person","name":"贾母"}}
-开放：{"type":"recommendation_plan","mode":"open","slots":[{"label":"活动记录","deliverable":"完成现场影像记录并交付照片","searchTerms":["活动摄影","现场拍摄","照片交付"],"candidates":[{"personRef":"ref_...","evidenceQuotes":["校园纪实影像创作者"],"reason":"纪实影像经验可迁移到活动记录"}]}]}
+开放：{"type":"recommendation_plan","mode":"open","slots":[{"label":"活动记录","deliverable":"完成现场影像记录并交付照片","searchTerms":["活动摄影","现场拍摄","照片交付"],"candidates":[{"personRef":"ref_...","evidenceFields":["title"],"reason":"纪实影像经验可迁移到活动记录"}]}]}
 歧义：{"type":"recommendation_plan","mode":"ambiguous","candidates":[{"kind":"person","name":"贾母"},{"kind":"person","name":"贾琏"}],"question":"你希望联系哪一位？"}`;
 }
 
@@ -1050,12 +1056,20 @@ export async function runRecommendationAgent(options: {
       const assignments: Array<{ slotId: string; personId: string }> = [];
       const uncoveredSlotIds: string[] = [];
       const selectedByPerson = new Map<string, CandidateRecommendation>();
+      const rankedBySlot: Array<{
+        slot: RecommendationCapabilitySlot;
+        candidates: Array<{
+          row: RankingRow;
+          person: PersonRecord;
+          match: RecommendationCapabilityMatch;
+        }>;
+      }> = [];
       for (const slot of slots) {
         const slotSemanticCandidates = semanticCandidates
           .filter((candidate) => candidate.slotId === slot.id)
           .map((candidate) => ({
             personRef: personRefFor(referenceSession, personById.get(candidate.personId)!),
-            evidenceQuotes: candidate.evidenceQuotes,
+            evidenceFields: candidate.evidenceFields,
             reason: candidate.reason,
           }));
         const slotDecision = await runtime.executeTool("rank_task_candidates", {
@@ -1075,62 +1089,83 @@ export async function runRecommendationAgent(options: {
             : new Error(`能力槽“${slot.label}”候选检索失败`);
         }
         const slotResult = slotDecision.value as { rows?: RankingRow[] };
-        const verified = (slotResult.rows ?? []).flatMap((row) => {
-          const person = personById.get(stableIdFor(referenceSession, row.personRef, "person"));
-          if (!person) return [];
-          const match = row.capabilityMatches?.find((item) => item.slotId === slot.id);
-          return match ? [{ row, person, match }] : [];
-        });
+        const verified = (slotResult.rows ?? [])
+          .flatMap((row) => {
+            const person = personById.get(stableIdFor(referenceSession, row.personRef, "person"));
+            if (!person) return [];
+            const match = row.capabilityMatches?.find((item) => item.slotId === slot.id);
+            return match ? [{ row, person, match }] : [];
+          })
+          .slice(0, 3)
+          .map((candidate, index) => ({
+            ...candidate,
+            match: { ...candidate.match, localRank: index + 1 },
+          }));
         const selected = verified[0];
         if (!selected) {
           uncoveredSlotIds.push(slot.id);
           continue;
         }
         assignments.push({ slotId: slot.id, personId: selected.person.id });
-        const current = selectedByPerson.get(selected.person.id);
-        const slotReason = `能力槽“${slot.label}”：${slot.deliverable}`;
-        const matchReasons = [
-          selected.match.discovery !== "lexical"
-            ? "模型识别到语义关联，本地已核对所引档案事实"
-            : "",
-          selected.match.matchedTerms.length
-            ? `词面证据：${selected.match.matchedTerms.join("、")}`
-            : "",
-        ].filter(Boolean);
-        const slotEvidence = selected.match.evidence.map(
-          (item) => `“${slot.label}”档案证据：${item}`,
-        );
-        if (current) {
-          const previousCount = current.capabilityMatches?.length ?? 1;
-          current.score = Math.round(
-            (current.score * previousCount + selected.row.score) / (previousCount + 1),
-          );
-          current.confidence =
-            current.confidence === "低" || selected.row.confidence === "低"
-              ? "低"
-              : current.confidence === "中" || selected.row.confidence === "中"
-                ? "中"
-                : "高";
-          current.reasons = [...new Set([...current.reasons, slotReason, ...matchReasons])];
-          current.evidence = [...new Set([...current.evidence, ...slotEvidence])];
-          current.risks = [...new Set([...current.risks, ...selected.row.risks])];
-          current.capabilityMatches = [...(current.capabilityMatches ?? []), selected.match];
-          continue;
-        }
-        selectedByPerson.set(selected.person.id, {
-          person: selected.person,
-          score: selected.row.score,
-          confidence: selected.row.confidence,
-          reasons: [slotReason, ...matchReasons],
-          evidence: slotEvidence,
-          risks: selected.row.risks,
-          mode: "open",
-          updatedAt: selected.person.updatedAt ?? selected.person.createdAt,
-          source: selected.person.source,
-          capabilityMatches: [selected.match],
-        });
+        rankedBySlot.push({ slot, candidates: verified });
       }
-      lockedCandidates = [...selectedByPerson.values()];
+      for (const { slot, candidates: slotCandidates } of rankedBySlot) {
+        for (const candidate of slotCandidates) {
+          const current = selectedByPerson.get(candidate.person.id);
+          const role = candidate.match.localRank === 1 ? "首选" : "备选";
+          const slotReason = `${role}能力槽“${slot.label}”：${slot.deliverable}`;
+          const matchReasons = [
+            candidate.match.discovery !== "lexical"
+              ? "模型识别到语义关联，本地已核对所引档案事实"
+              : "",
+            candidate.match.matchedTerms.length
+              ? `词面证据：${candidate.match.matchedTerms.join("、")}`
+              : "",
+          ].filter(Boolean);
+          const slotEvidence = candidate.match.evidence.map(
+            (item) => `“${slot.label}”档案证据：${item}`,
+          );
+          if (current) {
+            const previousCount = current.capabilityMatches?.length ?? 1;
+            current.score = Math.round(
+              (current.score * previousCount + candidate.row.score) / (previousCount + 1),
+            );
+            current.confidence =
+              current.confidence === "低" || candidate.row.confidence === "低"
+                ? "低"
+                : current.confidence === "中" || candidate.row.confidence === "中"
+                  ? "中"
+                  : "高";
+            current.reasons = [...new Set([...current.reasons, slotReason, ...matchReasons])];
+            current.evidence = [...new Set([...current.evidence, ...slotEvidence])];
+            current.risks = [...new Set([...current.risks, ...candidate.row.risks])];
+            current.capabilityMatches = [...(current.capabilityMatches ?? []), candidate.match];
+            continue;
+          }
+          selectedByPerson.set(candidate.person.id, {
+            person: candidate.person,
+            score: candidate.row.score,
+            confidence: candidate.row.confidence,
+            reasons: [slotReason, ...matchReasons],
+            evidence: slotEvidence,
+            risks: candidate.row.risks,
+            mode: "open",
+            updatedAt: candidate.person.updatedAt ?? candidate.person.createdAt,
+            source: candidate.person.source,
+            capabilityMatches: [candidate.match],
+          });
+        }
+      }
+      const orderedPersonIds = [
+        ...assignments.map((assignment) => assignment.personId),
+        ...rankedBySlot.flatMap(({ candidates: slotCandidates }) =>
+          slotCandidates.slice(1).map((candidate) => candidate.person.id),
+        ),
+      ];
+      lockedCandidates = [...new Set(orderedPersonIds)].flatMap((personId) => {
+        const candidate = selectedByPerson.get(personId);
+        return candidate ? [candidate] : [];
+      });
       capabilityPlan = { slots, assignments, uncoveredSlotIds };
       toolHistory.push({
         call: { type: "recommendation_plan", task: options.task },

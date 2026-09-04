@@ -17,6 +17,7 @@ import type {
   RelationRecord,
 } from "./face-db";
 import {
+  RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS,
   rankCandidates,
   rankCapabilityCandidates,
   taskSafetyNotice,
@@ -478,7 +479,7 @@ const recommendationCapabilitySchema = z
 const recommendationSemanticCandidateSchema = z
   .object({
     personRef: archiveHandleSchema,
-    evidenceQuotes: z.array(z.string().trim().min(1).max(300)).min(1).max(5),
+    evidenceFields: z.array(z.enum(RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS)).min(1).max(5),
     reason: z.string().trim().max(200).optional(),
   })
   .strict();
@@ -818,7 +819,7 @@ archiveAgentToolRegistry
               new Date(),
               semanticCandidates.map((candidate) => ({
                 personId: restoreArchiveHandle(session, candidate.personRef, "person"),
-                evidenceQuotes: candidate.evidenceQuotes,
+                evidenceFields: candidate.evidenceFields,
                 reason: candidate.reason,
               })),
             )

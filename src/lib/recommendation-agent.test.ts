@@ -540,7 +540,7 @@ describe("archive disclosure", () => {
                 candidates: [
                   {
                     personRef: ref,
-                    evidenceQuotes: ["校园纪实影像创作者"],
+                    evidenceFields: ["title"],
                     reason: "纪实影像经验可以迁移到活动记录",
                   },
                 ],
@@ -566,6 +566,58 @@ describe("archive disclosure", () => {
     expect(result.candidates[0]?.person.id).toBe("creator");
     expect(result.candidates[0]?.capabilityMatches?.[0].discovery).toBe("semantic");
     expect(result.answer).toContain("校园纪实影像创作者");
+  });
+
+  it("keeps locally ranked alternatives visible without changing the primary assignment", async () => {
+    const lead = person("lead", "活动摄影师");
+    const backup = person("backup", "活动摄影师");
+    const distant = person("distant", "活动摄影师");
+    lead.profile = { ...lead.profile, closeness: 5, tags: ["摄影"] };
+    backup.profile = { ...backup.profile, closeness: 3, tags: ["摄影"] };
+    distant.profile = { ...distant.profile, closeness: 1, tags: ["摄影"] };
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "recommendation_plan",
+            mode: "open",
+            slots: [
+              {
+                label: "活动摄影",
+                deliverable: "完成现场拍摄并交付照片",
+                searchTerms: ["摄影", "活动摄影"],
+              },
+            ],
+          }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({ type: "final", outreachDraft: "想请你协助活动现场拍摄。" }),
+        );
+      });
+
+    const result = await runRecommendationAgent({
+      preset: {} as never,
+      task: "校园活动找谁拍照",
+      persons: [distant, backup, lead],
+      relations: [],
+      events: [],
+    });
+
+    expect(result.candidates.map((candidate) => candidate.person.id)).toEqual([
+      "lead",
+      "backup",
+      "distant",
+    ]);
+    expect(result.capabilityPlan?.assignments).toEqual([
+      { slotId: "capability-1", personId: "lead" },
+    ]);
+    expect(
+      result.candidates.map((candidate) => candidate.capabilityMatches?.[0]?.localRank),
+    ).toEqual([1, 2, 3]);
+    expect(result.candidates[0]?.reasons.join("；")).toContain("首选能力槽");
+    expect(result.candidates[1]?.reasons.join("；")).toContain("备选能力槽");
   });
 
   it("renders local candidates immediately when the explanation response is malformed", async () => {

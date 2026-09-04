@@ -1170,6 +1170,24 @@ export function RemindersPanel({
                     · {t(candidate.confidence)} {t("置信度")}
                   </span>
                 </div>
+                {candidate.mode === "open" && Boolean(candidate.capabilityMatches?.length) && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {candidate.capabilityMatches?.map((match) => (
+                      <span
+                        key={`${match.slotId}:${match.localRank ?? 1}`}
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-[10px]",
+                          match.localRank === 1
+                            ? "border-primary/35 bg-primary/10 text-primary"
+                            : "border-border bg-muted/35 text-muted-foreground",
+                        )}
+                      >
+                        {match.localRank === 1 ? t("首选") : `${t("备选")} ${match.localRank}`} ·{" "}
+                        {match.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {candidate.path && (
                   <p className="mt-2 rounded-md bg-primary/5 px-2 py-1.5 font-medium text-primary">
                     {candidate.path.direct
