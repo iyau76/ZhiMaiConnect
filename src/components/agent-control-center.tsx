@@ -19,6 +19,7 @@ import {
 
 interface AgentControlCenterProps {
   latestRun?: AgentRun | null;
+  focusRunId?: string;
 }
 
 const FALLBACK_SETTINGS: AgentSettings = {
@@ -45,7 +46,7 @@ interface AgentRunLedgerSummary {
   updatedAt: number;
 }
 
-export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
+export function AgentControlCenter({ latestRun, focusRunId }: AgentControlCenterProps) {
   const [settings, setSettings] = useState<AgentSettings>(safeSettings);
   const [budgetSaveStatus, setBudgetSaveStatus] = useState("已保存");
   const [summaries, setSummaries] = useState<AgentRunLedgerSummary[]>([]);
@@ -135,7 +136,7 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
     }
   };
 
-  const openStoredRun = async (id: string) => {
+  const openStoredRun = useCallback(async (id: string) => {
     try {
       const [run, events] = await Promise.all([
         indexedDbAgentRunLedger.getRun(id),
@@ -154,7 +155,11 @@ export function AgentControlCenter({ latestRun }: AgentControlCenterProps) {
     } catch {
       toast.error("无法读取这条运行日志");
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (focusRunId) void openStoredRun(focusRunId);
+  }, [focusRunId, openStoredRun]);
 
   const clearLogs = async () => {
     try {

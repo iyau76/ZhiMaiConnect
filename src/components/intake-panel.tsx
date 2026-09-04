@@ -608,7 +608,17 @@ function DraftAmbiguousPeopleRefs({
   );
 }
 
-export function IntakePanel({ preset }: { preset: ProviderPreset }) {
+export function IntakePanel({
+  preset,
+  focusRunId,
+  focusProposalId,
+  focusNonce,
+}: {
+  preset: ProviderPreset;
+  focusRunId?: string;
+  focusProposalId?: string;
+  focusNonce?: number;
+}) {
   // Keep the first client render identical to SSR; restore browser-only draft
   // state after hydration to avoid rendering localStorage data on one side only.
   const [raw, setRaw] = useState("");
@@ -653,6 +663,9 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
   const hydrationGeneration = useRef(0);
   const recorderRef = useRef<Recorder | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const runInspectorRef = useRef<HTMLDivElement | null>(null);
+  const proposalRef = useRef<HTMLElement | null>(null);
+  const handledFocus = useRef("");
 
   const refreshArchiveSnapshot = useCallback(async () => {
     const [people, events, relations, collections, memberships, reminders, evidence] =
@@ -701,7 +714,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     const restoreProposal = async () => {
       const stored = readStash();
       const artifacts = await intakeMutationCoordinator.hydrate();
-      let entry = stored?.proposalEntryId
+      let entry = focusProposalId
+        ? artifacts.proposals.find((candidate) => candidate.id === focusProposalId)
+        : undefined;
+      entry ??= stored?.proposalEntryId
         ? artifacts.proposals.find((candidate) => candidate.id === stored.proposalEntryId)
         : undefined;
       entry ??= artifacts.proposals.at(-1);
@@ -722,7 +738,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [focusProposalId]);
 
   useEffect(() => {
     void refreshArchiveSnapshot();
@@ -740,7 +756,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
       const active = ordered.find((run) =>
         ["running", "suspended", "awaiting_approval"].includes(run.status),
       );
-      const visibleRun = active ?? ordered[0];
+      const focusedRun = focusRunId
+        ? ordered.find((candidate) => candidate.id === focusRunId)
+        : undefined;
+      const visibleRun = focusedRun ?? active ?? ordered[0];
       if (!visibleRun) return;
       const [events, checkpoint] = await Promise.all([
         indexedDbAgentRunLedger.listEvents(visibleRun.id),
@@ -763,7 +782,10 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
         rememberIntakeBatch(restored.intakeReceipt);
         setLatestBatch(restored.intakeReceipt);
       }
-      if (!active || !restored) return;
+      const visibleRunIsActive = ["running", "suspended", "awaiting_approval"].includes(
+        visibleRun.status,
+      );
+      if (!visibleRunIsActive || !restored) return;
       setDurableIntake(restored);
       if (!job.busy) {
         const stored = readStash();
@@ -793,7 +815,22 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
     return () => {
       cancelled = true;
     };
-  }, [existingEvents, existingPeople, job.busy, peopleLoaded, proposalArtifactsLoaded]);
+  }, [existingEvents, existingPeople, focusRunId, job.busy, peopleLoaded, proposalArtifactsLoaded]);
+
+  useEffect(() => {
+    const matchedProposal = focusProposalId && proposalEntryId === focusProposalId;
+    const matchedRun = focusRunId && latestAgentRun?.id === focusRunId;
+    if (!matchedProposal && !matchedRun) return;
+    const focusKey = `${matchedProposal ? "proposal" : "run"}:${focusProposalId ?? focusRunId}:${focusNonce ?? 0}`;
+    if (handledFocus.current === focusKey) return;
+    handledFocus.current = focusKey;
+    requestAnimationFrame(() =>
+      (matchedProposal ? proposalRef.current : runInspectorRef.current)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      }),
+    );
+  }, [focusNonce, focusProposalId, focusRunId, latestAgentRun, proposalEntryId]);
 
   useEffect(() => {
     if (!peopleLoaded) return;
@@ -3211,7 +3248,7 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
             </div>
           )}
         {latestAgentRun && !job.busy && (
-          <div className="mt-3">
+          <div ref={runInspectorRef} className="mt-3" data-agent-run-id={latestAgentRun.id}>
             <AgentRunInspector run={latestAgentRun} />
           </div>
         )}
@@ -3282,6 +3319,8 @@ export function IntakePanel({ preset }: { preset: ProviderPreset }) {
 
       {proposal && (
         <section
+          ref={proposalRef}
+          data-proposal-id={proposalEntryId ?? undefined}
           className="space-y-3 rounded-2xl border border-primary/40 bg-primary/5 p-4"
           data-testid="intake-formal-proposal"
         >

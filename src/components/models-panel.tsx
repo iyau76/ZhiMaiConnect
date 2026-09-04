@@ -82,6 +82,9 @@ interface Props {
   onActiveIdChange: (id: string) => void;
   frame: string | null;
   onFrameUsed: () => void;
+  focusRunId?: string;
+  focusProposalId?: string;
+  focusNonce?: number;
 }
 
 type AssistantArchive = Pick<
@@ -157,6 +160,9 @@ export function ModelsPanel({
   onActiveIdChange,
   frame,
   onFrameUsed,
+  focusRunId,
+  focusProposalId,
+  focusNonce,
 }: Props) {
   const [editId, setEditId] = useState(activeId);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
@@ -189,6 +195,8 @@ export function ModelsPanel({
   const [auditing, setAuditing] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const proposalRef = useRef<HTMLDivElement>(null);
+  const handledFocus = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -216,9 +224,15 @@ export function ModelsPanel({
       const sessionRuns = [...runs].sort(
         (left, right) => right.ordinal - left.ordinal || right.createdAt - left.createdAt,
       );
+      const focusedRun = focusRunId
+        ? sessionRuns.find((candidate) => candidate.id === focusRunId)
+        : undefined;
+      const orderedRuns = focusedRun
+        ? [focusedRun, ...sessionRuns.filter((candidate) => candidate.id !== focusedRun.id)]
+        : sessionRuns;
       let restored: AssistantSessionState | undefined;
-      let restoredRun = sessionRuns[0];
-      for (const run of sessionRuns) {
+      let restoredRun = orderedRuns[0];
+      for (const run of orderedRuns) {
         if (!run.latestCheckpointId) continue;
         const checkpoint = await indexedDbAgentRunLedger.getCheckpoint(run.latestCheckpointId);
         restored = parseAssistantSessionState(checkpoint?.state);
@@ -272,7 +286,17 @@ export function ModelsPanel({
       cancelled = true;
       unsubscribe();
     };
-  }, []);
+  }, [focusRunId]);
+
+  useEffect(() => {
+    if (!focusProposalId || !pendingProposals.some((entry) => entry.id === focusProposalId)) return;
+    const focusKey = `${focusProposalId}:${focusNonce ?? 0}`;
+    if (handledFocus.current === focusKey) return;
+    handledFocus.current = focusKey;
+    requestAnimationFrame(() =>
+      proposalRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+    );
+  }, [focusNonce, focusProposalId, pendingProposals]);
 
   const editing = presets.find((preset) => preset.id === editId) ?? presets[0];
 
@@ -1412,6 +1436,8 @@ export function ModelsPanel({
 
         {pendingProposals.length > 0 && (
           <div
+            ref={proposalRef}
+            data-proposal-ids={pendingProposals.map((entry) => entry.id).join(" ")}
             className="mt-3 rounded-xl border border-amber-500/60 bg-amber-500/10 p-3"
             role="region"
             aria-label={t("待批准的批量档案修改")}

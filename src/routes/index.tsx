@@ -1,5 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Bell, CalendarDays, ClipboardList, Cpu, PenLine, Settings, Users } from "lucide-react";
+import {
+  Bell,
+  CalendarDays,
+  ClipboardList,
+  Cpu,
+  House,
+  PenLine,
+  Settings,
+  Users,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AppearanceControls, LanguageToggle } from "@/components/appearance-controls";
@@ -12,6 +21,7 @@ import { PageGuide } from "@/components/page-guide";
 import { PlanBoard } from "@/components/plan-board";
 import { PreflightPanel } from "@/components/preflight-panel";
 import { RemindersPanel } from "@/components/reminders-panel";
+import { TodayPanel } from "@/components/today-panel";
 
 import { RelationsPanel } from "@/components/relations-panel";
 import { Toaster } from "@/components/ui/sonner";
@@ -26,6 +36,7 @@ import {
   saveSessionApiKeys,
 } from "@/lib/model-preset-storage";
 import { initTheme } from "@/lib/theme";
+import type { TodayTarget } from "@/lib/today-projection";
 import { cn } from "@/lib/utils";
 import { DEFAULT_PRESETS, type ProviderPreset } from "@/lib/vision-providers";
 
@@ -50,7 +61,26 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-type View = "intake" | "people" | "reminders" | "calendar" | "plan" | "models" | "settings";
+type View =
+  "today" | "intake" | "people" | "reminders" | "calendar" | "plan" | "models" | "settings";
+
+type WorkspaceFocus = TodayTarget & { nonce: number };
+
+const VIEW_SESSION_KEY = "zhimai.workspace.view.v1";
+const VIEWS = new Set<View>([
+  "today",
+  "intake",
+  "people",
+  "reminders",
+  "calendar",
+  "plan",
+  "models",
+  "settings",
+]);
+
+function isView(value: string | null): value is View {
+  return value !== null && VIEWS.has(value as View);
+}
 
 /**
  * These workspaces can own a multi-round browser-side Agent run. Once opened,
@@ -61,6 +91,7 @@ const RETAINED_AGENT_VIEWS = new Set<View>(["reminders", "plan", "models"]);
 
 function getNav(): Array<{ id: View; label: string; hint: string; icon: typeof Users }> {
   return [
+    { id: "today", label: t("今天"), hint: t("现在值得处理的人和事"), icon: House },
     { id: "intake", label: t("录入"), hint: t("一段话写下身边的人"), icon: PenLine },
     { id: "people", label: t("人物关系"), hint: t("档案与关系网"), icon: Users },
     { id: "reminders", label: t("提醒"), hint: t("生日、节日与待办"), icon: Bell },
@@ -75,6 +106,17 @@ const HEADINGS: Record<
   View,
   { kicker: string; a: string; b: string; guide: string; points: string[] }
 > = {
+  today: {
+    kicker: "Today · Desk",
+    a: "今天先看，",
+    b: "这些人和事",
+    guide: "这一页：从今天开始，把关系真正用起来",
+    points: [
+      "到期提醒、近期事件和未完成任务会从原记录自动汇总。",
+      "点任意一项，就能回到对应的人物卡、事件、提醒或计划。",
+      "想起新情况时，随手写一句就能继续补充。",
+    ],
+  },
   intake: {
     kicker: "Notes · Intake",
     a: "随手写下，",
@@ -155,8 +197,9 @@ function Index() {
   const [presets, setPresets] = useState<ProviderPreset[]>(DEFAULT_PRESETS);
   const [activeId, setActiveId] = useState(DEFAULT_PRESETS[0].id);
   const [hydrated, setHydrated] = useState(false);
-  const [view, setView] = useState<View>("intake");
+  const [view, setView] = useState<View>("today");
   const [retainedViews, setRetainedViews] = useState<ReadonlySet<View>>(() => new Set());
+  const [workspaceFocus, setWorkspaceFocus] = useState<WorkspaceFocus | null>(null);
   useLang();
   const NAV = getNav();
 
@@ -164,6 +207,8 @@ function Index() {
     initLang();
     initTheme();
     try {
+      const storedView = sessionStorage.getItem(VIEW_SESSION_KEY);
+      if (isView(storedView)) setView(storedView);
       const nextPresets = applySessionApiKeys(loadSavedModelPresets(localStorage), sessionStorage);
       setPresets(nextPresets);
       const storedActive = localStorage.getItem(ACTIVE_MODEL_PRESET_KEY);
@@ -177,6 +222,11 @@ function Index() {
     }
     setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    sessionStorage.setItem(VIEW_SESSION_KEY, view);
+  }, [hydrated, view]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -199,7 +249,7 @@ function Index() {
   const activePreset = presets.find((preset) => preset.id === resolvedActiveId) ?? presets[0];
   const heading = HEADINGS[view];
 
-  const openView = (nextView: View) => {
+  const openView = (nextView: View, keepFocus = false) => {
     if (RETAINED_AGENT_VIEWS.has(nextView)) {
       setRetainedViews((current) => {
         if (current.has(nextView)) return current;
@@ -208,19 +258,54 @@ function Index() {
         return next;
       });
     }
+    if (!keepFocus) setWorkspaceFocus(null);
     setView(nextView);
   };
 
+  const openTodayTarget = (target: TodayTarget) => {
+    setWorkspaceFocus({ ...target, nonce: Date.now() });
+    openView(target.view, true);
+  };
+
   const renderWorkspace = (workspaceView: View) => {
+    if (workspaceView === "today") {
+      return <TodayPanel onOpenIntake={() => openView("intake")} onOpenTarget={openTodayTarget} />;
+    }
     if (workspaceView === "intake") {
       return (
         <div className="min-w-0 space-y-5">
-          <IntakePanel preset={activePreset} />
+          <IntakePanel
+            preset={activePreset}
+            focusRunId={workspaceFocus?.view === "intake" ? workspaceFocus.runId : undefined}
+            focusProposalId={
+              workspaceFocus?.view === "intake" && workspaceFocus.recordType === "proposal"
+                ? workspaceFocus.recordId
+                : undefined
+            }
+            focusNonce={workspaceFocus?.view === "intake" ? workspaceFocus.nonce : undefined}
+          />
         </div>
       );
     }
     if (workspaceView === "reminders") {
-      return <RemindersPanel preset={activePreset} active={view === "reminders"} />;
+      return (
+        <RemindersPanel
+          preset={activePreset}
+          active={view === "reminders"}
+          focusReminderId={
+            workspaceFocus?.view === "reminders" && workspaceFocus.recordType === "reminder"
+              ? workspaceFocus.recordId
+              : undefined
+          }
+          focusRunId={
+            workspaceFocus?.view === "reminders" &&
+            (workspaceFocus.recordType === "run" || workspaceFocus.recordType === "proposal")
+              ? workspaceFocus.runId
+              : undefined
+          }
+          focusNonce={workspaceFocus?.view === "reminders" ? workspaceFocus.nonce : undefined}
+        />
+      );
     }
     if (workspaceView === "settings") {
       return (
@@ -230,13 +315,43 @@ function Index() {
             <DemoDataControls />
             <PreflightPanel preset={activePreset} />
           </div>
-          <AgentControlCenter />
+          <AgentControlCenter
+            focusRunId={workspaceFocus?.view === "settings" ? workspaceFocus.runId : undefined}
+          />
         </div>
       );
     }
-    if (workspaceView === "calendar") return <CalendarPanel preset={activePreset} />;
+    if (workspaceView === "calendar") {
+      return (
+        <CalendarPanel
+          preset={activePreset}
+          focusEventId={
+            workspaceFocus?.view === "calendar" && workspaceFocus.recordType === "event"
+              ? workspaceFocus.recordId
+              : undefined
+          }
+          focusNonce={workspaceFocus?.view === "calendar" ? workspaceFocus.nonce : undefined}
+        />
+      );
+    }
     if (workspaceView === "plan") {
-      return <PlanBoard preset={activePreset} active={view === "plan"} />;
+      return (
+        <PlanBoard
+          preset={activePreset}
+          active={view === "plan"}
+          focusTaskId={
+            workspaceFocus?.view === "plan" && workspaceFocus.recordType === "task"
+              ? workspaceFocus.recordId
+              : undefined
+          }
+          focusProposalId={
+            workspaceFocus?.view === "plan" && workspaceFocus.recordType === "proposal"
+              ? workspaceFocus.recordId
+              : undefined
+          }
+          focusNonce={workspaceFocus?.view === "plan" ? workspaceFocus.nonce : undefined}
+        />
+      );
     }
     if (workspaceView === "models") {
       return (
@@ -248,12 +363,38 @@ function Index() {
           onActiveIdChange={setActiveId}
           frame={null}
           onFrameUsed={() => undefined}
+          focusRunId={workspaceFocus?.view === "models" ? workspaceFocus.runId : undefined}
+          focusProposalId={
+            workspaceFocus?.view === "models" && workspaceFocus.recordType === "proposal"
+              ? workspaceFocus.recordId
+              : undefined
+          }
+          focusNonce={workspaceFocus?.view === "models" ? workspaceFocus.nonce : undefined}
         />
       );
     }
     return (
       <div className="min-w-0 space-y-5">
-        <RelationsPanel preset={activePreset} onOpenIntake={() => openView("intake")} />
+        <RelationsPanel
+          preset={activePreset}
+          onOpenIntake={() => openView("intake")}
+          onOpenEvent={(eventId) =>
+            openTodayTarget({ view: "calendar", recordType: "event", recordId: eventId })
+          }
+          onOpenReminder={(reminderId) =>
+            openTodayTarget({
+              view: "reminders",
+              recordType: "reminder",
+              recordId: reminderId,
+            })
+          }
+          focusPersonId={
+            workspaceFocus?.view === "people" && workspaceFocus.recordType === "person"
+              ? workspaceFocus.recordId
+              : undefined
+          }
+          focusNonce={workspaceFocus?.view === "people" ? workspaceFocus.nonce : undefined}
+        />
       </div>
     );
   };

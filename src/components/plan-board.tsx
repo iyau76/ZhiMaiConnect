@@ -29,6 +29,7 @@ import {
   type TaskRecord,
 } from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 import { createArchiveMutationPlan, createTaskOperation } from "@/lib/archive-mutation-plan";
 import {
   MutationCommitCoordinator,
@@ -94,7 +95,19 @@ function restorePendingTasks(proposals: readonly MutationProposalEntry[]): Pendi
   );
 }
 
-export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; active?: boolean }) {
+export function PlanBoard({
+  preset,
+  active = true,
+  focusTaskId,
+  focusProposalId,
+  focusNonce,
+}: {
+  preset: ProviderPreset;
+  active?: boolean;
+  focusTaskId?: string;
+  focusProposalId?: string;
+  focusNonce?: number;
+}) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [relations, setRelations] = useState<RelationRecord[]>([]);
@@ -114,6 +127,8 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
   const [artifactsReady, setArtifactsReady] = useState(false);
   const [drafts, setDrafts] = useState<PendingTask[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  const handledFocus = useRef("");
+  const proposalRef = useRef<HTMLElement | null>(null);
 
   const refresh = useCallback(async () => {
     const [taskRows, personRows, relationRows, eventRows] = await Promise.all([
@@ -183,6 +198,24 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
     [people],
   );
   const selectedDrafts = drafts.filter((task) => task.selected);
+
+  useEffect(() => {
+    const targetId = focusProposalId ?? focusTaskId;
+    if (!targetId) return;
+    const exists = focusProposalId
+      ? pendingProposals.some((proposal) => proposal.id === focusProposalId)
+      : tasks.some((task) => task.id === focusTaskId);
+    if (!exists) return;
+    const focusKey = `${targetId}:${focusNonce ?? 0}`;
+    if (handledFocus.current === focusKey) return;
+    handledFocus.current = focusKey;
+    requestAnimationFrame(() => {
+      const target = focusProposalId
+        ? proposalRef.current
+        : document.getElementById(`task-${focusTaskId}`);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [focusNonce, focusProposalId, focusTaskId, pendingProposals, tasks]);
 
   const rememberOwner = (value: string) => {
     setOwner(value);
@@ -412,6 +445,8 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
 
       {drafts.length > 0 && (
         <section
+          ref={proposalRef}
+          data-proposal-ids={pendingProposals.map((proposal) => proposal.id).join(" ")}
           className="space-y-3 rounded-2xl border border-amber-500/45 bg-amber-500/5 p-5"
           aria-label={t("待批准行动草案")}
         >
@@ -585,7 +620,12 @@ export function PlanBoard({ preset, active = true }: { preset: ProviderPreset; a
                   list.map((task) => (
                     <div
                       key={task.id}
-                      className="space-y-1.5 rounded-lg border border-border bg-background/50 p-2.5"
+                      id={`task-${task.id}`}
+                      data-task-id={task.id}
+                      className={cn(
+                        "scroll-mt-6 space-y-1.5 rounded-lg border border-border bg-background/50 p-2.5",
+                        focusTaskId === task.id && "ring-2 ring-primary/35",
+                      )}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <p className="min-w-0 text-[13px] font-medium leading-snug">{task.title}</p>

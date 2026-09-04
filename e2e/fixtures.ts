@@ -489,15 +489,20 @@ export const test = base.extend<{ mockNetwork: MockNetworkState }>({
 
 export { expect };
 
-export async function openApp(page: Page) {
+export async function openApp(page: Page, options: { initialView?: "today" | "intake" } = {}) {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "AI 整理成档案" })).toBeVisible();
   // The 50/80 graph smoke test can briefly saturate the dev server when two
   // workers start together, so wait for actual hydration instead of treating
   // SSR visibility as interactivity.
   await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible({ timeout: 30_000 });
   const start = page.getByRole("button", { name: "开始使用" });
   if (await start.isVisible()) await start.click();
+  if (options.initialView !== "today") {
+    await clickVisible(page, page.getByRole("button", { name: /^录入/ }));
+    await expect(page.getByRole("button", { name: "AI 整理成档案" })).toBeVisible();
+  } else {
+    await expect(page.getByRole("heading", { name: /今天先看/ })).toBeVisible();
+  }
 }
 
 export async function clickVisible(page: Page, locator: ReturnType<Page["getByRole"]>) {
@@ -595,6 +600,9 @@ export interface IndexedDbSeed {
   evidence?: SeedRecord[];
   lifeEvents?: SeedRecord[];
   reminders?: SeedRecord[];
+  tasks?: SeedRecord[];
+  agentRuns?: SeedRecord[];
+  mutationProposals?: SeedRecord[];
   collections?: SeedRecord[];
   collectionMemberships?: SeedRecord[];
 }

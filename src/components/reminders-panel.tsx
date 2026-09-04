@@ -47,6 +47,7 @@ import {
   type ReminderRecord,
 } from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 import { blessingPrompt, upcoming, todayStr, type UpcomingItem } from "@/lib/personal";
 import {
   rankCandidates,
@@ -79,9 +80,15 @@ const activeRecommendationRunIds = new Set<string>();
 export function RemindersPanel({
   preset,
   active = true,
+  focusReminderId,
+  focusRunId,
+  focusNonce,
 }: {
   preset: ProviderPreset;
   active?: boolean;
+  focusReminderId?: string;
+  focusRunId?: string;
+  focusNonce?: number;
 }) {
   const [persons, setPersons] = useState<PersonRecord[]>([]);
   const [reminders, setReminders] = useState<ReminderRecord[]>([]);
@@ -108,6 +115,8 @@ export function RemindersPanel({
     useState<RecommendationAgentCheckpoint | null>(null);
   const agentAbortRef = useRef<AbortController | null>(null);
   const agentBusyRef = useRef(false);
+  const handledReminderFocus = useRef("");
+  const runInspectorRef = useRef<HTMLDivElement | null>(null);
   const archiveLoadedRef = useRef(false);
   const hydrationGeneration = useRef(0);
   const recommendationArchiveRef = useRef<{
@@ -125,9 +134,15 @@ export function RemindersPanel({
     }) => {
       const generation = ++hydrationGeneration.current;
       const runs = await indexedDbAgentRunLedger.listRuns({ threadId: RECOMMENDATION_THREAD_ID });
-      const ordered = [...runs].sort(
+      const orderedByRecency = [...runs].sort(
         (left, right) => right.ordinal - left.ordinal || right.createdAt - left.createdAt,
       );
+      const focusedRun = focusRunId
+        ? orderedByRecency.find((candidate) => candidate.id === focusRunId)
+        : undefined;
+      const ordered = focusedRun
+        ? [focusedRun, ...orderedByRecency.filter((candidate) => candidate.id !== focusedRun.id)]
+        : orderedByRecency;
       let restored: RecommendationSessionState | undefined;
       let restoredRun = ordered[0];
       for (const run of ordered) {
@@ -185,7 +200,7 @@ export function RemindersPanel({
         }),
       );
     },
-    [],
+    [focusRunId],
   );
 
   const load = useCallback(async () => {
@@ -678,6 +693,28 @@ export function RemindersPanel({
   const open = reminders.filter((item) => !item.done);
   const done = reminders.filter((item) => item.done);
 
+  useEffect(() => {
+    if (!focusReminderId || !reminders.some((record) => record.id === focusReminderId)) return;
+    const focusKey = `reminder:${focusReminderId}:${focusNonce ?? 0}`;
+    if (handledReminderFocus.current === focusKey) return;
+    handledReminderFocus.current = focusKey;
+    requestAnimationFrame(() =>
+      document
+        .getElementById(`reminder-${focusReminderId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+    );
+  }, [focusNonce, focusReminderId, reminders]);
+
+  useEffect(() => {
+    if (!focusRunId || latestAgentRun?.id !== focusRunId) return;
+    const focusKey = `run:${focusRunId}:${focusNonce ?? 0}`;
+    if (handledReminderFocus.current === focusKey) return;
+    handledReminderFocus.current = focusKey;
+    requestAnimationFrame(() =>
+      runInspectorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+    );
+  }, [focusNonce, focusRunId, latestAgentRun]);
+
   return (
     <div className="min-w-0 space-y-5">
       {/* 即将到来 */}
@@ -835,7 +872,12 @@ export function RemindersPanel({
           {[...open, ...done].map((record) => (
             <li
               key={record.id}
-              className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background/60 px-3 py-2"
+              id={`reminder-${record.id}`}
+              data-reminder-id={record.id}
+              className={cn(
+                "flex scroll-mt-6 items-center justify-between gap-3 rounded-lg border border-border bg-background/60 px-3 py-2",
+                focusReminderId === record.id && "ring-2 ring-primary/35",
+              )}
             >
               <button
                 type="button"
@@ -1010,7 +1052,7 @@ export function RemindersPanel({
           </div>
         )}
         {latestAgentRun && !agentBusy && (
-          <div className="mt-3">
+          <div ref={runInspectorRef} className="mt-3" data-agent-run-id={latestAgentRun.id}>
             <AgentRunInspector run={latestAgentRun} />
           </div>
         )}

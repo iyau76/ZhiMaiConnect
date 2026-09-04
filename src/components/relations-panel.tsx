@@ -79,6 +79,10 @@ import type { ProviderPreset } from "@/lib/vision-providers";
 interface Props {
   preset: ProviderPreset;
   onOpenIntake: () => void;
+  onOpenEvent?: (eventId: string) => void;
+  onOpenReminder?: (reminderId: string) => void;
+  focusPersonId?: string;
+  focusNonce?: number;
 }
 
 type GraphDrill =
@@ -98,7 +102,14 @@ function graphColor(key: string) {
   };
 }
 
-export function RelationsPanel({ preset, onOpenIntake }: Props) {
+export function RelationsPanel({
+  preset,
+  onOpenIntake,
+  onOpenEvent,
+  onOpenReminder,
+  focusPersonId,
+  focusNonce,
+}: Props) {
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [relations, setRelations] = useState<RelationRecord[]>([]);
   const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
@@ -113,6 +124,7 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   const [newName, setNewName] = useState("");
   const [newNote, setNewNote] = useState("");
   const [editing, setEditing] = useState<PersonRecord | null>(null);
+  const handledPersonFocus = useRef("");
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
   const [label, setLabel] = useState("");
@@ -203,6 +215,16 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!focusPersonId) return;
+    const focusKey = `${focusPersonId}:${focusNonce ?? 0}`;
+    if (handledPersonFocus.current === focusKey) return;
+    const person = people.find((record) => record.id === focusPersonId);
+    if (!person) return;
+    handledPersonFocus.current = focusKey;
+    setEditing(person);
+  }, [focusNonce, focusPersonId, people]);
 
   useEffect(() => {
     if (typeof localStorage !== "undefined") saveRelationGraphGrouping(localStorage, groupBy);
@@ -2032,7 +2054,13 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   <ul className="mt-1 space-y-1 text-[11px] text-muted-foreground">
                     {selected.events.map((event) => (
                       <li key={event.id}>
-                        <span className="tabular-nums">{event.date}</span> · {event.title}
+                        <button
+                          type="button"
+                          className="text-left transition-colors hover:text-primary"
+                          onClick={() => onOpenEvent?.(event.id)}
+                        >
+                          <span className="tabular-nums">{event.date}</span> · {event.title}
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -2064,9 +2092,15 @@ export function RelationsPanel({ preset, onOpenIntake }: Props) {
                   <ul className="mt-1 space-y-1 text-[11px] text-muted-foreground">
                     {selected.reminders.map((reminder) => (
                       <li key={reminder.id}>
-                        {reminder.due ? `${reminder.due} · ` : ""}
-                        {reminder.title}
-                        {reminder.done ? ` · ${t("已完成")}` : ""}
+                        <button
+                          type="button"
+                          className="text-left transition-colors hover:text-primary"
+                          onClick={() => onOpenReminder?.(reminder.id)}
+                        >
+                          {reminder.due ? `${reminder.due} · ` : ""}
+                          {reminder.title}
+                          {reminder.done ? ` · ${t("已完成")}` : ""}
+                        </button>
                       </li>
                     ))}
                   </ul>

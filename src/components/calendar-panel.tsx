@@ -12,7 +12,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { PhotoNotes } from "@/components/photo-notes";
@@ -51,7 +51,15 @@ const PRECISION_TABS: Record<string, string> = {
   month: "不记得具体哪天",
 };
 
-export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
+export function CalendarPanel({
+  preset,
+  focusEventId,
+  focusNonce,
+}: {
+  preset?: ProviderPreset;
+  focusEventId?: string;
+  focusNonce?: number;
+}) {
   const now = new Date();
   const [view, setView] = useState<"month" | "timeline">("month");
   const [year, setYear] = useState(now.getFullYear());
@@ -71,6 +79,8 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
   const [withIds, setWithIds] = useState<string[]>([]);
   const [photos, setPhotos] = useState<PhotoNote[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const handledFocus = useRef("");
+  const editorRef = useRef<HTMLElement | null>(null);
 
   const load = useCallback(async () => {
     const [p, e, r] = await Promise.all([
@@ -195,7 +205,7 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
     setFuzzyHint("");
   };
 
-  const edit = (event: LifeEventRecord) => {
+  const edit = useCallback((event: LifeEventRecord) => {
     setEditingId(event.id);
     setPrecision(precisionOf(event) === "day" ? "day" : "month");
     setSelected(event.date);
@@ -206,7 +216,21 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
     setTitle([event.title, event.detail].filter(Boolean).join("\n"));
     setWithIds(event.personIds ?? []);
     setPhotos(event.photos ?? []);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!focusEventId) return;
+    const focusKey = `${focusEventId}:${focusNonce ?? 0}`;
+    if (handledFocus.current === focusKey) return;
+    const event = events.find((record) => record.id === focusEventId);
+    if (!event) return;
+    handledFocus.current = focusKey;
+    edit(event);
+    setView(isExact(event) ? "month" : "timeline");
+    requestAnimationFrame(() =>
+      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  }, [edit, events, focusEventId, focusNonce]);
 
   const add = async () => {
     if (!title.trim() || saving) return;
@@ -351,9 +375,11 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
   const renderEvent = (event: LifeEventRecord, showDate = false) => (
     <li
       key={event.id}
+      data-event-id={event.id}
       className={cn(
         "flex items-start justify-between gap-3 rounded-lg border bg-background/60 px-3 py-2",
         isExact(event) ? "border-primary/40" : "border-dashed border-border",
+        editingId === event.id && "ring-2 ring-primary/35",
       )}
     >
       <div className="min-w-0">
@@ -585,7 +611,11 @@ export function CalendarPanel({ preset }: { preset?: ProviderPreset }) {
         </section>
       )}
 
-      <section className="rounded-2xl border border-border bg-card/40 p-4 md:p-5">
+      <section
+        ref={editorRef}
+        data-event-editor
+        className="scroll-mt-6 rounded-2xl border border-border bg-card/40 p-4 md:p-5"
+      >
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-sm font-medium">{t(editingId ? "编辑这件事" : "记一件事")}</h3>
           {editingId && (

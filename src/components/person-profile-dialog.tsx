@@ -334,8 +334,11 @@ export function PersonProfileDialog({
 
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">{t("姓名")}</Label>
+            <Label htmlFor="person-profile-name" className="text-xs text-muted-foreground">
+              {t("姓名")}
+            </Label>
             <Input
+              id="person-profile-name"
               value={name}
               maxLength={80}
               onChange={(event) => setName(event.target.value)}
@@ -344,8 +347,11 @@ export function PersonProfileDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">{t("随便写一段（AI 会整理）")}</Label>
+            <Label htmlFor="person-profile-notes" className="text-xs text-muted-foreground">
+              {t("随便写一段（AI 会整理）")}
+            </Label>
             <Textarea
+              id="person-profile-notes"
               value={raw}
               onChange={(event) => setRaw(event.target.value)}
               rows={4}
