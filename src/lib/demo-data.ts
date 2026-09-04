@@ -15,6 +15,40 @@ const DEMO_PREFIX = "demo-zhimai-";
 const DEMO_AT = Date.UTC(2026, 7, 20, 2);
 const demoSource: Provenance = { kind: "manual", detail: "合成演示数据", at: DEMO_AT };
 
+export type DemoScenarioId = "all" | "campus" | "family" | "workplace" | "small_business";
+
+export const DEMO_SCENARIOS: ReadonlyArray<{
+  id: Exclude<DemoScenarioId, "all">;
+  name: string;
+  description: string;
+  example: string;
+}> = [
+  {
+    id: "campus",
+    name: "校园生活",
+    description: "同学、社团、展览与两位同名人物",
+    example: "看看唐悦如何连接摄影社与校园记忆展",
+  },
+  {
+    id: "family",
+    name: "家庭往来",
+    description: "家人、亲戚、生日与亲属关系推导",
+    example: "从苏琴、林慧和陆鸣看清一张家庭关系网",
+  },
+  {
+    id: "workplace",
+    name: "职场协作",
+    description: "同事、项目、会议与专业能力",
+    example: "围绕知行实验室准备会议与项目协作",
+  },
+  {
+    id: "small_business",
+    name: "小企业协作",
+    description: "创业、市场、招聘、技术与内容交付",
+    example: "在有限团队之外找到可靠的合作伙伴",
+  },
+];
+
 type Seed = [
   name: string,
   collection: string,
@@ -88,6 +122,13 @@ const PERSON_GENDERS: Partial<Record<number, "男" | "女">> = {
   7: "男",
   8: "女",
   9: "男",
+};
+
+const SCENARIO_PERSON_INDEXES: Record<Exclude<DemoScenarioId, "all">, readonly number[]> = {
+  campus: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+  family: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  workplace: [22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+  small_business: [19, 30, 42, 43, 44, 45, 46, 47, 48, 49],
 };
 
 function demoPeople(): PersonRecord[] {
@@ -585,17 +626,43 @@ function demoReminders(people: PersonRecord[]): ReminderRecord[] {
   }));
 }
 
-export function buildDemoData() {
+export function buildDemoData(scenarioId: DemoScenarioId = "all") {
   const people = demoPeople();
   const relations = demoRelations(people);
   const { collections, memberships } = demoCollections(people);
   const events = demoEvents(people);
   const reminders = demoReminders(people);
-  return { people, relations, collections, memberships, events, reminders };
+  if (scenarioId === "all") {
+    return { people, relations, collections, memberships, events, reminders };
+  }
+
+  const personIds = new Set(SCENARIO_PERSON_INDEXES[scenarioId].map((index) => people[index].id));
+  const selectedPeople = people.filter((person) => personIds.has(person.id));
+  const selectedMemberships = memberships.filter((membership) =>
+    personIds.has(membership.personId),
+  );
+  const collectionIds = new Set(selectedMemberships.map((membership) => membership.collectionId));
+
+  return {
+    people: selectedPeople,
+    relations: relations.filter(
+      (relation) => personIds.has(relation.fromId) && personIds.has(relation.toId),
+    ),
+    collections: collections.filter((collection) => collectionIds.has(collection.id)),
+    memberships: selectedMemberships,
+    events: events.filter((event) =>
+      (event.personIds ?? []).every((personId) => personIds.has(personId)),
+    ),
+    reminders: reminders.filter((reminder) =>
+      (reminder.personIds ?? []).every((personId) => personIds.has(personId)),
+    ),
+  };
 }
 
-export async function loadDemoData() {
-  const { people, relations, collections, memberships, events, reminders } = buildDemoData();
+export async function loadDemoData(scenarioId: DemoScenarioId = "all") {
+  const { people, relations, collections, memberships, events, reminders } =
+    buildDemoData(scenarioId);
+  await clearDemoData();
   await facesDb.applyArchiveMutationBatch({
     persons: people,
     assertions: relations,
@@ -604,7 +671,12 @@ export async function loadDemoData() {
     lifeEvents: events,
     reminders,
   });
-  return { people: people.length, relations: relations.length, events: events.length };
+  return {
+    scenarioId,
+    people: people.length,
+    relations: relations.length,
+    events: events.length,
+  };
 }
 
 export async function clearDemoData() {

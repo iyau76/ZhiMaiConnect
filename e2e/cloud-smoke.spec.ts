@@ -23,7 +23,7 @@ test.describe("Cloudflare 公开版本", () => {
     await page.getByRole("button", { name: "撤销最近一次录入" }).click();
 
     await clickVisible(page, page.getByRole("button", { name: /^设置/ }));
-    await page.getByRole("button", { name: "一键载入/重置合成数据" }).click();
+    await page.getByRole("button", { name: "载入完整 50 人演示库" }).click();
     await expect(page.getByText("当前已载入：50 人 · 80 条关系")).toBeVisible();
 
     await clickVisible(page, page.getByRole("button", { name: /^录入/ }));

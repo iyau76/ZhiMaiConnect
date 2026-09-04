@@ -1235,11 +1235,43 @@ const EN: Record<string, string> = {
     "By default, only rounds, tool names, duration and token counts are saved. Enable this to retain redacted prompts and tool input/output.",
   还没有持久化运行日志: "No persisted run logs yet",
   竞赛演示数据: "Competition demo data",
+  校园生活: "Campus life",
+  "同学、社团、展览与两位同名人物":
+    "Classmates, student clubs, an exhibition, and two people with the same name",
+  看看唐悦如何连接摄影社与校园记忆展:
+    "See how Tang Yue connects the photography club with a campus memory exhibition",
+  家庭往来: "Family life",
+  "家人、亲戚、生日与亲属关系推导":
+    "Family, relatives, birthdays, and derived kinship relationships",
+  "从苏琴、林慧和陆鸣看清一张家庭关系网":
+    "Explore a family graph through Su Qin, Lin Hui, and Lu Ming",
+  职场协作: "Workplace collaboration",
+  "同事、项目、会议与专业能力": "Colleagues, projects, meetings, and professional skills",
+  围绕知行实验室准备会议与项目协作:
+    "Prepare meetings and project collaboration around the Zhixing Lab",
+  小企业协作: "Small-business collaboration",
+  "创业、市场、招聘、技术与内容交付":
+    "Entrepreneurship, marketing, hiring, technology, and content delivery",
+  在有限团队之外找到可靠的合作伙伴: "Find dependable collaborators beyond a small core team",
+  载入演示数据失败: "Failed to load demo data",
+  "载入完整 50 人演示库": "Load the complete 50-person demo",
+  "选择校园、家庭、职场或小企业场景，也可以载入完整关系库。切换场景会替换上一套合成资料，不影响你自己录入的内容。":
+    "Choose a campus, family, workplace, or small-business scenario, or load the complete relationship library. Switching scenarios replaces the previous synthetic records without affecting your own data.",
+  先从你手边的生活开始: "Start with the life already around you",
+  "记下一个人或一件事，知脉会把关系、事件和下一步放回同一张工作台。":
+    "Write down a person or moment, and Zhimai brings relationships, events, and next steps into one workspace.",
+  返回选择: "Back",
+  选一套虚构资料直接体验: "Choose a fictional scenario to explore",
+  载入演示库: "Load a demo library",
+  用虚构人物走一遍完整流程: "Explore the full flow with fictional people",
+  粘贴一段材料: "Paste some material",
+  从聊天摘录或个人印象开始: "Start from a chat excerpt or a personal note",
+  从空库开始: "Start with an empty library",
+  保留一张干净的个人工作台: "Keep a clean personal workspace",
+  稍后再说: "Maybe later",
   "一键载入 50 位虚构人物、80 条关系及配套事件。所有邮箱使用 example.invalid，界面和来源均标注为合成数据，不对应真实个人。":
     "Load 50 fictional people, 80 relationships and matching events. Email addresses use example.invalid, and every record is marked synthetic rather than representing a real person.",
   当前已载入: "Currently loaded",
-  一键载入重置合成数据: "Load / reset synthetic data",
-  "一键载入/重置合成数据": "Load / reset synthetic data",
   只清除合成数据: "Clear synthetic data only",
   "只会删除带“合成演示数据”标识的记录，不影响你自己录入的资料。继续？":
     "Only records marked as synthetic demo data will be removed. Your own data is not affected. Continue?",

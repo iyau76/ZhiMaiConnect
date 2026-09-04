@@ -1,10 +1,11 @@
-import { Database, Loader2, Trash2 } from "lucide-react";
+import { Database, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { DemoScenarioPicker } from "@/components/demo-scenario-picker";
 import { Button } from "@/components/ui/button";
-import { clearDemoData, getDemoDataStatus, loadDemoData } from "@/lib/demo-data";
-import { getLang, t } from "@/lib/i18n";
+import { clearDemoData, getDemoDataStatus } from "@/lib/demo-data";
+import { t } from "@/lib/i18n";
 
 export function DemoDataControls() {
   const [status, setStatus] = useState({ people: 0, relations: 0 });
@@ -15,23 +16,6 @@ export function DemoDataControls() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const load = async () => {
-    setBusy(true);
-    try {
-      const result = await loadDemoData();
-      await refresh();
-      toast.success(
-        getLang() === "en"
-          ? `Loaded ${result.people} synthetic people and ${result.relations} relationships`
-          : `已载入 ${result.people} 位合成人物、${result.relations} 条关系`,
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "载入演示数据失败");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const clear = async () => {
     if (!window.confirm(t("只会删除带“合成演示数据”标识的记录，不影响你自己录入的资料。继续？"))) {
@@ -58,22 +42,19 @@ export function DemoDataControls() {
         </h2>
         <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
           {t(
-            "一键载入 50 位虚构人物、80 条类型化关系、25 条共同事件和 3 条提醒，可演示跨圈引荐、同名消歧与待核验流程。所有邮箱使用 example.invalid，不对应真实个人。",
+            "选择校园、家庭、职场或小企业场景，也可以载入完整关系库。切换场景会替换上一套合成资料，不影响你自己录入的内容。",
           )}
         </p>
       </div>
       <p className="text-xs">
         {t("当前已载入")}：{status.people} {t("人")} · {status.relations} {t("条关系")}
       </p>
+      <DemoScenarioPicker
+        onLoaded={() => {
+          void refresh();
+        }}
+      />
       <div className="flex flex-wrap gap-2">
-        <Button onClick={() => void load()} disabled={busy}>
-          {busy ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <Database className="size-4" aria-hidden="true" />
-          )}
-          {t("一键载入/重置合成数据")}
-        </Button>
         {status.people > 0 && (
           <Button variant="outline" onClick={() => void clear()} disabled={busy}>
             <Trash2 className="size-4" aria-hidden="true" />

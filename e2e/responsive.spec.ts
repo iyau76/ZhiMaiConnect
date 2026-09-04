@@ -11,7 +11,7 @@ for (const width of [390, 768, 1440]) {
     await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
 
     await clickVisible(page, page.getByRole("button", { name: /^设置/ }));
-    await page.getByRole("button", { name: "一键载入/重置合成数据" }).click();
+    await page.getByRole("button", { name: "载入完整 50 人演示库" }).click();
     await expect(page.getByText("当前已载入：50 人 · 80 条关系")).toBeVisible();
 
     await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));

@@ -558,7 +558,10 @@ function Index() {
         </div>
       </div>
       <Toaster />
-      <WelcomeCover />
+      <WelcomeCover
+        onPasteMaterial={() => openView("intake", true)}
+        onDemoLoaded={() => openView("today", true)}
+      />
       {meetingBriefRequest && (
         <MeetingBriefDialog
           open
