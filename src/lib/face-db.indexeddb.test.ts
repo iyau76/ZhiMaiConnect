@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   LifeEventRecord,
+  MeetingBriefRecord,
   PersonRecord,
   RelationAssertionRecord,
   RelationRecord,
@@ -22,6 +23,7 @@ const EXPECTED_STORES = [
   "derivedRelations",
   "evidence",
   "lifeEvents",
+  "meetingBriefs",
   "mutationProposals",
   "mutationReceipts",
   "persons",
@@ -81,19 +83,41 @@ function relation(id: string, fromId: string, toId: string): RelationRecord {
   };
 }
 
+function meetingBrief(id: string, personId: string): MeetingBriefRecord {
+  return {
+    id,
+    seriesId: id,
+    personId,
+    personName: `Person ${personId}`,
+    title: `Meeting ${personId}`,
+    sourceRevision: "r1:test",
+    sourceRefs: [{ kind: "person", id: personId, revision: "r1:test" }],
+    content: {
+      profile: [],
+      recentEvents: [],
+      openItems: [],
+      relatedPeople: [],
+      talkingPoints: [],
+      gaps: [],
+    },
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
 beforeEach(() => {
   vi.resetModules();
   useFreshIndexedDb();
 });
 
 describe("facesDb schema", () => {
-  it("creates a fresh version 13 database with every object store and Agent ledger indexes", async () => {
+  it("creates a fresh version 14 database with every object store and Agent ledger indexes", async () => {
     const { facesDb } = await import("./face-db");
 
     await expect(facesDb.listPersons()).resolves.toEqual([]);
 
     const database = await openRawDatabase();
-    expect(database.version).toBe(13);
+    expect(database.version).toBe(14);
     expect(Array.from(database.objectStoreNames)).toEqual(EXPECTED_STORES);
     const transaction = database.transaction(
       [
@@ -134,6 +158,12 @@ describe("facesDb schema", () => {
       "committedAt",
       "sourceRunId",
     ]);
+    const meetingTransaction = database.transaction("meetingBriefs", "readonly");
+    expect(Array.from(meetingTransaction.objectStore("meetingBriefs").indexNames)).toEqual([
+      "createdAt",
+      "personId",
+      "seriesId",
+    ]);
     database.close();
   });
 
@@ -149,7 +179,7 @@ describe("facesDb schema", () => {
     await expect(facesDb.listPersons()).resolves.toEqual([legacyPerson]);
 
     const upgradedDatabase = await openRawDatabase();
-    expect(upgradedDatabase.version).toBe(13);
+    expect(upgradedDatabase.version).toBe(14);
     expect(Array.from(upgradedDatabase.objectStoreNames)).toEqual(EXPECTED_STORES);
     upgradedDatabase.close();
   });
@@ -173,7 +203,7 @@ describe("facesDb schema", () => {
     );
 
     const database = await openRawDatabase();
-    expect(database.version).toBe(13);
+    expect(database.version).toBe(14);
     database.close();
   });
 
@@ -448,6 +478,62 @@ describe("facesDb people and relations", () => {
     ]);
   });
 
+  it("stores versioned meeting briefs and preserves them across fact-only checkpoint restores", async () => {
+    const { facesDb } = await import("./face-db");
+    const owner = person("brief-owner");
+    const brief = meetingBrief("brief-v1", owner.id);
+    await facesDb.putPerson(owner);
+    await facesDb.putMeetingBrief(brief);
+
+    await expect(facesDb.listMeetingBriefs()).resolves.toEqual([brief]);
+    await facesDb.replaceArchiveSnapshot({
+      persons: [owner],
+      relationAssertions: [],
+      relationEvidenceLinks: [],
+      relationViewPreferences: [],
+      referralPolicies: [],
+      collections: [],
+      collectionMemberships: [],
+      evidence: [],
+      caseEvents: [],
+      tasks: [],
+      projects: [],
+      lifeEvents: [],
+      reminders: [],
+    });
+    await expect(facesDb.listMeetingBriefs()).resolves.toEqual([brief]);
+
+    await facesDb.replaceArchiveSnapshot({
+      persons: [owner],
+      relationAssertions: [],
+      relationEvidenceLinks: [],
+      relationViewPreferences: [],
+      referralPolicies: [],
+      collections: [],
+      collectionMemberships: [],
+      evidence: [],
+      caseEvents: [],
+      tasks: [],
+      projects: [],
+      lifeEvents: [],
+      reminders: [],
+      meetingBriefs: [],
+    });
+    await expect(facesDb.listMeetingBriefs()).resolves.toEqual([]);
+  });
+
+  it("deletes a saved meeting-brief version without touching its person", async () => {
+    const { facesDb } = await import("./face-db");
+    const owner = person("brief-owner");
+    await facesDb.putPerson(owner);
+    await facesDb.putMeetingBrief(meetingBrief("brief-v1", owner.id));
+
+    await facesDb.deleteMeetingBrief("brief-v1");
+
+    await expect(facesDb.listMeetingBriefs()).resolves.toEqual([]);
+    await expect(facesDb.listPersons()).resolves.toEqual([owner]);
+  });
+
   it("rejects an invalid archive replacement before changing current data", async () => {
     const { facesDb } = await import("./face-db");
     const current = person("current");
@@ -631,6 +717,7 @@ describe("facesDb people and relations", () => {
         status: "active",
         createdAt: 1,
       }),
+      facesDb.putMeetingBrief(meetingBrief("brief", "remove")),
     ]);
 
     await facesDb.deletePerson("remove");
@@ -660,6 +747,7 @@ describe("facesDb people and relations", () => {
     await expect(facesDb.listProjects()).resolves.toEqual([
       expect.objectContaining({ id: "project", ownerId: null, memberIds: [] }),
     ]);
+    await expect(facesDb.listMeetingBriefs()).resolves.toEqual([]);
   });
 });
 

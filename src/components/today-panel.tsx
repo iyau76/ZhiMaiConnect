@@ -3,6 +3,7 @@ import {
   CalendarClock,
   Cake,
   CircleAlert,
+  FileClock,
   History,
   Inbox,
   ListTodo,
@@ -13,6 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   indexedDbAgentRunLedger,
   indexedDbMutationArtifactRepository,
@@ -31,6 +33,7 @@ import { cn } from "@/lib/utils";
 interface TodayPanelProps {
   onOpenIntake: () => void;
   onOpenTarget: (target: TodayTarget) => void;
+  onPrepareMeeting: (query: string) => void;
 }
 
 const EMPTY_PROJECTION: TodayProjection = { urgent: [], upcoming: [], open: [], recent: [] };
@@ -136,11 +139,12 @@ function TodaySection({
   );
 }
 
-export function TodayPanel({ onOpenIntake, onOpenTarget }: TodayPanelProps) {
+export function TodayPanel({ onOpenIntake, onOpenTarget, onPrepareMeeting }: TodayPanelProps) {
   const [projection, setProjection] = useState<TodayProjection>(EMPTY_PROJECTION);
   const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [meetingQuery, setMeetingQuery] = useState("");
 
   const refresh = useCallback(async () => {
     setError("");
@@ -220,6 +224,40 @@ export function TodayPanel({ onOpenIntake, onOpenTarget }: TodayPanelProps) {
             <PenLine className="size-4" aria-hidden="true" />
             {t("随手记一条")}
           </Button>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-border bg-card p-4 md:p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <FileClock className="size-4" aria-hidden="true" />
+            </span>
+            <div>
+              <h2 className="text-sm font-semibold">见面前，先把这个人想起来</h2>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                输入一句“明天要见唐悦”，生成可保存、能追溯来源的见面简报。
+              </p>
+            </div>
+          </div>
+          <div className="flex min-w-0 flex-1 gap-2 lg:max-w-xl">
+            <Input
+              value={meetingQuery}
+              onChange={(event) => setMeetingQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") onPrepareMeeting(meetingQuery);
+              }}
+              placeholder="明天要见唐悦"
+              aria-label="输入要见的人"
+            />
+            <Button
+              variant="outline"
+              className="shrink-0"
+              onClick={() => onPrepareMeeting(meetingQuery)}
+            >
+              准备简报
+            </Button>
+          </div>
         </div>
       </section>
 

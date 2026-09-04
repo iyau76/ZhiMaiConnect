@@ -5,6 +5,7 @@ import { birthdayMd } from "./personal";
 
 export type TodayTarget =
   | { view: "people"; recordType: "person"; recordId: string }
+  | { view: "people"; recordType: "relation"; recordId: string; personId?: string }
   | { view: "calendar"; recordType: "event"; recordId: string }
   | { view: "reminders"; recordType: "reminder"; recordId: string }
   | { view: "plan"; recordType: "task"; recordId: string }

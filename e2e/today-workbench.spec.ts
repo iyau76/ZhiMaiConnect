@@ -149,3 +149,95 @@ test("完成提醒后可把实际结果补记为同一人物的时间线事件",
     "已经发出拍摄清单\n唐悦说明天确认档期",
   );
 });
+
+test("一句话生成见面简报，源档案变化后保留旧版并生成新版", async ({ page }) => {
+  await openApp(page, { initialView: "today" });
+  await seedIndexedDb(page, {
+    persons: [
+      {
+        id: "person-tang",
+        name: "唐悦",
+        note: "大学摄影社搭档",
+        profile: {
+          relation: "大学同学",
+          org: "九月校园记忆展",
+          title: "活动摄影师",
+          likes: ["胶片摄影"],
+          metAt: "大学摄影社",
+        },
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW,
+      },
+    ],
+    lifeEvents: [
+      {
+        id: "event-memory",
+        date: "2026-08-20",
+        title: "讨论校园记忆展",
+        personIds: ["person-tang"],
+        createdAt: NOW,
+      },
+    ],
+    reminders: [
+      {
+        id: "reminder-shoot",
+        title: "确认拍摄档期",
+        personIds: ["person-tang"],
+        done: false,
+        createdAt: NOW,
+      },
+    ],
+  });
+  await page.reload();
+  await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
+
+  await page.getByRole("textbox", { name: "输入要见的人" }).fill("明天要见唐悦");
+  await page.getByRole("button", { name: "准备简报" }).click();
+  await expect(page.getByRole("dialog")).toContainText("为 唐悦 准备第一次见面简报");
+  await page.getByRole("button", { name: "生成并保存" }).click();
+  await expect(page.getByRole("dialog")).toContainText("见面前看看：唐悦");
+  await expect(page.getByRole("dialog")).toContainText("活动摄影师");
+  await expect(page.getByRole("dialog")).toContainText("讨论校园记忆展");
+
+  const firstVersions = await readIndexedDbStore<{ id: string; personId: string }>(
+    page,
+    "meetingBriefs",
+  );
+  expect(firstVersions).toHaveLength(1);
+  const firstId = firstVersions[0].id;
+
+  await page.evaluate(async () => {
+    const { facesDb } = await import("/src/lib/face-db.ts");
+    const person = (await facesDb.listPersons()).find((item) => item.id === "person-tang");
+    if (!person) throw new Error("missing seeded person");
+    await facesDb.putPerson({
+      ...person,
+      profile: { ...person.profile, title: "影像负责人" },
+      updatedAt: Date.now(),
+    });
+  });
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "准备简报" }).click();
+  await expect(page.getByRole("dialog")).toContainText("有更新");
+  await expect(page.getByRole("dialog")).toContainText("活动摄影师");
+  await page.getByRole("button", { name: "生成新版" }).click();
+  await expect(page.getByRole("dialog")).toContainText("影像负责人");
+
+  const versions = await readIndexedDbStore<{
+    id: string;
+    seriesId: string;
+    supersedesBriefId?: string;
+  }>(page, "meetingBriefs");
+  expect(versions).toHaveLength(2);
+  expect(versions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: firstId }),
+      expect.objectContaining({ seriesId: firstId, supersedesBriefId: firstId }),
+    ]),
+  );
+
+  await page.getByLabel("选择简报版本").selectOption(firstId);
+  await expect(page.getByRole("dialog")).toContainText("历史版本");
+  await expect(page.getByRole("dialog")).toContainText("活动摄影师");
+});

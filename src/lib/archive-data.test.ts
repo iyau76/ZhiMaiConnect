@@ -169,11 +169,45 @@ function source(): ArchiveV2Source {
         createdAt: at,
       },
     ],
+    meetingBriefs: [
+      {
+        id: "brief-1",
+        seriesId: "brief-1",
+        personId: "friend",
+        personName: "唐悦",
+        title: "见面前看看：唐悦",
+        sourceRevision: "revision-1",
+        sourceRefs: [
+          { kind: "person", id: "friend", revision: "person-r1" },
+          { kind: "event", id: "event-1", revision: "event-r1" },
+        ],
+        content: {
+          profile: [
+            {
+              text: "前同事",
+              sources: [{ kind: "person", id: "friend", revision: "person-r1" }],
+            },
+          ],
+          recentEvents: [
+            {
+              text: "今年九月 · 团队聚餐",
+              sources: [{ kind: "event", id: "event-1", revision: "event-r1" }],
+            },
+          ],
+          openItems: [],
+          relatedPeople: [],
+          talkingPoints: [],
+          gaps: ["还没有联系方式"],
+        },
+        createdAt: at,
+        updatedAt: at,
+      },
+    ],
   };
 }
 
 describe("archive@2 machine contract", () => {
-  it("round-trips every durable v12 record while explicitly excluding media, biometrics and secrets", () => {
+  it("round-trips every durable v13 record while explicitly excluding media, biometrics and secrets", () => {
     const archive = createArchiveV2(source(), {
       exportedAt: "2026-08-28T10:00:00.000Z",
       appVersion: "test",
@@ -200,6 +234,7 @@ describe("archive@2 machine contract", () => {
       projects: [{ id: "project-1" }],
       lifeEvents: [{ id: "event-1" }],
       reminders: [{ id: "reminder-1" }],
+      meetingBriefs: [{ id: "brief-1" }],
     });
     expect(archive.projectionDiagnostics).toMatchObject({
       importPolicy: "discard-and-rebuild",
@@ -235,10 +270,23 @@ describe("archive@2 machine contract", () => {
     expect(plan.discardedProjectionCount).toBe(1);
   });
 
-  it("keeps archive@2 files produced by data model v11 readable after the v12 upgrade", () => {
+  it("keeps archive@2 files produced by data model v11 readable after the v13 upgrade", () => {
     const previous = structuredClone(createArchiveV2(source()));
     previous.generator.dataModelVersion = 11;
     expect(normalizeArchive(previous).archive.generator.dataModelVersion).toBe(11);
+  });
+
+  it("loads data model v12 archives without meeting briefs", () => {
+    const previous = structuredClone(createArchiveV2(source())) as unknown as {
+      generator: { dataModelVersion: 12 };
+      records: Record<string, unknown>;
+    };
+    previous.generator.dataModelVersion = 12;
+    delete previous.records.meetingBriefs;
+
+    const normalized = normalizeArchive(previous).archive;
+    expect(normalized.generator.dataModelVersion).toBe(12);
+    expect(normalized.records.meetingBriefs).toEqual([]);
   });
 
   it("rejects unknown fields, duplicate ids and dangling references", () => {
@@ -282,6 +330,16 @@ describe("archive@2 machine contract", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(ArchiveValidationError);
       expect((error as ArchiveValidationError).issues.join("\n")).toContain("missing-event");
+    }
+
+    const danglingBrief = structuredClone(createArchiveV2(source()));
+    danglingBrief.records.meetingBriefs[0].personId = "missing-person";
+    try {
+      normalizeArchive(danglingBrief);
+      throw new Error("expected meeting brief validation failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ArchiveValidationError);
+      expect((error as ArchiveValidationError).issues.join("\n")).toContain("missing-person");
     }
   });
 });

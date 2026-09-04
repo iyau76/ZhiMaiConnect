@@ -188,6 +188,8 @@ const EN: Record<string, string> = {
   截止: "Due",
   "截止 yyyy-mm-dd": "Due yyyy-mm-dd",
   截止日期: "Due date",
+  关系人物摘要: "Selected person summary",
+  准备见面: "Prepare meeting",
   打开人物卡: "Open profile",
   "把这帧发给 AI 提问": "Ask AI about this frame",
   按事务: "By matter",

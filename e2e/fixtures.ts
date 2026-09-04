@@ -600,6 +600,7 @@ export interface IndexedDbSeed {
   evidence?: SeedRecord[];
   lifeEvents?: SeedRecord[];
   reminders?: SeedRecord[];
+  meetingBriefs?: SeedRecord[];
   tasks?: SeedRecord[];
   agentRuns?: SeedRecord[];
   mutationProposals?: SeedRecord[];
@@ -635,6 +636,7 @@ export async function seedIndexedDb(page: Page, seed: IndexedDbSeed) {
           "projects",
           "lifeEvents",
           "reminders",
+          "meetingBriefs",
         ];
         stores.forEach((store) => {
           if (!target.objectStoreNames.contains(store)) {

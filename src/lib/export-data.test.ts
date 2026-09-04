@@ -26,6 +26,7 @@ describe("buildMachineArchive", () => {
       projects: [],
       lifeEvents: [],
       reminders: [],
+      meetingBriefs: [],
     });
   });
 
@@ -47,6 +48,7 @@ describe("buildMachineArchive", () => {
       projects: [],
       lifeEvents: [],
       reminders: [],
+      meetingBriefs: [],
     });
     expect(db.readArchiveSnapshot).toHaveBeenCalledOnce();
     expect(db).not.toHaveProperty("listRelations");

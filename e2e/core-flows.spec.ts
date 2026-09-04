@@ -579,7 +579,7 @@ test("关系网单击只淡化无关节点，双击开人物卡，并可在图�
   await expect(personD).toHaveAttribute("opacity", "0.25");
   const openProfile = page.getByRole("button", { name: "打开人物卡" });
   await expect(openProfile).toBeVisible();
-  const detail = openProfile.locator("../..");
+  const detail = page.getByRole("region", { name: "关系人物摘要" });
   await expect(detail).toContainText("陈安");
   await expect(detail).toContainText("赵宇");
   await expect(detail).toContainText("唐悦");

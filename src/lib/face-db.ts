@@ -402,8 +402,45 @@ export interface ReminderRecord {
   source?: Provenance;
 }
 
+export type MeetingBriefSourceKind =
+  "person" | "relation_assertion" | "relation_projection" | "event" | "reminder" | "task";
+
+export interface MeetingBriefSourceRef {
+  kind: MeetingBriefSourceKind;
+  id: string;
+  revision: string;
+}
+
+export interface MeetingBriefLine {
+  text: string;
+  sources: MeetingBriefSourceRef[];
+}
+
+export interface MeetingBriefRecord {
+  id: string;
+  /** Stable thread across explicitly generated versions. */
+  seriesId: string;
+  /** Previous saved snapshot; updates create a new row instead of rewriting history. */
+  supersedesBriefId?: string;
+  personId: string;
+  personName: string;
+  title: string;
+  sourceRevision: string;
+  sourceRefs: MeetingBriefSourceRef[];
+  content: {
+    profile: MeetingBriefLine[];
+    recentEvents: MeetingBriefLine[];
+    openItems: MeetingBriefLine[];
+    relatedPeople: MeetingBriefLine[];
+    talkingPoints: MeetingBriefLine[];
+    gaps: string[];
+  };
+  createdAt: number;
+  updatedAt: number;
+}
+
 const DB_NAME = "openglass-faces";
-export const FACE_DB_VERSION = 13;
+export const FACE_DB_VERSION = 14;
 const DB_VERSION = FACE_DB_VERSION;
 const PERSONS = "persons";
 const SIGHTINGS = "sightings";
@@ -415,6 +452,7 @@ const TASKS = "tasks";
 const PROJECTS = "projects";
 const LIFE_EVENTS = "lifeEvents";
 const REMINDERS = "reminders";
+const MEETING_BRIEFS = "meetingBriefs";
 const RELATION_ASSERTIONS = "relationAssertions";
 const DERIVED_RELATIONS = "derivedRelations";
 const RELATION_EVIDENCE_LINKS = "relationEvidenceLinks";
@@ -472,6 +510,12 @@ function openDb() {
       if (!db.objectStoreNames.contains(REMINDERS)) {
         const store = db.createObjectStore(REMINDERS, { keyPath: "id" });
         store.createIndex("createdAt", "createdAt");
+      }
+      if (!db.objectStoreNames.contains(MEETING_BRIEFS)) {
+        const store = db.createObjectStore(MEETING_BRIEFS, { keyPath: "id" });
+        store.createIndex("createdAt", "createdAt");
+        store.createIndex("personId", "personId");
+        store.createIndex("seriesId", "seriesId");
       }
       if (!db.objectStoreNames.contains(RELATION_ASSERTIONS))
         db.createObjectStore(RELATION_ASSERTIONS, { keyPath: "id" });
@@ -945,9 +989,13 @@ export interface FaceDbArchiveSnapshot {
   projects: ProjectRecord[];
   lifeEvents: LifeEventRecord[];
   reminders: ReminderRecord[];
+  meetingBriefs: MeetingBriefRecord[];
 }
 
-export type FaceDbArchiveReplacement = Omit<FaceDbArchiveSnapshot, "derivedRelations">;
+export type FaceDbArchiveReplacement = Omit<
+  FaceDbArchiveSnapshot,
+  "derivedRelations" | "meetingBriefs"
+> & { meetingBriefs?: MeetingBriefRecord[] };
 
 async function readArchiveSnapshot(): Promise<FaceDbArchiveSnapshot> {
   await ensureCurrentKinshipProjection();
@@ -967,6 +1015,7 @@ async function readArchiveSnapshot(): Promise<FaceDbArchiveSnapshot> {
     PROJECTS,
     LIFE_EVENTS,
     REMINDERS,
+    MEETING_BRIEFS,
   ];
   return new Promise<FaceDbArchiveSnapshot>((resolve, reject) => {
     const tx = db.transaction(stores, "readonly");
@@ -994,6 +1043,7 @@ async function readArchiveSnapshot(): Promise<FaceDbArchiveSnapshot> {
         projects: requests[PROJECTS].result as ProjectRecord[],
         lifeEvents: requests[LIFE_EVENTS].result as LifeEventRecord[],
         reminders: requests[REMINDERS].result as ReminderRecord[],
+        meetingBriefs: requests[MEETING_BRIEFS].result as MeetingBriefRecord[],
       });
   });
 }
@@ -1024,6 +1074,8 @@ async function replaceArchiveSnapshot(replacement: FaceDbArchiveReplacement) {
   assertUniqueIds("事务", replacement.projects);
   const lifeEventIds = assertUniqueIds("日历事件", replacement.lifeEvents);
   assertUniqueIds("提醒", replacement.reminders);
+  const meetingBriefs = replacement.meetingBriefs;
+  if (meetingBriefs) assertUniqueIds("见面简报", meetingBriefs);
 
   const requirePerson = (id: string, context: string) => {
     if (!personIds.has(id)) throw new Error(`${context} 引用了不存在的人物：${id}`);
@@ -1074,6 +1126,9 @@ async function replaceArchiveSnapshot(replacement: FaceDbArchiveReplacement) {
     if (project.ownerId) requirePerson(project.ownerId, `事务 ${project.id}`);
     requirePeople(project.memberIds, `事务 ${project.id}`);
   }
+  for (const brief of meetingBriefs ?? []) {
+    requirePerson(brief.personId, `见面简报 ${brief.id}`);
+  }
 
   const activeAssertions = currentRelationAssertions(replacement.relationAssertions);
   const projection = projectKinshipRelations({
@@ -1120,6 +1175,7 @@ async function replaceArchiveSnapshot(replacement: FaceDbArchiveReplacement) {
     PROJECTS,
     LIFE_EVENTS,
     REMINDERS,
+    MEETING_BRIEFS,
     SIGHTINGS,
     VOICEPRINTS,
     APP_META,
@@ -1149,6 +1205,7 @@ async function replaceArchiveSnapshot(replacement: FaceDbArchiveReplacement) {
     replace(PROJECTS, replacement.projects);
     replace(LIFE_EVENTS, replacement.lifeEvents);
     replace(REMINDERS, replacement.reminders);
+    if (meetingBriefs) replace(MEETING_BRIEFS, meetingBriefs);
 
     const detachUnknownPerson = <T extends { id: string; personId: string | null }>(
       storeName: string,
@@ -1228,6 +1285,7 @@ async function applyArchiveMutationBatchInternal(
     CASE_EVENTS,
     LIFE_EVENTS,
     REMINDERS,
+    MEETING_BRIEFS,
     TASKS,
     PROJECTS,
     COLLECTIONS,
@@ -1387,6 +1445,17 @@ async function applyArchiveMutationBatchInternal(
             }
             const { completionEventId: _deleted, ...remaining } = reminder;
             reminderStore.put(remaining);
+          }
+        };
+      }
+
+      const deletedPersonIds = new Set(batch.deletePersonIds ?? []);
+      if (deletedPersonIds.size) {
+        const briefStore = tx.objectStore(MEETING_BRIEFS);
+        const briefRequest = briefStore.getAll();
+        briefRequest.onsuccess = () => {
+          for (const brief of briefRequest.result as MeetingBriefRecord[]) {
+            if (deletedPersonIds.has(brief.personId)) briefStore.delete(brief.id);
           }
         };
       }
@@ -1659,6 +1728,7 @@ function deletePersonAndDetachReferences(id: string) {
           PROJECTS,
           LIFE_EVENTS,
           REMINDERS,
+          MEETING_BRIEFS,
         ];
         const tx = db.transaction(stores, "readwrite");
         const removedRelationIds: string[] = [];
@@ -1758,6 +1828,7 @@ function deletePersonAndDetachReferences(id: string) {
           COLLECTION_MEMBERSHIPS,
           (record) => record.personId === id,
         );
+        deleteMatching<MeetingBriefRecord>(MEETING_BRIEFS, (record) => record.personId === id);
         detach<SightingRecord>(SIGHTINGS, (record) =>
           record.personId === id ? { ...record, personId: null } : null,
         );
@@ -2191,4 +2262,11 @@ export const facesDb = {
     ),
   putReminder: (record: ReminderRecord) => run<void>(REMINDERS, "readwrite", (s) => s.put(record)),
   deleteReminder: (id: string) => run<void>(REMINDERS, "readwrite", (s) => s.delete(id)),
+  listMeetingBriefs: () =>
+    run<MeetingBriefRecord[]>(MEETING_BRIEFS, "readonly", (s) => s.getAll()).then((rows) =>
+      rows.sort((left, right) => right.updatedAt - left.updatedAt),
+    ),
+  putMeetingBrief: (record: MeetingBriefRecord) =>
+    run<void>(MEETING_BRIEFS, "readwrite", (s) => s.put(record)),
+  deleteMeetingBrief: (id: string) => run<void>(MEETING_BRIEFS, "readwrite", (s) => s.delete(id)),
 };

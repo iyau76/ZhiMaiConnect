@@ -17,6 +17,7 @@ import { CalendarPanel } from "@/components/calendar-panel";
 import { DemoDataControls } from "@/components/demo-data-controls";
 import { IntakePanel } from "@/components/intake-panel";
 import { ModelsPanel } from "@/components/models-panel";
+import { MeetingBriefDialog } from "@/components/meeting-brief-dialog";
 import { PageGuide } from "@/components/page-guide";
 import { PlanBoard } from "@/components/plan-board";
 import { PreflightPanel } from "@/components/preflight-panel";
@@ -28,6 +29,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { WelcomeCover } from "@/components/welcome-cover";
 
 import { t, useLang, initLang } from "@/lib/i18n";
+import type { MeetingBriefSourceRef } from "@/lib/face-db";
 import {
   ACTIVE_MODEL_PRESET_KEY,
   applySessionApiKeys,
@@ -65,6 +67,7 @@ type View =
   "today" | "intake" | "people" | "reminders" | "calendar" | "plan" | "models" | "settings";
 
 type WorkspaceFocus = TodayTarget & { nonce: number };
+type MeetingBriefRequest = { query?: string; personId?: string; nonce: number };
 
 const VIEW_SESSION_KEY = "zhimai.workspace.view.v1";
 const VIEWS = new Set<View>([
@@ -200,6 +203,7 @@ function Index() {
   const [view, setView] = useState<View>("today");
   const [retainedViews, setRetainedViews] = useState<ReadonlySet<View>>(() => new Set());
   const [workspaceFocus, setWorkspaceFocus] = useState<WorkspaceFocus | null>(null);
+  const [meetingBriefRequest, setMeetingBriefRequest] = useState<MeetingBriefRequest | null>(null);
   useLang();
   const NAV = getNav();
 
@@ -267,9 +271,35 @@ function Index() {
     openView(target.view, true);
   };
 
+  const openMeetingBriefSource = (source: MeetingBriefSourceRef, personId: string) => {
+    setMeetingBriefRequest(null);
+    if (source.kind === "event") {
+      openTodayTarget({ view: "calendar", recordType: "event", recordId: source.id });
+    } else if (source.kind === "reminder") {
+      openTodayTarget({ view: "reminders", recordType: "reminder", recordId: source.id });
+    } else if (source.kind === "task") {
+      openTodayTarget({ view: "plan", recordType: "task", recordId: source.id });
+    } else if (source.kind === "relation_assertion" || source.kind === "relation_projection") {
+      openTodayTarget({
+        view: "people",
+        recordType: "relation",
+        recordId: source.id,
+        personId,
+      });
+    } else {
+      openTodayTarget({ view: "people", recordType: "person", recordId: source.id });
+    }
+  };
+
   const renderWorkspace = (workspaceView: View) => {
     if (workspaceView === "today") {
-      return <TodayPanel onOpenIntake={() => openView("intake")} onOpenTarget={openTodayTarget} />;
+      return (
+        <TodayPanel
+          onOpenIntake={() => openView("intake")}
+          onOpenTarget={openTodayTarget}
+          onPrepareMeeting={(query) => setMeetingBriefRequest({ query, nonce: Date.now() })}
+        />
+      );
     }
     if (workspaceView === "intake") {
       return (
@@ -391,9 +421,20 @@ function Index() {
               recordId: reminderId,
             })
           }
+          onPrepareMeeting={(personId) => setMeetingBriefRequest({ personId, nonce: Date.now() })}
           focusPersonId={
             workspaceFocus?.view === "people" && workspaceFocus.recordType === "person"
               ? workspaceFocus.recordId
+              : undefined
+          }
+          focusRelationId={
+            workspaceFocus?.view === "people" && workspaceFocus.recordType === "relation"
+              ? workspaceFocus.recordId
+              : undefined
+          }
+          focusRelationPersonId={
+            workspaceFocus?.view === "people" && workspaceFocus.recordType === "relation"
+              ? workspaceFocus.personId
               : undefined
           }
           focusNonce={workspaceFocus?.view === "people" ? workspaceFocus.nonce : undefined}
@@ -518,6 +559,18 @@ function Index() {
       </div>
       <Toaster />
       <WelcomeCover />
+      {meetingBriefRequest && (
+        <MeetingBriefDialog
+          open
+          initialQuery={meetingBriefRequest.query}
+          initialPersonId={meetingBriefRequest.personId}
+          requestNonce={meetingBriefRequest.nonce}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setMeetingBriefRequest(null);
+          }}
+          onOpenSource={openMeetingBriefSource}
+        />
+      )}
     </div>
   );
 }

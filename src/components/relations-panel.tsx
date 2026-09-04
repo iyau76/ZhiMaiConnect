@@ -81,7 +81,10 @@ interface Props {
   onOpenIntake: () => void;
   onOpenEvent?: (eventId: string) => void;
   onOpenReminder?: (reminderId: string) => void;
+  onPrepareMeeting?: (personId: string) => void;
   focusPersonId?: string;
+  focusRelationId?: string;
+  focusRelationPersonId?: string;
   focusNonce?: number;
 }
 
@@ -107,7 +110,10 @@ export function RelationsPanel({
   onOpenIntake,
   onOpenEvent,
   onOpenReminder,
+  onPrepareMeeting,
   focusPersonId,
+  focusRelationId,
+  focusRelationPersonId,
   focusNonce,
 }: Props) {
   const [people, setPeople] = useState<PersonRecord[]>([]);
@@ -125,6 +131,7 @@ export function RelationsPanel({
   const [newNote, setNewNote] = useState("");
   const [editing, setEditing] = useState<PersonRecord | null>(null);
   const handledPersonFocus = useRef("");
+  const handledRelationFocus = useRef("");
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
   const [label, setLabel] = useState("");
@@ -225,6 +232,21 @@ export function RelationsPanel({
     handledPersonFocus.current = focusKey;
     setEditing(person);
   }, [focusNonce, focusPersonId, people]);
+
+  useEffect(() => {
+    if (!focusRelationId) return;
+    const focusKey = `${focusRelationId}:${focusNonce ?? 0}`;
+    if (handledRelationFocus.current === focusKey) return;
+    const relation = relations.find((record) => record.id === focusRelationId);
+    if (!relation) return;
+    handledRelationFocus.current = focusKey;
+    setSelectedRelationId(relation.id);
+    setSelectedId(
+      focusRelationPersonId === relation.fromId || focusRelationPersonId === relation.toId
+        ? focusRelationPersonId
+        : relation.fromId,
+    );
+  }, [focusNonce, focusRelationId, focusRelationPersonId, relations]);
 
   useEffect(() => {
     if (typeof localStorage !== "undefined") saveRelationGraphGrouping(localStorage, groupBy);
@@ -2012,7 +2034,10 @@ export function RelationsPanel({
           </div>
 
           {selected && (
-            <div className="space-y-2 rounded-xl border border-primary/30 bg-primary/5 p-3">
+            <section
+              aria-label={t("关系人物摘要")}
+              className="space-y-2 rounded-xl border border-primary/30 bg-primary/5 p-3"
+            >
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-medium">
                   {selected.person.name}
@@ -2021,14 +2046,24 @@ export function RelationsPanel({
                     {selected.person.profile?.title ? ` · ${selected.person.profile.title}` : ""}
                   </span>
                 </p>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 px-2 text-[11px]"
-                  onClick={() => setEditing(selected.person)}
-                >
-                  {t("打开人物卡")}
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() => onPrepareMeeting?.(selected.person.id)}
+                  >
+                    {t("准备见面")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() => setEditing(selected.person)}
+                  >
+                    {t("打开人物卡")}
+                  </Button>
+                </div>
               </div>
               {selected.links.length === 0 ? (
                 <p className="text-[11px] text-muted-foreground">{t("这个人还没有任何关系")}</p>
@@ -2106,7 +2141,7 @@ export function RelationsPanel({
                   </ul>
                 </div>
               )}
-            </div>
+            </section>
           )}
 
           {selectedRelation && (

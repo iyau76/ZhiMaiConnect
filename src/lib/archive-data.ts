@@ -14,6 +14,7 @@ import {
   type CollectionRecord,
   type EvidenceRecord,
   type LifeEventRecord,
+  type MeetingBriefRecord,
   type PersonRecord,
   type ProjectRecord,
   type ReferralPolicyRecord,
@@ -315,6 +316,53 @@ const reminderSchema = z
   })
   .strict();
 
+const meetingBriefSourceRefSchema = z
+  .object({
+    kind: z.enum([
+      "person",
+      "relation_assertion",
+      "relation_projection",
+      "event",
+      "reminder",
+      "task",
+    ]),
+    id,
+    revision: z.string(),
+  })
+  .strict();
+
+const meetingBriefLineSchema = z
+  .object({
+    text: z.string(),
+    sources: z.array(meetingBriefSourceRefSchema),
+  })
+  .strict();
+
+const meetingBriefSchema = z
+  .object({
+    id,
+    seriesId: id,
+    supersedesBriefId: id.optional(),
+    personId: id,
+    personName: z.string(),
+    title: z.string(),
+    sourceRevision: z.string(),
+    sourceRefs: z.array(meetingBriefSourceRefSchema),
+    content: z
+      .object({
+        profile: z.array(meetingBriefLineSchema),
+        recentEvents: z.array(meetingBriefLineSchema),
+        openItems: z.array(meetingBriefLineSchema),
+        relatedPeople: z.array(meetingBriefLineSchema),
+        talkingPoints: z.array(meetingBriefLineSchema),
+        gaps: z.array(z.string()),
+      })
+      .strict(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+  .strict();
+
 const derivedRelationSchema = z
   .object({
     id,
@@ -349,7 +397,7 @@ export const archiveV2Schema = z
       .object({
         app: z.literal("zhimai-connect"),
         appVersion: z.string(),
-        dataModelVersion: z.union([z.literal(11), z.literal(12)]),
+        dataModelVersion: z.union([z.literal(11), z.literal(12), z.literal(13)]),
       })
       .strict(),
     privacy: z
@@ -375,6 +423,7 @@ export const archiveV2Schema = z
         projects: z.array(projectSchema),
         lifeEvents: z.array(lifeEventSchema),
         reminders: z.array(reminderSchema),
+        meetingBriefs: z.array(meetingBriefSchema).default([]),
       })
       .strict(),
     projectionDiagnostics: z
@@ -405,6 +454,7 @@ export interface ArchiveV2Source {
   projects: ProjectRecord[];
   lifeEvents: LifeEventRecord[];
   reminders: ReminderRecord[];
+  meetingBriefs: MeetingBriefRecord[];
 }
 
 export interface ArchiveNormalizationResult {
@@ -544,6 +594,7 @@ export function assertArchiveIntegrity(archive: ArchiveV2) {
     ...duplicateIssues("projects", records.projects),
     ...duplicateIssues("lifeEvents", records.lifeEvents),
     ...duplicateIssues("reminders", records.reminders),
+    ...duplicateIssues("meetingBriefs", records.meetingBriefs),
     ...duplicateIssues(
       "projectionDiagnostics.derivedRelations",
       archive.projectionDiagnostics.derivedRelations,
@@ -709,6 +760,11 @@ export function assertArchiveIntegrity(archive: ArchiveV2) {
       ),
     );
   }
+  for (const record of records.meetingBriefs) {
+    issues.push(
+      ...missingRefIssues("meetingBriefs.personId", record.id, [record.personId], personIds),
+    );
+  }
 
   if (issues.length) throw new ArchiveValidationError("备份引用完整性校验失败", issues);
 }
@@ -723,7 +779,7 @@ export function createArchiveV2(
     generator: {
       app: "zhimai-connect",
       appVersion: options.appVersion ?? "0.1.0",
-      dataModelVersion: 12,
+      dataModelVersion: 13,
     },
     privacy: privacyManifest(source),
     records: {
@@ -740,6 +796,7 @@ export function createArchiveV2(
       projects: source.projects,
       lifeEvents: source.lifeEvents.map(stripLifeEvent),
       reminders: source.reminders,
+      meetingBriefs: source.meetingBriefs,
     },
     projectionDiagnostics: {
       importPolicy: "discard-and-rebuild",
@@ -949,6 +1006,7 @@ function emptySource(persons: PersonRecord[]): ArchiveV2Source {
     projects: [],
     lifeEvents: [],
     reminders: [],
+    meetingBriefs: [],
   };
 }
 
