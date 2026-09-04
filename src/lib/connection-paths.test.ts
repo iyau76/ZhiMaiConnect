@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PersonRecord, RelationRecord } from "./face-db";
 import {
+  automaticConnectionHopLimit,
   mentionedArchivePeople,
   rankConnectionPaths,
   rankTargetSideEntries,
@@ -190,6 +191,36 @@ describe("connection path ranking", () => {
         now: NOW,
       }),
     ).toHaveLength(1);
+  });
+
+  it("automatically reaches a five-hop path without a caller-owned fixed limit", () => {
+    const first = person("first", "第一联系人", 5);
+    const second = person("second", "第二联系人");
+    const third = person("third", "第三联系人");
+    const fourth = person("fourth", "第四联系人");
+    const destination = person("destination", "目标人物");
+    const result = rankConnectionPaths({
+      persons: [first, second, third, fourth, destination],
+      relations: [
+        relation("r1", first.id, second.id),
+        relation("r2", second.id, third.id),
+        relation("r3", third.id, fourth.id),
+        relation("r4", fourth.id, destination.id),
+      ],
+      events: [],
+      targetId: destination.id,
+      now: NOW,
+    });
+
+    expect(automaticConnectionHopLimit(5)).toBe(5);
+    expect(result[0]?.path?.personIds).toEqual([
+      first.id,
+      second.id,
+      third.id,
+      fourth.id,
+      destination.id,
+    ]);
+    expect(result[0]?.path?.relationIds).toEqual(["r1", "r2", "r3", "r4"]);
   });
 
   it("keeps a dense 40-person graph bounded at five hops", () => {

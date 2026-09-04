@@ -21,6 +21,18 @@ export interface RecommendationCapabilityMatch {
   deliverable: string;
   matchedTerms: string[];
   evidence: string[];
+  discovery: "lexical" | "semantic" | "both";
+}
+
+/**
+ * A model may nominate a person because it understands a stored fact even when
+ * the task and that fact share no words. The person id is restored locally from
+ * an opaque reference; quoted evidence still has to exist in the fact ledger.
+ */
+export interface RecommendationSemanticCandidate {
+  personId: string;
+  evidenceQuotes: string[];
+  reason?: string;
 }
 
 export interface CandidateRecommendation {
@@ -226,7 +238,23 @@ export function matchCapabilityEvidence(
     deliverable: slot.deliverable,
     matchedTerms,
     evidence,
+    discovery: "lexical",
   };
+}
+
+function verifiedSemanticEvidence(
+  candidate: RecommendationSemanticCandidate | undefined,
+  person: PersonRecord,
+) {
+  if (!candidate || candidate.personId !== person.id) return [];
+  const facts = personFacts(person).map((fact) => ({ fact, normalized: normalizedEvidence(fact) }));
+  const verified = candidate.evidenceQuotes.flatMap((quote) => {
+    const normalizedQuote = normalizedEvidence(quote);
+    if (normalizedQuote.length < 2) return [];
+    const fact = facts.find((entry) => entry.normalized.includes(normalizedQuote));
+    return fact ? [fact.fact] : [];
+  });
+  return [...new Set(verified)].slice(0, 3);
 }
 
 function taskDomainMatches(task: string, person: PersonRecord) {
@@ -421,12 +449,35 @@ export function rankCapabilityCandidates(
   persons: PersonRecord[],
   events: LifeEventRecord[],
   now = new Date(),
+  semanticCandidates: readonly RecommendationSemanticCandidate[] = [],
 ): CandidateRecommendation[] {
   const nowAt = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const semanticByPerson = new Map(
+    semanticCandidates.map((candidate) => [candidate.personId, candidate] as const),
+  );
   return persons
     .flatMap((person) => {
-      const match = matchCapabilityEvidence(slot, person);
-      if (!match) return [];
+      const lexicalMatch = matchCapabilityEvidence(slot, person);
+      const semanticCandidate = semanticByPerson.get(person.id);
+      const semanticEvidence = verifiedSemanticEvidence(semanticCandidate, person);
+      if (!lexicalMatch && !semanticEvidence.length) return [];
+      const discovery =
+        lexicalMatch && semanticEvidence.length
+          ? "both"
+          : semanticEvidence.length
+            ? "semantic"
+            : "lexical";
+      const match: RecommendationCapabilityMatch = {
+        slotId: slot.id,
+        label: slot.label,
+        deliverable: slot.deliverable,
+        matchedTerms: lexicalMatch?.matchedTerms ?? [],
+        evidence: [...new Set([...(lexicalMatch?.evidence ?? []), ...semanticEvidence])].slice(
+          0,
+          3,
+        ),
+        discovery,
+      };
       const interactions = recentEvents(person.id, events);
       const latest = interactions[0];
       const latestAt = latest ? dateAt(latest.date) : 0;
@@ -439,7 +490,8 @@ export function rankCapabilityCandidates(
         ? Math.max(1, Math.min(5, rawCloseness as number))
         : 1;
       const hasContact = Boolean(person.profile?.contact?.trim());
-      let score = match.matchedTerms.length * 20 + match.evidence.length * 5;
+      let score = match.matchedTerms.length * 18 + match.evidence.length * 5;
+      if (semanticEvidence.length) score += 34 + Math.min(12, semanticEvidence.length * 4);
       score += hasContact ? 10 : 0;
       score += (closeness - 1) * 2;
       if (ageDays !== null) score += ageDays <= 30 ? 6 : ageDays <= 180 ? 4 : 2;
@@ -449,6 +501,10 @@ export function rankCapabilityCandidates(
       if (!hasContact) {
         score -= 5;
         risks.push("缺少可用联系方式");
+      }
+      if (!Number.isFinite(rawCloseness)) {
+        score -= 3;
+        risks.push("未记录亲密度，联系把握有限");
       }
       if (!latest) risks.push("没有共同事件记录");
       if (ageDays !== null && ageDays > 730) {
@@ -478,7 +534,10 @@ export function rankCapabilityCandidates(
           confidence,
           reasons: [
             `能力槽“${slot.label}”：${slot.deliverable}`,
-            `本地档案逐字命中：${match.matchedTerms.join("、")}`,
+            ...(semanticEvidence.length
+              ? [`模型语义召回，本地已核对档案事实：${semanticEvidence.join("、")}`]
+              : []),
+            ...(match.matchedTerms.length ? [`词面证据：${match.matchedTerms.join("、")}`] : []),
             ...(closeness > 1 ? [`亲密度 ${closeness}/5`] : []),
             ...(latest ? [`最近互动：${latest.date} ${latest.title}`] : []),
           ],

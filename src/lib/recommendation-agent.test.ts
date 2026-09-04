@@ -416,7 +416,7 @@ describe("archive disclosure", () => {
     expect(askModelMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reports when a one-round budget is consumed by a non-terminal intent plan", async () => {
+  it("keeps local candidates visible when one round leaves no budget for model prose", async () => {
     askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
       (args[4] as (chunk: string) => void)(
         JSON.stringify({
@@ -433,22 +433,23 @@ describe("archive disclosure", () => {
       );
     });
 
-    await expect(
-      runRecommendationAgent({
-        preset: {} as never,
-        task: "找人审核合同",
-        persons: [person("legal", "法律顾问 合同审查")],
-        relations: [],
-        events: [],
-        budget: {
-          maxRounds: 1,
-          maxToolCalls: 2,
-          maxInputTokens: 10_000,
-          maxOutputTokens: 2_000,
-          maxWallTimeMs: 60_000,
-        },
-      }),
-    ).rejects.toThrow("至少需要 2 个模型轮次");
+    const result = await runRecommendationAgent({
+      preset: {} as never,
+      task: "找人审核合同",
+      persons: [person("legal", "法律顾问 合同审查")],
+      relations: [],
+      events: [],
+      budget: {
+        maxRounds: 1,
+        maxToolCalls: 2,
+        maxInputTokens: 10_000,
+        maxOutputTokens: 2_000,
+        maxWallTimeMs: 60_000,
+      },
+    });
+    expect(result.candidates[0]?.person.id).toBe("legal");
+    expect(result.answer).toContain("模型轮次已用完");
+    expect(result.answer).toContain("本地证据排序");
     expect(askModelMock).toHaveBeenCalledTimes(1);
   });
 
@@ -515,6 +516,92 @@ describe("archive disclosure", () => {
     expect(result.answer).toContain("急救保障：doctor");
     expect(result.answer).toContain("视觉物料：visual");
     expect(result.answer).not.toContain("friend");
+  });
+
+  it("uses model semantic recall while the local ledger verifies the cited profile fact", async () => {
+    const candidate = person("creator", "校园纪实影像创作者");
+    candidate.name = "唐悦";
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const prompt = String(args[1]);
+        expect(prompt).toContain("人物能力索引");
+        expect(prompt).toContain("校园纪实影像创作者");
+        const ref = prompt.match(/"personRef":"(ref_[0-9a-f]{32})","name":"唐悦"/)?.[1];
+        expect(ref).toBeTruthy();
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "recommendation_plan",
+            mode: "open",
+            slots: [
+              {
+                label: "现场留档",
+                deliverable: "留下活动现场画面",
+                searchTerms: ["拍照", "摄影跟拍"],
+                candidates: [
+                  {
+                    personRef: ref,
+                    evidenceQuotes: ["校园纪实影像创作者"],
+                    reason: "纪实影像经验可以迁移到活动记录",
+                  },
+                ],
+              },
+            ],
+          }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({ type: "final", outreachDraft: "想请你帮忙记录活动现场。" }),
+        );
+      });
+
+    const result = await runRecommendationAgent({
+      preset: {} as never,
+      task: "校园活动找谁拍照",
+      persons: [candidate],
+      relations: [],
+      events: [],
+    });
+
+    expect(result.candidates[0]?.person.id).toBe("creator");
+    expect(result.candidates[0]?.capabilityMatches?.[0].discovery).toBe("semantic");
+    expect(result.answer).toContain("校园纪实影像创作者");
+  });
+
+  it("renders local candidates immediately when the explanation response is malformed", async () => {
+    const candidate = person("legal", "法律顾问 合同审查");
+    askModelMock
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)(
+          JSON.stringify({
+            type: "recommendation_plan",
+            mode: "open",
+            slots: [
+              {
+                label: "合同审查",
+                deliverable: "核对合同风险",
+                searchTerms: ["法律顾问", "合同审查"],
+              },
+            ],
+          }),
+        );
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[4] as (chunk: string) => void)("这不是结构化 JSON");
+      });
+
+    const result = await runRecommendationAgent({
+      preset: {} as never,
+      task: "找人审核合同",
+      persons: [candidate],
+      relations: [],
+      events: [],
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.candidates[0]?.person.id).toBe("legal");
+    expect(result.answer).toContain("模型解释格式不完整");
+    expect(askModelMock).toHaveBeenCalledTimes(2);
   });
 
   it("counts intent planning and the reserved final answer in the same two-round budget", async () => {
@@ -737,23 +824,23 @@ describe("archive disclosure", () => {
       });
     const recorder = new MemoryAgentRunRecorder({ runId: "recommendation-final-only" });
 
-    await expect(
-      runRecommendationAgent({
-        preset: {} as never,
-        task: "找人审核合同",
-        persons: [candidate],
-        relations: [],
-        events: [],
-        recorder,
-        budget: {
-          maxRounds: 2,
-          maxToolCalls: 4,
-          maxInputTokens: 20_000,
-          maxOutputTokens: 4_000,
-          maxWallTimeMs: 60_000,
-        },
-      }),
-    ).rejects.toThrow("最终结论轮仍请求工具");
+    const result = await runRecommendationAgent({
+      preset: {} as never,
+      task: "找人审核合同",
+      persons: [candidate],
+      relations: [],
+      events: [],
+      recorder,
+      budget: {
+        maxRounds: 2,
+        maxToolCalls: 4,
+        maxInputTokens: 20_000,
+        maxOutputTokens: 4_000,
+        maxWallTimeMs: 60_000,
+      },
+    });
+    expect(result.candidates[0]?.person.id).toBe("legal");
+    expect(result.answer).toContain("最后一轮仍想继续查档案");
     expect(askModelMock).toHaveBeenCalledTimes(2);
     expect(recorder.events().filter((event) => event.kind === "tool_call")).toHaveLength(1);
   });

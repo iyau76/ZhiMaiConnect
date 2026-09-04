@@ -26,7 +26,7 @@ import {
 } from "./archive-agent-tools";
 import { ArchiveAgentReferenceSession } from "./archive-agent-reference-session";
 import { resolveSemanticRecordRef, type ResolvedRecordDomain } from "./archive-record-resolver";
-import { mentionedArchivePeople } from "./connection-paths";
+import { automaticConnectionHopLimit, mentionedArchivePeople } from "./connection-paths";
 import { renderGroundedRecommendation } from "./agent-output-grounding";
 import type { LifeEventRecord, PersonRecord, RelationRecord } from "./face-db";
 import {
@@ -105,9 +105,20 @@ interface RecommendationPlanResponse {
 }
 
 type RecommendationPlan =
-  | { mode: "open"; slots: RecommendationCapabilitySlot[] }
+  | {
+      mode: "open";
+      slots: RecommendationCapabilitySlot[];
+      semanticCandidates: RecommendationSemanticCandidateClaim[];
+    }
   | { mode: "target"; targetPersonId: string }
   | { mode: "ambiguous"; candidatePersonIds: string[]; question: string };
+
+interface RecommendationSemanticCandidateClaim {
+  slotId: string;
+  personId: string;
+  evidenceQuotes: string[];
+  reason?: string;
+}
 
 interface RankingRow {
   personRef: string;
@@ -160,6 +171,7 @@ export interface RecommendationAgentCheckpoint {
   targetResolution?: RecommendationTargetResolution;
   detectedTargetPersonId?: string;
   plannedSlots?: RecommendationCapabilitySlot[];
+  semanticCandidates?: RecommendationSemanticCandidateClaim[];
   rankingResult?: { rows?: RankingRow[]; safetyNotice?: string };
   targetSideFallback?: boolean;
   capabilityPlan?: RecommendationCapabilityPlan;
@@ -313,13 +325,14 @@ function localCandidateFrom(
   };
 }
 
-function capabilityPlanFrom(value: unknown): RecommendationCapabilitySlot[] {
+function capabilityPlanFrom(value: unknown, session: ArchiveAgentReferenceSession) {
   if (!Array.isArray(value)) throw new Error("开放任务缺少能力槽计划");
   if (value.length < 1 || value.length > 6) {
     throw new Error("能力槽必须在 1 到 6 个之间");
   }
   const labels = new Set<string>();
-  return value.map((raw, index) => {
+  const semanticCandidates: RecommendationSemanticCandidateClaim[] = [];
+  const slots = value.map((raw, index) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
       throw new Error(`第 ${index + 1} 个能力槽不是对象`);
     }
@@ -335,11 +348,69 @@ function capabilityPlanFrom(value: unknown): RecommendationCapabilitySlot[] {
     }
     if (labels.has(label)) throw new Error(`能力槽名称重复：${label}`);
     labels.add(label);
-    return { id: `capability-${index + 1}`, label, deliverable, searchTerms };
+    const id = `capability-${index + 1}`;
+    const candidates = Array.isArray(item.candidates) ? item.candidates.slice(0, 12) : [];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+      const claim = candidate as Record<string, unknown>;
+      const personRef = clipped(claim.personRef, 100);
+      const evidenceQuotes = Array.isArray(claim.evidenceQuotes)
+        ? [
+            ...new Set(
+              claim.evidenceQuotes
+                .map((quote) => clipped(quote, 300))
+                .filter((quote) => quote.length > 0),
+            ),
+          ].slice(0, 5)
+        : [];
+      if (!personRef || !evidenceQuotes.length) continue;
+      try {
+        semanticCandidates.push({
+          slotId: id,
+          personId: stableIdFor(session, personRef, "person"),
+          evidenceQuotes,
+          reason: clipped(claim.reason, 200) || undefined,
+        });
+      } catch {
+        // An invalid suggestion is isolated; the slot and other candidates remain usable.
+      }
+    }
+    return { id, label, deliverable, searchTerms };
   });
+  return { slots, semanticCandidates };
 }
 
-function recommendationPlanningPrompt(task: string, mentionedPeople: PersonRecord[]) {
+function capabilityDiscoveryIndex(
+  archive: ArchiveAgentData,
+  session: ArchiveAgentReferenceSession,
+  maxCharacters = 18_000,
+) {
+  const rows: Array<Record<string, unknown>> = [];
+  const payload = (profileIndex: Array<Record<string, unknown>>) =>
+    json({
+      personCount: archive.persons.length,
+      profileIndex,
+      profileIndexComplete: profileIndex.length === archive.persons.length,
+      nextProfileCursor: profileIndex.length < archive.persons.length ? profileIndex.length : null,
+    });
+  for (const person of archive.persons) {
+    const { id: _id, ...profile } = compactArchivePerson(person);
+    const candidate = {
+      personRef: personRefFor(session, person),
+      ...profile,
+    };
+    if (payload([...rows, candidate]).length > maxCharacters) break;
+    rows.push(candidate);
+  }
+  return payload(rows);
+}
+
+function recommendationPlanningPrompt(
+  task: string,
+  mentionedPeople: PersonRecord[],
+  archive: ArchiveAgentData,
+  session: ArchiveAgentReferenceSession,
+) {
   const mentioned = mentionedPeople.map((person) => ({
     name: person.name,
     aliases: (person.profile?.identities ?? []).map((identity) => identity.alias).filter(Boolean),
@@ -348,12 +419,15 @@ function recommendationPlanningPrompt(task: string, mentionedPeople: PersonRecor
     org: person.profile?.org,
     department: person.profile?.department,
   }));
-  return `你负责理解一项人际协作任务，决定它是在寻找通往某个档案人物的联系路径，还是在开放地寻找适合完成任务的人。你只做意图规划，不读取人物详情、不推荐人选、不计算路径。
+  return `你负责理解一项人际协作任务，决定它是在寻找通往某个档案人物的联系路径，还是在开放地寻找适合完成任务的人。你读取本轮给出的能力索引，提出语义候选和检索表达；不计算分数、关系路径或最终排序。
 
 <untrusted_task>${cleanArchiveText(task, 1_500)}</untrusted_task>
 
 问题中逐字出现的档案人物（只用于语义引用校验；人物名字本身不等于目标）：
 <untrusted_mentioned_people>${cleanArchiveText(json(mentioned), 2_000)}</untrusted_mentioned_people>
+
+人物能力索引（这是用户授权本轮分析的本地档案投影；personRef 只在本轮有效）：
+<untrusted_capability_index>${capabilityDiscoveryIndex(archive, session)}</untrusted_capability_index>
 
 判断规则：
 - 用户想接触、拜托、拜访、送礼给、向某个具体档案人物办事，或询问如何经人到达该人物：mode="target"，target 使用 {"kind":"person","name":"姓名","hints":{...}}。不要复制或生成数据库 ID。
@@ -361,11 +435,11 @@ function recommendationPlanningPrompt(task: string, mentionedPeople: PersonRecor
 - 确实无法判断多个已提及人物中谁是目标：mode="ambiguous"，用 candidates 列出语义人物引用并给出一句具体问题。不要因为出现多个人名就自动判歧义。
 - 没有提及档案人物时只能是 open。
 
-开放任务要拆成可由不同人承担的能力槽，每个槽必须对应一个独立交付物。简单任务只建一个槽；复合任务保留全部不可缺少的分工。searchTerms 填写 3 到 10 个可能真实出现在人物职位、标签、项目或备注中的短语，用于本地逐字检索能力证据；不得填写人名、关系亲疏、联系方式或虚构事实。
+开放任务要拆成可由不同人承担的能力槽，每个槽必须对应一个独立交付物。简单任务只建一个槽；复合任务保留全部不可缺少的分工。searchTerms 填写 3 到 10 个可能真实出现在人物职位、标签、项目或备注中的检索表达。若索引中有人在语义上适合，即使措辞与任务不同，也把他放进该槽的 candidates；personRef 必须逐字复制索引值，evidenceQuotes 必须逐字复制该人物索引中的真实字段值。不要把关系亲疏或有联系方式当作能力证据。索引不完整时不得假装看过未展示的人物，本地仍会用 searchTerms 检索全库。
 
 只输出一个 JSON 对象，不要 Markdown：
 目标：{"type":"recommendation_plan","mode":"target","target":{"kind":"person","name":"贾母"}}
-开放：{"type":"recommendation_plan","mode":"open","slots":[{"label":"场地协调","deliverable":"确认可容纳50人的户外场地与进撤场条件","searchTerms":["场地","活动运营","户外活动","进撤场"]}]}
+开放：{"type":"recommendation_plan","mode":"open","slots":[{"label":"活动记录","deliverable":"完成现场影像记录并交付照片","searchTerms":["活动摄影","现场拍摄","照片交付"],"candidates":[{"personRef":"ref_...","evidenceQuotes":["校园纪实影像创作者"],"reason":"纪实影像经验可迁移到活动记录"}]}]}
 歧义：{"type":"recommendation_plan","mode":"ambiguous","candidates":[{"kind":"person","name":"贾母"},{"kind":"person","name":"贾琏"}],"question":"你希望联系哪一位？"}`;
 }
 
@@ -373,6 +447,7 @@ function recommendationPlanFrom(
   value: unknown,
   mentionedPeople: PersonRecord[],
   archive: ArchiveAgentData,
+  session: ArchiveAgentReferenceSession,
 ): RecommendationPlan {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("AI 没有返回推荐规划");
@@ -423,7 +498,9 @@ function recommendationPlanFrom(
       question: clipped(response.question, 160) || "请选择你希望联系的目标人物。",
     };
   }
-  if (response.mode === "open") return { mode: "open", slots: capabilityPlanFrom(response.slots) };
+  if (response.mode === "open") {
+    return { mode: "open", ...capabilityPlanFrom(response.slots, session) };
+  }
   throw new Error("推荐规划的 mode 无效");
 }
 
@@ -433,9 +510,15 @@ async function requestRecommendationPlan(options: {
   archive: ArchiveAgentData;
   preset: ProviderPreset;
   runtime: AgentRuntime<ArchiveAgentServices>;
+  referenceSession: ArchiveAgentReferenceSession;
   trace: (event: AgentTraceEvent) => void;
 }) {
-  const prompt = recommendationPlanningPrompt(options.task, options.mentionedPeople);
+  const prompt = recommendationPlanningPrompt(
+    options.task,
+    options.mentionedPeople,
+    options.archive,
+    options.referenceSession,
+  );
   let answer = "";
   options.trace({ kind: "status", text: "模型正在判断任务意图并规划所需能力" });
   const decision = await options.runtime.runModelRound(
@@ -476,6 +559,7 @@ async function requestRecommendationPlan(options: {
     parseLooseJson<RecommendationPlanResponse>(decision.value),
     options.mentionedPeople,
     options.archive,
+    options.referenceSession,
   );
   options.trace({
     kind: "model",
@@ -809,6 +893,7 @@ export async function runRecommendationAgent(options: {
     const mentionedPeople = mentionedArchivePeople(options.task, options.persons);
     let detectedTarget: PersonRecord | undefined;
     let plannedSlots: RecommendationCapabilitySlot[] | undefined;
+    let semanticCandidates: RecommendationSemanticCandidateClaim[] = [];
     let targetResolution: RecommendationTargetResolution | undefined;
     let rankingResult: { rows?: RankingRow[]; safetyNotice?: string } = {
       rows: [],
@@ -825,6 +910,7 @@ export async function runRecommendationAgent(options: {
         ? personById.get(resume.detectedTargetPersonId)
         : undefined;
       plannedSlots = resume.plannedSlots;
+      semanticCandidates = resume.semanticCandidates ?? [];
       rankingResult = resume.rankingResult ?? rankingResult;
       targetSideFallback = resume.targetSideFallback ?? false;
       capabilityPlan = resume.capabilityPlan;
@@ -857,6 +943,7 @@ export async function runRecommendationAgent(options: {
         archive: data,
         preset: options.preset,
         runtime,
+        referenceSession,
         trace,
       });
       if (recommendationPlan.mode === "target") {
@@ -885,6 +972,7 @@ export async function runRecommendationAgent(options: {
         };
       } else {
         plannedSlots = recommendationPlan.slots;
+        semanticCandidates = recommendationPlan.semanticCandidates;
         targetResolution = {
           mode: "open",
           candidatePersonIds: mentionedPeople.map((person) => person.id),
@@ -903,10 +991,11 @@ export async function runRecommendationAgent(options: {
       });
     }
     if (resume?.phase !== "analysis" && detectedTarget) {
+      const maxHops = automaticConnectionHopLimit(options.persons.length);
       const rankingArgs = {
         targetPersonRef: personRefFor(referenceSession, detectedTarget),
         task: options.task,
-        maxHops: 3,
+        maxHops,
         limit: 3,
         includeInferred: options.includeInferredPaths === true,
       };
@@ -962,9 +1051,17 @@ export async function runRecommendationAgent(options: {
       const uncoveredSlotIds: string[] = [];
       const selectedByPerson = new Map<string, CandidateRecommendation>();
       for (const slot of slots) {
+        const slotSemanticCandidates = semanticCandidates
+          .filter((candidate) => candidate.slotId === slot.id)
+          .map((candidate) => ({
+            personRef: personRefFor(referenceSession, personById.get(candidate.personId)!),
+            evidenceQuotes: candidate.evidenceQuotes,
+            reason: candidate.reason,
+          }));
         const slotDecision = await runtime.executeTool("rank_task_candidates", {
           task: options.task,
           capability: slot,
+          semanticCandidates: slotSemanticCandidates,
           limit: 10,
         });
         if (slotDecision.status === "finalize") {
@@ -992,7 +1089,14 @@ export async function runRecommendationAgent(options: {
         assignments.push({ slotId: slot.id, personId: selected.person.id });
         const current = selectedByPerson.get(selected.person.id);
         const slotReason = `能力槽“${slot.label}”：${slot.deliverable}`;
-        const matchReason = `本地档案逐字命中：${selected.match.matchedTerms.join("、")}`;
+        const matchReasons = [
+          selected.match.discovery !== "lexical"
+            ? "模型识别到语义关联，本地已核对所引档案事实"
+            : "",
+          selected.match.matchedTerms.length
+            ? `词面证据：${selected.match.matchedTerms.join("、")}`
+            : "",
+        ].filter(Boolean);
         const slotEvidence = selected.match.evidence.map(
           (item) => `“${slot.label}”档案证据：${item}`,
         );
@@ -1007,7 +1111,7 @@ export async function runRecommendationAgent(options: {
               : current.confidence === "中" || selected.row.confidence === "中"
                 ? "中"
                 : "高";
-          current.reasons = [...new Set([...current.reasons, slotReason, matchReason])];
+          current.reasons = [...new Set([...current.reasons, slotReason, ...matchReasons])];
           current.evidence = [...new Set([...current.evidence, ...slotEvidence])];
           current.risks = [...new Set([...current.risks, ...selected.row.risks])];
           current.capabilityMatches = [...(current.capabilityMatches ?? []), selected.match];
@@ -1017,7 +1121,7 @@ export async function runRecommendationAgent(options: {
           person: selected.person,
           score: selected.row.score,
           confidence: selected.row.confidence,
-          reasons: [slotReason, matchReason],
+          reasons: [slotReason, ...matchReasons],
           evidence: slotEvidence,
           risks: selected.row.risks,
           mode: "open",
@@ -1083,7 +1187,7 @@ export async function runRecommendationAgent(options: {
             tool: "find_connection_paths",
             args: {
               targetPersonRef: personRefFor(referenceSession, detectedTarget),
-              maxHops: 3,
+              maxHops: automaticConnectionHopLimit(options.persons.length),
               includeInferred: options.includeInferredPaths === true,
             },
           },
@@ -1116,6 +1220,7 @@ export async function runRecommendationAgent(options: {
       targetResolution: structuredClone(targetResolution),
       detectedTargetPersonId: detectedTarget?.id,
       plannedSlots: plannedSlots ? structuredClone(plannedSlots) : undefined,
+      semanticCandidates: structuredClone(semanticCandidates),
       rankingResult: structuredClone(rankingResult),
       targetSideFallback,
       capabilityPlan: capabilityPlan ? structuredClone(capabilityPlan) : undefined,
@@ -1139,8 +1244,43 @@ export async function runRecommendationAgent(options: {
         finalOnly: absoluteRound === fullBudget.maxRounds,
       } satisfies AgentModelTurnPolicy;
     };
+    const completeFromLocalLedger = (
+      outreachDraft?: unknown,
+      explanationNotice?: string,
+    ): RecommendationAgentResult => {
+      const groundedAnswer = renderGroundedRecommendation({
+        task: options.task,
+        candidates: lockedCandidates,
+        mode: lockedMode,
+        targetName: detectedTarget?.name,
+        safetyNotice: rankingResult.safetyNotice,
+        outreachDraft,
+        allPersonNames: options.persons.map((person) => person.name),
+      });
+      const answerBody = capabilityPlan
+        ? `${capabilityCoverageText(capabilityPlan, lockedCandidates)}\n\n${groundedAnswer}`
+        : groundedAnswer;
+      const completedRounds =
+        (resume?.nextRound ? resume.nextRound - 1 : 0) + runtime.contextBudget.snapshot().rounds;
+      trace({ kind: "check", text: "候选、证据和路径已由本地档案生成" });
+      if (explanationNotice) trace({ kind: "error", text: explanationNotice });
+      trace({ kind: "done", text: `分析完成，共核对 ${completedRounds} 轮` });
+      return {
+        status: "completed",
+        candidates: lockedCandidates,
+        answer: explanationNotice ? `${explanationNotice}\n\n${answerBody}` : answerBody,
+        disclosureMode: plan.mode,
+        rounds: completedRounds,
+        run: finishRun(),
+        capabilityPlan,
+        targetResolution,
+      };
+    };
     if (!nextLogicalTurn()) {
-      throw new Error("任务意图规划已用完模型轮次；开放推荐或目标分析至少需要 2 个模型轮次");
+      return completeFromLocalLedger(
+        undefined,
+        "模型轮次已用完；候选与依据仍按本地档案显示，比较话术使用本地草稿。",
+      );
     }
     while (true) {
       options.signal?.throwIfAborted();
@@ -1200,56 +1340,27 @@ export async function runRecommendationAgent(options: {
         response = parseLooseJson<AgentResponse>(answer);
         formatCorrection = false;
       } catch {
-        if (formatCorrection || turn.finalOnly) {
-          throw new Error(
-            "AI 连续返回了无法解析的结构；可切回本地筛选，或换一个更擅长 JSON 的模型",
-          );
-        }
-        formatCorrection = true;
-        trace({ kind: "check", text: "返回格式不完整，正在自动要求模型修正" });
-        continue;
+        return completeFromLocalLedger(
+          undefined,
+          "模型解释格式不完整；候选、依据与路径不受影响，以下内容由本地档案生成。",
+        );
       }
 
       if (response.type === "final") {
-        const candidates = lockedCandidates;
-        const groundedAnswer = renderGroundedRecommendation({
-          task: options.task,
-          candidates,
-          mode: lockedMode,
-          targetName: detectedTarget?.name,
-          safetyNotice: rankingResult.safetyNotice,
-          outreachDraft: response.outreachDraft,
-          allPersonNames: options.persons.map((person) => person.name),
-        });
-        const finalAnswer = capabilityPlan
-          ? `${capabilityCoverageText(capabilityPlan, candidates)}\n\n${groundedAnswer}`
-          : groundedAnswer;
-        const completedRounds =
-          (resume?.nextRound ? resume.nextRound - 1 : 0) + runtime.contextBudget.snapshot().rounds;
-        trace({ kind: "check", text: "本地候选与证据已锁定，模型话术仅作补充" });
-        trace({ kind: "done", text: `分析完成，共核对 ${completedRounds} 轮` });
-        return {
-          status: "completed",
-          candidates,
-          answer: finalAnswer,
-          disclosureMode: plan.mode,
-          rounds: completedRounds,
-          run: finishRun(),
-          capabilityPlan,
-          targetResolution,
-        };
+        return completeFromLocalLedger(response.outreachDraft);
       }
 
       if (response.type !== "tool" || typeof response.tool !== "string") {
-        if (turn.finalOnly) {
-          throw new Error("AI 在保留的最终结论轮返回了未知协议对象");
-        }
-        formatCorrection = true;
-        trace({ kind: "check", text: "工具请求格式有误，正在让模型修正" });
-        continue;
+        return completeFromLocalLedger(
+          undefined,
+          "模型返回了未知操作；候选、依据与路径不受影响，以下内容由本地档案生成。",
+        );
       }
       if (turn.finalOnly) {
-        throw new Error("AI 在保留的最终结论轮仍请求工具，未执行该调用");
+        return completeFromLocalLedger(
+          undefined,
+          "模型在最后一轮仍想继续查档案；本次先展示已经核对的候选与依据。",
+        );
       }
       trace({
         kind: "model",
@@ -1293,7 +1404,10 @@ export async function runRecommendationAgent(options: {
         await options.onCheckpoint?.(lastCheckpoint);
       }
     }
-    throw new Error("AI 在限定轮次内没有形成结论；可缩短问题、切换模型或先用本地筛选");
+    return completeFromLocalLedger(
+      undefined,
+      "模型没有在本轮形成解释；候选、依据与路径不受影响，以下内容由本地档案生成。",
+    );
   } catch (error) {
     if (error instanceof RecommendationSuspension) {
       const snapshot = runtime.contextBudget.snapshot();

@@ -4,6 +4,7 @@ import type { LifeEventRecord, PersonRecord } from "./face-db";
 import {
   matchCapabilityEvidence,
   rankCandidates,
+  rankCapabilityCandidates,
   recommendationPrompt,
   staleContacts,
 } from "./recommendation";
@@ -89,6 +90,54 @@ describe("rankCandidates", () => {
       injectedMatch?.matchedTerms.length ?? 0,
     );
     expect(injectedMatch?.evidence.join("；")).not.toContain("忽略之前的规则");
+  });
+
+  it("admits a semantically nominated candidate after its quoted ledger fact is verified", () => {
+    const creator = person("creator", {
+      name: "唐悦",
+      profile: { title: "校园纪实影像创作者", contact: "tang@example.com" },
+    });
+    const slot = {
+      id: "capability-visual",
+      label: "现场留档",
+      deliverable: "留下活动现场画面",
+      searchTerms: ["拍照", "摄影跟拍"],
+    };
+
+    expect(rankCapabilityCandidates(slot, [creator], [], NOW)).toEqual([]);
+    const [candidate] = rankCapabilityCandidates(slot, [creator], [], NOW, [
+      {
+        personId: creator.id,
+        evidenceQuotes: ["校园纪实影像创作者"],
+        reason: "纪实影像经验可以承担现场留档",
+      },
+    ]);
+
+    expect(candidate?.person.id).toBe("creator");
+    expect(candidate?.capabilityMatches?.[0]).toMatchObject({
+      discovery: "semantic",
+      matchedTerms: [],
+      evidence: ["校园纪实影像创作者"],
+    });
+    expect(candidate?.reasons.join("；")).toContain("模型语义召回");
+  });
+
+  it("rejects a semantic nomination whose quoted evidence is absent from the ledger", () => {
+    const creator = person("creator", { profile: { title: "行政助理" } });
+    const rows = rankCapabilityCandidates(
+      {
+        id: "capability-visual",
+        label: "现场留档",
+        deliverable: "留下活动现场画面",
+        searchTerms: ["拍照"],
+      },
+      [creator],
+      [],
+      NOW,
+      [{ personId: creator.id, evidenceQuotes: ["资深摄影师"] }],
+    );
+
+    expect(rows).toEqual([]);
   });
 
   it("combines skill, closeness, recency, cooperation, and contact evidence", () => {

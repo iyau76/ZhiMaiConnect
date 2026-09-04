@@ -352,7 +352,6 @@ export function RemindersPanel({
       relations,
       events,
       targetId,
-      maxHops: 3,
       limit: 3,
       includeInferred,
     });

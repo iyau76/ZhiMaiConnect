@@ -475,6 +475,14 @@ const recommendationCapabilitySchema = z
   })
   .strict();
 
+const recommendationSemanticCandidateSchema = z
+  .object({
+    personRef: archiveHandleSchema,
+    evidenceQuotes: z.array(z.string().trim().min(1).max(300)).min(1).max(5),
+    reason: z.string().trim().max(200).optional(),
+  })
+  .strict();
+
 export const archiveAgentToolRegistry = new AgentToolRegistry<ArchiveAgentServices>();
 
 archiveAgentToolRegistry
@@ -795,14 +803,25 @@ archiveAgentToolRegistry
         .object({
           task: z.string().trim().min(1).max(1_500),
           capability: recommendationCapabilitySchema.optional(),
+          semanticCandidates: z.array(recommendationSemanticCandidateSchema).max(12).optional(),
           limit: z.number().int().min(1).max(10).optional(),
         })
         .strict(),
       permission: "private_read",
-      handler: ({ task, capability, limit = 5 }, { services, runId }) => {
+      handler: ({ task, capability, semanticCandidates = [], limit = 5 }, { services, runId }) => {
         const session = referenceSessionFor(services, runId);
         const candidates = capability
-          ? rankCapabilityCandidates(capability, services.archive.persons, services.archive.events)
+          ? rankCapabilityCandidates(
+              capability,
+              services.archive.persons,
+              services.archive.events,
+              new Date(),
+              semanticCandidates.map((candidate) => ({
+                personId: restoreArchiveHandle(session, candidate.personRef, "person"),
+                evidenceQuotes: candidate.evidenceQuotes,
+                reason: candidate.reason,
+              })),
+            )
           : rankCandidates(task, services.archive.persons, services.archive.events);
         return {
           rankingLocked: true,
@@ -812,7 +831,7 @@ archiveAgentToolRegistry
             .slice(0, limit)
             .map((candidate) => visibleRecommendationCandidate(candidate, session)),
           note: capability
-            ? "先在全库按槽位档案证据形成候选集合，再按证据强度与联系可行性排序；模型不能补人或调序。"
+            ? "语义候选须逐条命中本地档案事实；词面命中只增加证据分。候选再按证据强度与联系可行性稳定排序。"
             : "候选、分数和顺序由本地证据算法锁定；模型只能解释，不能调序或添加人物。",
         };
       },
@@ -835,7 +854,7 @@ archiveAgentToolRegistry
         .strict(),
       permission: "private_read",
       handler: (
-        { targetPersonRef, task = "", maxHops = 3, limit = 5, includeInferred = false },
+        { targetPersonRef, task = "", maxHops, limit = 5, includeInferred = false },
         { services, runId },
       ) => {
         const session = referenceSessionFor(services, runId);

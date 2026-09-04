@@ -46,6 +46,15 @@ interface FoundPath {
   cost: number;
 }
 
+/**
+ * Search as far as the available graph can possibly reach, capped at five
+ * human hand-offs. Small archives therefore pay only for their real size,
+ * while ordinary archives no longer stop at the historical three-hop limit.
+ */
+export function automaticConnectionHopLimit(personCount: number) {
+  return Math.max(1, Math.min(5, Math.floor(personCount)));
+}
+
 interface PathState {
   currentId: string;
   personIds: string[];
@@ -238,7 +247,10 @@ function displayPath(path: FoundPath, names: Map<string, string>) {
  */
 export function rankConnectionPaths(options: ConnectionPathOptions): CandidateRecommendation[] {
   const now = options.now ?? new Date();
-  const maxHops = Math.max(1, Math.min(5, Math.floor(options.maxHops ?? 3)));
+  const maxHops = Math.max(
+    1,
+    Math.min(5, Math.floor(options.maxHops ?? automaticConnectionHopLimit(options.persons.length))),
+  );
   const limit = Math.max(1, Math.min(20, Math.floor(options.limit ?? 5)));
   const target = options.persons.find((person) => person.id === options.targetId);
   if (!target) return [];
