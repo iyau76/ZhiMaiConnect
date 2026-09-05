@@ -98,6 +98,11 @@ export function carryManualState(
 
   return {
     ...result,
+    collections: carryEditedItems(
+      result.collections,
+      previous.collections,
+      (item) => item._draftId,
+    ),
     people,
     facts: carryEditedItems(result.facts, previous.facts, (item) => {
       const fact = item as IngestFact;

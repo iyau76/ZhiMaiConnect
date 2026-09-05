@@ -404,7 +404,7 @@ export function MeetingBriefDialog({
                     onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
                   />
                   <BriefSection
-                    title="未完成事项"
+                    title="约定与未完成事项"
                     lines={selectedBrief.content.openItems}
                     empty="当前没有关联的提醒或任务。"
                     onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}

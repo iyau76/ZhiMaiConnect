@@ -138,7 +138,7 @@ async function buildPeople(): Promise<ExportPayload> {
     event.kind ?? "",
     (event.personIds ?? []).map((id) => nameOf(id)).join("、"),
     event.place ?? "",
-    (event.detail ?? "").replace(/\s+/g, " "),
+    [event.timeText, event.detail].filter(Boolean).join(" · ").replace(/\s+/g, " "),
   ]);
 
   const reminderRows = reminders.map((reminder) => [

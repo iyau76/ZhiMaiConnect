@@ -88,6 +88,37 @@ function run(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
 }
 
 describe("projectToday", () => {
+  it("keeps a non-resumable intake draft visible until the user approves it", () => {
+    const result = projectToday({
+      today: "2026-09-05",
+      persons: [],
+      events: [],
+      reminders: [],
+      tasks: [],
+      proposals: [],
+      runs: [
+        run({
+          status: "awaiting_approval",
+          resumable: false,
+          entrypoint: "intake.organize",
+          proposalRefs: ["intake-draft:run-1"],
+        }),
+      ],
+    });
+    expect(result.urgent).toEqual([
+      expect.objectContaining({ id: "run:run-1", detail: "整理完成，等待你确认" }),
+    ]);
+    const completed = projectToday({
+      today: "2026-09-05",
+      persons: [],
+      events: [],
+      reminders: [],
+      tasks: [],
+      proposals: [],
+      runs: [run({ status: "completed", resumable: false })],
+    });
+    expect(completed.urgent).toEqual([]);
+  });
   it("projects source records without creating shadow task state", () => {
     const result = projectToday({
       today: "2026-09-05",

@@ -371,6 +371,8 @@ export interface LifeEventRecord {
   precision?: DatePrecision;
   /** 用户写下的原始时间说法，如「去年夏天」；date/dateEnd 只负责排序与定位。 */
   dateText?: string;
+  /** Time as supplied by the user, independent of calendar date precision. */
+  timeText?: string;
   title: string;
   detail?: string;
   place?: string;

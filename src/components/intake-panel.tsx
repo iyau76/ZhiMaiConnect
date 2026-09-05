@@ -107,6 +107,7 @@ import { isInferredRelationBasis, relationNeedsInferenceReview } from "@/lib/kin
 import { makeSource } from "@/lib/provenance";
 import { browserAgentRunOwnerId } from "@/lib/agent-run-owner";
 import { cn } from "@/lib/utils";
+import { compileIntakeCollections } from "@/lib/intake-collections";
 import {
   createInitialIntakeAgentCheckpoint,
   IntakeAgentSuspendedError,
@@ -191,6 +192,8 @@ function intakeReceiptHasChanges(batch: IntakeUndoBatch) {
     batch.createdEventIds.length > 0 ||
     batch.createdReminderIds.length > 0 ||
     batch.previousPeople.length > 0 ||
+    (batch.collectionUndo?.deleteCollectionIds?.length ?? 0) > 0 ||
+    (batch.collectionUndo?.collections?.length ?? 0) > 0 ||
     (batch.previousEvents?.length ?? 0) > 0
   );
 }
@@ -301,6 +304,7 @@ function decorateDraft(result: Draft, sourceSummary: string, material: string): 
   const grounded = enforceSensitiveFieldGrounding(result, material);
   return {
     ...grounded,
+    collections: grounded.collections?.map(decorate),
     people: (grounded.people ?? []).map(decorate),
     facts: (grounded.facts ?? []).map(decorate),
     relations: (grounded.relations ?? []).map(decorate),
@@ -405,6 +409,7 @@ function reviewItemsOf(value: Draft | null): DraftAuditFields[] {
         ...(value.events ?? []),
         ...(value.reminders ?? []),
         ...(value.evidence ?? []),
+        ...(value.collections ?? []),
       ]
     : [];
 }
@@ -654,6 +659,7 @@ export function IntakePanel({
   const [progress, setProgress] = useState(0);
   const [stashedAt, setStashedAt] = useState<number | null>(null);
   const [draftPersisted, setDraftPersisted] = useState(false);
+  const [stashLoaded, setStashLoaded] = useState(false);
   const [acceptAllOpen, setAcceptAllOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -661,6 +667,8 @@ export function IntakePanel({
   const [latestAgentRun, setLatestAgentRun] = useState<AgentRun | null>(null);
   const [durableIntake, setDurableIntake] = useState<IntakeSessionState | null>(null);
   const hydrationGeneration = useRef(0);
+  const hydratedRunId = useRef<string | null>(null);
+  const consumedRunFocus = useRef("");
   const recorderRef = useRef<Recorder | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const runInspectorRef = useRef<HTMLDivElement | null>(null);
@@ -691,6 +699,7 @@ export function IntakePanel({
 
   useEffect(() => {
     const stored = readStash();
+    setStashLoaded(true);
     if (!stored) return;
     setRaw(stored.raw);
     setSupplement(stored.supplement);
@@ -745,7 +754,7 @@ export function IntakePanel({
   }, [refreshArchiveSnapshot]);
 
   useEffect(() => {
-    if (!peopleLoaded || !proposalArtifactsLoaded) return;
+    if (!peopleLoaded || !proposalArtifactsLoaded || job.busy || job.result) return;
     let cancelled = false;
     const generation = ++hydrationGeneration.current;
     const hydrateRun = async () => {
@@ -756,11 +765,14 @@ export function IntakePanel({
       const active = ordered.find((run) =>
         ["running", "suspended", "awaiting_approval"].includes(run.status),
       );
-      const focusedRun = focusRunId
+      const focusKey = focusRunId ? `${focusRunId}:${focusNonce ?? 0}` : "";
+      const hasNewFocus = Boolean(focusKey && focusKey !== consumedRunFocus.current);
+      const focusedRun = hasNewFocus
         ? ordered.find((candidate) => candidate.id === focusRunId)
         : undefined;
       const visibleRun = focusedRun ?? active ?? ordered[0];
       if (!visibleRun) return;
+      if (!hasNewFocus && visibleRun.id === hydratedRunId.current) return;
       const [events, checkpoint] = await Promise.all([
         indexedDbAgentRunLedger.listEvents(visibleRun.id),
         visibleRun.latestCheckpointId
@@ -769,6 +781,8 @@ export function IntakePanel({
       ]);
       const restored = parseIntakeSessionState(checkpoint?.state);
       if (cancelled || generation !== hydrationGeneration.current) return;
+      hydratedRunId.current = visibleRun.id;
+      consumedRunFocus.current = focusKey;
       setLatestAgentRun(
         projectAgentRun(events, {
           id: visibleRun.id,
@@ -797,7 +811,12 @@ export function IntakePanel({
       }
       if (restored.review) {
         if (restored.review.draft) {
-          setDraft(prepareIdentityDecisions(restored.review.draft, existingPeople, existingEvents));
+          const stored = readStash();
+          const editable =
+            stored?.draft?._sourceRunId === visibleRun.id
+              ? stored.draft
+              : { ...restored.review.draft, _sourceRunId: visibleRun.id };
+          setDraft(prepareIdentityDecisions(editable, existingPeople, existingEvents));
         }
         setResolutionIssues(restored.review.resolutionIssues);
         setIntakeState(restored.review.intakeState);
@@ -815,7 +834,16 @@ export function IntakePanel({
     return () => {
       cancelled = true;
     };
-  }, [existingEvents, existingPeople, focusRunId, job.busy, peopleLoaded, proposalArtifactsLoaded]);
+  }, [
+    existingEvents,
+    existingPeople,
+    focusRunId,
+    focusNonce,
+    job.busy,
+    job.result,
+    peopleLoaded,
+    proposalArtifactsLoaded,
+  ]);
 
   useEffect(() => {
     const matchedProposal = focusProposalId && proposalEntryId === focusProposalId;
@@ -855,6 +883,7 @@ export function IntakePanel({
 
   /** 草稿状态变化后立即短暂防抖写入；15 秒仅作为静态页面兜底。 */
   const snapshot = useRef({
+    stashLoaded,
     raw,
     supplement,
     draft,
@@ -864,6 +893,7 @@ export function IntakePanel({
     attached,
   });
   snapshot.current = {
+    stashLoaded,
     raw,
     supplement,
     draft,
@@ -874,6 +904,7 @@ export function IntakePanel({
   };
   const persistSnapshot = useCallback(() => {
     const now = snapshot.current;
+    if (!now.stashLoaded) return;
     const empty =
       !now.raw.trim() &&
       !now.supplement.trim() &&
@@ -898,6 +929,7 @@ export function IntakePanel({
     const timer = window.setTimeout(persistSnapshot, 250);
     return () => window.clearTimeout(timer);
   }, [
+    stashLoaded,
     attached,
     draft,
     intakeState,
@@ -1077,6 +1109,7 @@ export function IntakePanel({
 
   /** 交给模块层跑：切到别的页签也继续整理，回来自动显示结果 */
   const organize = async (extra?: string, resumeState?: IntakeSessionState) => {
+    hydrationGeneration.current += 1;
     const effectiveExtra = resumeState?.extra ?? extra ?? null;
     const fullText = effectiveExtra ? `${raw}\n\n${effectiveExtra}` : raw;
     if (!fullText.trim()) {
@@ -1271,6 +1304,8 @@ export function IntakePanel({
           throw error;
         }
         if (!latestCheckpoint) throw new Error("录入任务没有建立初始断点");
+        hydratedRunId.current = durable.runId;
+        consumedRunFocus.current = focusRunId ? `${focusRunId}:${focusNonce ?? 0}` : "";
         setDurableIntake(sessionAt(durable.runId, latestCheckpoint, "running"));
 
         try {
@@ -1311,6 +1346,7 @@ export function IntakePanel({
           reportDurable(t("模型输出完成，正在解析结构化草稿"), "check");
           reportDurable(t("正在核对人物字段与原文证据"), "check");
           const decorated = decorateDraft(parsed, sourceSummary, fullText);
+          decorated._sourceRunId = durable.runId;
           let entryId: string | undefined;
           if (parsed.proposal) {
             const existing = intakeMutationCoordinator
@@ -1352,7 +1388,7 @@ export function IntakePanel({
             pendingProposalRefs,
             review,
           });
-          await durable.settle({
+          const settled = await durable.settle({
             status: pendingProposalRefs.length ? "awaiting_approval" : "completed",
             state,
             checkpointKind: pendingProposalRefs.length ? "awaiting_approval" : "safe_boundary",
@@ -1361,6 +1397,15 @@ export function IntakePanel({
             resumable: false,
             dependencyRefs: [{ scope: "archive", version: archiveVersion }],
           });
+          setLatestAgentRun(
+            projectAgentRun(durable.events(), {
+              id: durable.runId,
+              title: settled.run.title,
+              agentName: settled.run.agentName,
+              model: settled.run.providerRef.model,
+              status: settled.run.status,
+            }),
+          );
           setDurableIntake(state);
           return {
             draft: decorated,
@@ -1809,7 +1854,7 @@ export function IntakePanel({
       updatedAt: Date.now(),
     };
     const archiveVersion = await facesDb.getArchiveMutationRevision();
-    await continueDurableAgentRun({
+    const settled = await continueDurableAgentRun({
       repository: indexedDbAgentRunLedger,
       runId: currentSession.runId,
       archiveVersion,
@@ -1841,6 +1886,16 @@ export function IntakePanel({
         dependencyRefs: [{ scope: "archive", version: archiveVersion }],
       },
     });
+    const events = await indexedDbAgentRunLedger.listEvents(currentSession.runId);
+    setLatestAgentRun(
+      projectAgentRun(events, {
+        id: settled.run.id,
+        title: settled.run.title,
+        agentName: settled.run.agentName,
+        model: settled.run.providerRef.model,
+        status: settled.run.status,
+      }),
+    );
     setDurableIntake(state);
     setIntakeState(nextIntakeState);
   };
@@ -2144,6 +2199,7 @@ export function IntakePanel({
             events: (previous.events ?? []).map(accept),
             reminders: (previous.reminders ?? []).map(accept),
             evidence: (previous.evidence ?? []).map(accept),
+            collections: previous.collections?.map(accept),
           }
         : previous,
     );
@@ -2756,6 +2812,8 @@ export function IntakePanel({
           dateEnd: precision === "range" ? item.dateEnd || undefined : undefined,
           precision,
           dateText: precision === "day" ? undefined : item.timeText?.trim() || previous?.dateText,
+          timeText:
+            item.timeText !== undefined ? item.timeText.trim() || undefined : previous?.timeText,
           detail: item.detail !== undefined ? item.detail || undefined : previous?.detail,
           place: item.place !== undefined ? item.place || undefined : previous?.place,
           personIds:
@@ -2834,6 +2892,22 @@ export function IntakePanel({
         lifeEvents: [...pendingEvents.values()],
         reminders: pendingReminders,
       };
+      if (commitDraft.collections?.length) {
+        const [collections, memberships] = await Promise.all([
+          facesDb.listCollections(),
+          facesDb.listCollectionMemberships(),
+        ]);
+        const compiled = compileIntakeCollections({
+          drafts: commitDraft.collections,
+          collections,
+          memberships,
+          now: Date.now(),
+          resolvePerson: (member) =>
+            resolvePersonRef(member.person, member.personDraftId, member.personId)?.id,
+        });
+        Object.assign(mutationBatch, compiled.forward);
+        batch.collectionUndo = compiled.undo;
+      }
       if (draftProposalRef) {
         commitIntent = createIntakeCommitIntent({
           decisionId: `intake-decision:${durableIntake!.runId}`,
@@ -3366,6 +3440,66 @@ export function IntakePanel({
         >
           {draft.summary && (
             <p className="text-[11px] leading-relaxed text-muted-foreground">{draft.summary}</p>
+          )}
+
+          {(draft.collections?.length ?? 0) > 0 && (
+            <section className="space-y-2" aria-label={t("圈层草稿")}>
+              <h3 className="text-sm font-medium">{t("圈层草稿")}</h3>
+              <p className="text-xs text-muted-foreground">
+                {t("与人物一起确认入库；圈层成员会跟随你选择的具体档案。")}
+              </p>
+              {draft.collections!.map((collection, index) => (
+                <div key={collection._draftId} className="space-y-2 rounded-xl border p-3">
+                  <div className="flex gap-2">
+                    <Input
+                      aria-label={t("圈层名称")}
+                      value={collection.name}
+                      onChange={(event) =>
+                        setDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                collections: current.collections?.map((row, rowIndex) =>
+                                  rowIndex === index
+                                    ? mergeDraftPatch(row, { name: event.target.value })
+                                    : row,
+                                ),
+                              }
+                            : current,
+                        )
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() =>
+                        setDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                collections: current.collections?.filter(
+                                  (_, rowIndex) => rowIndex !== index,
+                                ),
+                              }
+                            : current,
+                        )
+                      }
+                    >
+                      {t("移除此项")}
+                    </Button>
+                  </div>
+                  <ul className="space-y-1 text-xs">
+                    {collection.memberships.map((member, memberIndex) => (
+                      <li key={memberIndex}>
+                        {member.action === "add" ? t("加入") : t("移出")}：
+                        {draft.people?.find((person) => person._draftId === member.personDraftId)
+                          ?.name ?? member.person}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </section>
           )}
 
           {(draft._groundingWarnings?.length ?? 0) > 0 && (

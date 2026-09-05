@@ -21,7 +21,12 @@ import type {
 } from "./face-db";
 import {
   parseIngestCandidate,
+  decodeSemanticPersonChanges,
+  decodeSemanticNarrativeChanges,
+  ingestEventSchema,
+  ingestReminderSchema,
   type IngestCandidate,
+  type IngestCollection,
   type IngestEvent,
   type IngestPerson,
   type IngestRelation,
@@ -75,6 +80,7 @@ interface ResolvedTask {
   collectionId?: string;
   collection?: CollectionRecord;
   membershipChanges?: Array<{ personId: string; action: "add" | "remove" }>;
+  draftMemberships?: IngestCollection["memberships"];
   classificationAssignments?: LocalCollectionClassificationAssignment[];
   proposalTargetIds?: string[];
 }
@@ -154,7 +160,7 @@ function eventDraftFromChanges(
           title: fields.title ?? event.title,
           detail: "detail" in fields ? fields.detail : event.detail,
           date: "date" in fields ? fields.date : event.date,
-          timeText: fields.timeText,
+          timeText: "timeText" in fields ? fields.timeText : event.timeText,
           dateEnd: "dateEnd" in fields ? fields.dateEnd : event.dateEnd,
           precision: "precision" in fields ? fields.precision : (event.precision ?? "day"),
           place: "place" in fields ? fields.place : event.place,
@@ -660,6 +666,7 @@ export function compileSemanticIntakePlan(options: {
       }
 
       const membershipChanges = new Map<string, "add" | "remove">();
+      const draftMemberships: IngestCollection["memberships"] = [];
       task.memberships.forEach((membership, index) => {
         const resolution = resolveSemanticRecordRef(membership.people, resolverSnapshot);
         if (resolution.status !== "resolved") {
@@ -668,15 +675,18 @@ export function compileSemanticIntakePlan(options: {
         }
         for (const person of resolution.candidates) {
           if (person.source === "workspace") {
-            soft.push({
-              taskId: task.id,
-              stage: "RESOLVE",
-              code: "unsupported",
-              message: `新人物“${person.label}”需先获得档案 ID，当前圈层提案暂不包含它`,
-              path: `memberships[${index}].people`,
+            draftMemberships.push({
+              person: person.label,
+              personDraftId: person.id,
+              action: membership.action,
             });
             continue;
           }
+          draftMemberships.push({
+            person: person.label,
+            personId: person.id,
+            action: membership.action,
+          });
           membershipChanges.set(person.id, membership.action);
         }
       });
@@ -684,6 +694,7 @@ export function compileSemanticIntakePlan(options: {
         personId,
         action,
       }));
+      data.draftMemberships = draftMemberships;
     }
 
     if (fatal.length) {
@@ -712,7 +723,8 @@ export function compileSemanticIntakePlan(options: {
     const changes = "changes" in task ? record(task.changes) : {};
     try {
       if (task.domain === "person") {
-        const { circle: _legacyCircle, ...personChanges } = changes;
+        const decoded = decodeSemanticPersonChanges(changes);
+        const personChanges = decoded.changes;
         if (task.intent === "create") {
           if (task.target.kind !== "person") throw new Error("新增人物目标不是 person 引用");
           const item = parseIngestCandidate(
@@ -732,6 +744,16 @@ export function compileSemanticIntakePlan(options: {
           item._identityChecked = true;
           item._identityReason = "语义引用已由本地完整档案唯一解析；等待用户核对";
           upsert(draft.people!, item, (person) => person.targetPersonId ?? person.name);
+        }
+        for (const [index, fact] of decoded.facts.entries()) {
+          draft.facts!.push({
+            ...fact,
+            person: data.target!.label,
+            _draftId: `draft:fact:${task.id}:field:${index}`,
+            ...(data.target!.source === "archive"
+              ? { personId: data.target!.id }
+              : { personDraftId: data.target!.id }),
+          });
         }
       } else if (task.domain === "fact") {
         if (task.intent === "update") {
@@ -802,14 +824,20 @@ export function compileSemanticIntakePlan(options: {
           draft.relations!.push(item);
         }
       } else if (task.domain === "event") {
-        const { people: _semanticPeople, ...eventChanges } = changes;
+        const { people: _semanticPeople, ...attributes } = changes;
+        const previousDetail = (data.target?.record as IngestEvent | undefined)?.detail;
+        const eventChanges = decodeSemanticNarrativeChanges(
+          attributes,
+          ingestEventSchema,
+          previousDetail,
+        );
         if (task.intent === "update" && data.target?.source === "archive") {
           const current = data.target.record as LifeEventRecord;
           const people =
             "people" in changes
               ? (data.people ?? [])
               : archivePeople(current.personIds, options.snapshot.persons);
-          const item = eventDraftFromChanges(current, changes, people);
+          const item = eventDraftFromChanges(current, eventChanges, people);
           item.targetEventId = current.id;
           item._eventChecked = true;
           item._eventReason = "语义引用已由本地完整档案唯一解析；等待用户核对";
@@ -843,7 +871,13 @@ export function compileSemanticIntakePlan(options: {
           draft.events!.push(item);
         }
       } else if (task.domain === "reminder") {
-        const { people: _semanticPeople, ...reminderChanges } = changes;
+        const { people: _semanticPeople, ...attributes } = changes;
+        const previousDetail = (data.target?.record as { detail?: string } | undefined)?.detail;
+        const reminderChanges = decodeSemanticNarrativeChanges(
+          attributes,
+          ingestReminderSchema,
+          previousDetail,
+        );
         if (task.intent === "update") {
           if (data.target?.source !== "workspace") {
             throw new Error("当前归档提醒更新尚未进入统一 mutation 域");
@@ -996,7 +1030,9 @@ export function compileSemanticIntakePlan(options: {
         const nextName = task.changes?.name ?? data.collection?.name ?? task.target.name;
         const nextKind =
           task.changes?.collectionKind ??
-          (data.collection?.kind === "context" ? "context" : "relationship_circle");
+          ((data.collection?.kind ?? task.target.collectionKind) === "context"
+            ? "context"
+            : "relationship_circle");
         const nextColor =
           task.changes && "color" in task.changes
             ? (task.changes.color ?? null)
@@ -1006,7 +1042,31 @@ export function compileSemanticIntakePlan(options: {
           data.collection.name !== nextName ||
           data.collection.kind !== nextKind ||
           (data.collection.color ?? null) !== nextColor;
-        if (replacementChanged || effectiveMemberships.length) {
+        const previousDraft = draft.collections?.find(
+          (row) =>
+            row.targetCollectionId === collectionId ||
+            (!data.collection && row.name === nextName && row.kind === nextKind),
+        );
+        if (previousDraft || data.draftMemberships?.some((member) => member.personDraftId)) {
+          const members = new Map(
+            (previousDraft?.memberships ?? []).map((member) => [
+              member.personDraftId ?? member.personId,
+              member,
+            ]),
+          );
+          for (const member of data.draftMemberships ?? [])
+            members.set(member.personDraftId ?? member.personId, member);
+          const item: IngestCollection = {
+            _draftId: previousDraft?._draftId ?? `draft:collection:${task.id}`,
+            targetCollectionId: previousDraft?.targetCollectionId ?? collectionId,
+            name: nextName,
+            kind: nextKind,
+            color: nextColor ?? undefined,
+            memberships: [...members.values()],
+          };
+          draft.collections ??= [];
+          upsert(draft.collections, item, (row) => `${row.kind}:${row.name}`);
+        } else if (replacementChanged || effectiveMemberships.length) {
           operations.push(
             createOrganizeCollectionOperation(mutationSnapshot, {
               collectionId,
@@ -1034,7 +1094,7 @@ export function compileSemanticIntakePlan(options: {
   }
 
   const finalState = state.finish();
-  draft.summary = parsed.plan.summary ?? draft.summary ?? "已根据本次材料生成待确认变更";
+  draft.summary = `已形成待确认内容：${draft.people?.length ?? 0} 人、${draft.relations?.length ?? 0} 条关系、${draft.events?.length ?? 0} 个事件、${draft.reminders?.length ?? 0} 条提醒、${draft.facts?.length ?? 0} 条补充信息、${operations.length + (draft.collections?.length ?? 0)} 项圈层变更。${finalState.issues.length ? `另有 ${finalState.issues.length} 项需要补充，详见待处理事项。` : ""}`;
   draft._revision = options.snapshot.workspace
     ? Math.max(1, Math.trunc(options.snapshot.workspace._revision ?? 1)) + 1
     : 1;

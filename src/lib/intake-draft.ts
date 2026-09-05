@@ -199,7 +199,25 @@ export interface IngestReminder extends IngestAuditFields {
 }
 
 /** One reviewable contract shared by text, file, image and voice intake. */
+export interface IngestCollection extends IngestAuditFields {
+  _draftId: string;
+  targetCollectionId: string;
+  name: string;
+  kind: "relationship_circle" | "context";
+  color?: string;
+  memberships: Array<{
+    person: string;
+    personDraftId?: string;
+    personId?: string;
+    action: "add" | "remove";
+  }>;
+}
+
 export interface IngestCandidate {
+  /** Owner of the editable review, so restoring a run cannot overwrite newer local edits. */
+  _sourceRunId?: string;
+  /** Locally compiled collection drafts may refer to people awaiting approval. */
+  collections?: IngestCollection[];
   people?: IngestPerson[];
   facts?: IngestFact[];
   relations?: IngestRelation[];
@@ -222,7 +240,7 @@ const confidenceSchema = z
 const shortText = z.string().max(500).optional();
 const stringList = z.array(z.string().max(300)).max(30).optional();
 
-const ingestPersonSchema = z
+export const ingestPersonSchema = z
   .object({
     name: z.string().max(200),
     note: z.string().max(2_000).optional(),
@@ -274,6 +292,49 @@ const ingestPersonSchema = z
   })
   .strict();
 
+/** Independent fields stay reviewable; unmodelled values use the existing fact draft channel. */
+function decodeSemanticFields(
+  input: Record<string, unknown>,
+  fields: Record<string, z.ZodTypeAny>,
+) {
+  const changes: Record<string, unknown> = {};
+  const facts: Array<{ key: string; value: string }> = [];
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined) continue;
+    const parsed = Object.hasOwn(fields, key) ? fields[key].safeParse(value) : undefined;
+    if (parsed?.success) changes[key] = parsed.data;
+    else
+      facts.push({
+        key: `待整理字段：${key}`,
+        value: typeof value === "string" ? value : JSON.stringify(value),
+      });
+  }
+  return { changes, facts };
+}
+
+export function decodeSemanticPersonChanges(input: Record<string, unknown>) {
+  const { circle: _legacyCircle, ...attributes } = input;
+  return decodeSemanticFields(attributes, ingestPersonSchema.shape);
+}
+
+/** Event/reminder extensions remain editable in their narrative, without inventing field aliases. */
+export function decodeSemanticNarrativeChanges(
+  input: Record<string, unknown>,
+  schema: z.AnyZodObject,
+  previousDetail?: string,
+) {
+  const decoded = decodeSemanticFields(input, schema.shape);
+  if (decoded.facts.length) {
+    decoded.changes.detail = [
+      decoded.changes.detail ?? previousDetail,
+      ...decoded.facts.map((fact) => `${fact.key}：${fact.value}`),
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return decoded.changes;
+}
+
 const ingestFactSchema = z
   .object({
     person: z.string().max(200),
@@ -300,7 +361,7 @@ const ingestRelationSchema = z
     confidence: normalizeRelationConfidence(relation.basis, relation.confidence),
   }));
 
-const ingestEventSchema = z
+export const ingestEventSchema = z
   .object({
     title: z.string().max(500),
     detail: z.string().max(2_000).optional(),
@@ -315,7 +376,7 @@ const ingestEventSchema = z
   })
   .strict();
 
-const ingestReminderSchema = z
+export const ingestReminderSchema = z
   .object({
     title: z.string().max(500),
     detail: z.string().max(2_000).optional(),

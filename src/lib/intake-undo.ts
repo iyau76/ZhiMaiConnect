@@ -1,4 +1,5 @@
 import { facesDb, type LifeEventRecord, type PersonRecord } from "./face-db";
+import type { IntakeCollectionUndo } from "./intake-collections";
 
 export interface IntakeUndoBatch {
   id: string;
@@ -12,6 +13,7 @@ export interface IntakeUndoBatch {
   previousPeople: PersonRecord[];
   /** Events overwritten by an approved update, kept for one-step rollback. */
   previousEvents?: LifeEventRecord[];
+  collectionUndo?: IntakeCollectionUndo;
 }
 
 let latestBatch: IntakeUndoBatch | null = null;
@@ -35,6 +37,7 @@ export function clearLatestIntakeBatch() {
 
 /** Roll back a concrete batch, including a batch that failed before it was checkpointed. */
 export async function rollbackIntakeBatch(batch: IntakeUndoBatch): Promise<void> {
+  if (batch.collectionUndo) await facesDb.applyArchiveMutationBatch(batch.collectionUndo);
   // Remove dependent records before people. deletePerson also prunes relations,
   // but the explicit order keeps rollback deterministic when a batch updates an
   // existing person instead of only creating new people.

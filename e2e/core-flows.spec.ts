@@ -188,7 +188,7 @@ test("批量接受只确认来源对齐关系，名称子串误配保持可见�
   const intakePanel = page.getByTestId("intake-panel");
   const relationCardsBeforeReload = page.locator('[data-draft-kind="relation"]');
   await expect(relationCardsBeforeReload).toHaveCount(2);
-  await expect(relationCardsBeforeReload.first()).toContainText("同时包含关系两端");
+  await expect(relationCardsBeforeReload.first()).toContainText("原依据已保留");
   await expect(intakePanel).toHaveAttribute("data-intake-draft-persisted", "true");
 
   const persistedDraft = await page.evaluate(() => {
@@ -209,7 +209,7 @@ test("批量接受只确认来源对齐关系，名称子串误配保持可见�
 
   const relationCards = page.locator('[data-draft-kind="relation"]');
   await expect(relationCards).toHaveCount(2);
-  await expect(relationCards.first()).toContainText("同时包含关系两端");
+  await expect(relationCards.first()).toContainText("原依据已保留");
 
   await page.getByRole("button", { name: /一键接受已对齐项/ }).click();
   const acceptAllDialog = page.getByTestId("intake-accept-all-dialog");
@@ -352,6 +352,13 @@ test("更新已有档案时，姓名变更会按预览实际写入", async ({ pa
   const target = page.getByRole("combobox", { name: "选择新建人物或更新已有档案" });
   await target.selectOption("existing-tangyue");
   await expect(target).toHaveValue("existing-tangyue");
+  await expect(page.getByTestId("intake-panel")).toHaveAttribute(
+    "data-intake-draft-persisted",
+    "true",
+  );
+  await page.reload();
+  await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
+  await expect(target).toHaveValue("existing-tangyue");
   await acceptAllDraftItems(page);
   await page.getByRole("button", { name: "确认入库" }).click();
 
@@ -431,6 +438,9 @@ test("人物卡可以手动新建圈层并把未分圈层人物加入其中", as
     source: string;
   }>(page, "collectionMemberships");
   expect(circles).toEqual([expect.objectContaining({ name: "同学", kind: "relationship_circle" })]);
+  await page.getByRole("combobox", { name: "按圈层筛选档案" }).selectOption(circles[0].id);
+  await expect(page.getByText("小雨", { exact: true })).toBeVisible();
+  await expect(page.getByText("没有匹配的档案", { exact: true })).toHaveCount(0);
   expect(memberships).toEqual([
     expect.objectContaining({
       collectionId: circles[0].id,

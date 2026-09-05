@@ -79,6 +79,49 @@ describe("intake agent semantic path", () => {
     askModelMock.mockReset();
   });
 
+  it("preserves a pronoun-based quote instead of replacing it with an unrelated sentence naming both people", async () => {
+    const basis = "原文：她和我的同事陆遥是好朋友。";
+    askModelMock.mockImplementationOnce(
+      answer({
+        version: 1,
+        type: "semantic_plan",
+        tasks: [
+          ...["许星", "陆遥"].map((name) => ({
+            id: name,
+            domain: "person",
+            intent: "create",
+            target: { kind: "person", name },
+            changes: {},
+          })),
+          {
+            id: "friends",
+            domain: "relation",
+            intent: "create",
+            target: {
+              kind: "relation",
+              from: { kind: "person", name: "许星" },
+              to: { kind: "person", name: "陆遥" },
+            },
+            changes: { label: "朋友", basis },
+          },
+        ],
+      }),
+    );
+    const sourceMaterial = "许星是我的邻居。她和我的同事陆遥是好朋友。把许星和陆遥放到读书会圈层。";
+    const result = await runIntakeAgent({
+      preset,
+      extractionPrompt: sourceMaterial,
+      sourceMaterial,
+      persons: [],
+      relations: [],
+      events: [],
+      includeArchive: true,
+    });
+    expect(result.relations?.[0].basis).toBe(basis);
+    expect(result.relations?.[0]._relationReason).toContain("原依据已保留");
+    expect(askModelMock).toHaveBeenCalledTimes(1);
+  });
+
   it("asks for one semantic plan without exposing archive IDs or tool-writing instructions", async () => {
     askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
       const prompt = String(args[1]);

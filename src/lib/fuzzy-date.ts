@@ -43,6 +43,13 @@ export function formatFuzzy(event: LifeEventRecord) {
   return `${left} — ${right}`;
 }
 
+/** Display date and independently recorded time without affecting date sorting. */
+export function formatEventTime(event: LifeEventRecord) {
+  const date = formatFuzzy(event);
+  const time = event.timeText?.trim();
+  return time && time !== event.dateText?.trim() ? `${date} · ${time}` : date;
+}
+
 /** 是否精确到天（精确的在日历上高亮标注，模糊的走时间轴） */
 export function isExact(event: LifeEventRecord) {
   return precisionOf(event) === "day";

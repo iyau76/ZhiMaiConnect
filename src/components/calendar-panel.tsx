@@ -31,6 +31,7 @@ import { askText, parseLooseJson } from "@/lib/ai-text";
 import {
   eventSpan,
   formatFuzzy,
+  formatEventTime,
   fuzzyPrompt,
   isExact,
   normalizeFuzzy,
@@ -73,6 +74,7 @@ export function CalendarPanel({
   const [precision, setPrecision] = useState<DatePrecision>("day");
   /** 不记得具体哪天时，用户随手写的一句时间描述 */
   const [fuzzyText, setFuzzyText] = useState("");
+  const [timeText, setTimeText] = useState("");
   const [fuzzyHint, setFuzzyHint] = useState("");
   const [title, setTitle] = useState("");
 
@@ -204,6 +206,7 @@ export function CalendarPanel({
     setPersonQuery("");
     setPhotos([]);
     setFuzzyText("");
+    setTimeText("");
     setFuzzyHint("");
   };
 
@@ -214,6 +217,7 @@ export function CalendarPanel({
     setYear(Number(event.date.slice(0, 4)));
     setMonth(Number(event.date.slice(5, 7)) - 1);
     setFuzzyText(precisionOf(event) === "day" ? "" : formatFuzzy(event));
+    setTimeText(event.timeText ?? "");
     setFuzzyHint("");
     setTitle([event.title, event.detail].filter(Boolean).join("\n"));
     setWithIds(event.personIds ?? []);
@@ -303,6 +307,9 @@ export function CalendarPanel({
       dateEnd,
       precision: stored,
       dateText: stored === "day" ? undefined : fuzzyText.trim(),
+      timeText: timeText.trim() || undefined,
+      place: previous?.place,
+      kind: previous?.kind,
       title: (head || raw).slice(0, 60),
       detail: body || undefined,
       personIds: withIds,
@@ -412,15 +419,15 @@ export function CalendarPanel({
       )}
     >
       <div className="min-w-0">
-        {showDate && (
+        {(showDate || event.timeText) && (
           <p
             className={cn(
               "text-[11px]",
               isExact(event) ? "font-medium text-primary" : "text-muted-foreground",
             )}
           >
-            {formatFuzzy(event)}
-            {!isExact(event) && ` · ${t("大概")}`}
+            {showDate ? formatEventTime(event) : event.timeText}
+            {showDate && !isExact(event) && ` · ${t("大概")}`}
           </p>
         )}
         <p className="text-sm">{event.title}</p>
@@ -655,9 +662,7 @@ export function CalendarPanel({
           )}
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          {t(
-            "记不清哪天没关系，选「不记得具体哪天」，随手写句「去年夏天」，AI 会自己放到时间轴上。",
-          )}
+          {t("记不清哪天，可以写「去年夏天」，我们会整理到时间轴；复杂说法由 AI 辅助理解。")}
         </p>
 
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -698,6 +703,16 @@ export function CalendarPanel({
             </div>
           )}
         </div>
+
+        <label className="mt-3 block space-y-1 text-xs">
+          <span>{t("具体时间（可选）")}</span>
+          <Input
+            value={timeText}
+            onChange={(event) => setTimeText(event.target.value)}
+            maxLength={500}
+            placeholder={t("例如：下午3点、午饭后")}
+          />
+        </label>
 
         {precision === "day" && (dayMarks.birthdays.length > 0 || dayMarks.festival) && (
           <p className="mt-2 text-xs text-primary">

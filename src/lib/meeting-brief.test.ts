@@ -85,6 +85,60 @@ function input() {
 }
 
 describe("meeting brief projection", () => {
+  it("separates future and ongoing events from prior conversations", () => {
+    const data = input();
+    data.events.push({
+      id: "future",
+      date: "2026-09-08",
+      timeText: "下午3点",
+      title: "书店再聊",
+      personIds: ["tang"],
+      createdAt: at,
+    });
+    data.events.push({
+      id: "range",
+      date: "2026-09-01",
+      dateEnd: "2026-09-10",
+      precision: "range",
+      title: "展览筹备期",
+      personIds: ["tang"],
+      createdAt: at,
+    });
+    const brief = buildMeetingBrief(data, "tang", { now: at });
+    expect(brief.content.recentEvents).toHaveLength(1);
+    expect(brief.content.openItems.some((item) => item.text.includes("下午3点"))).toBe(true);
+    expect(
+      brief.content.talkingPoints.some(
+        (item) => item.text.includes("书店再聊") || item.text.includes("展览筹备期"),
+      ),
+    ).toBe(false);
+  });
+
+  it("uses confirmed ego relations when the legacy profile relation is empty", () => {
+    const data: MeetingBriefInput = input();
+    data.persons = [...data.persons, { ...person("zhimai:self", "我"), entityRole: "ego" }];
+    data.persons[0].profile!.relation = "";
+    data.relations = [
+      ...data.relations,
+      {
+        id: "ego-relation",
+        fromId: "zhimai:self",
+        toId: "tang",
+        label: "大学室友",
+        recordType: "assertion",
+        confirmationStatus: "confirmed",
+        createdAt: at,
+      },
+    ];
+    const brief = buildMeetingBrief(data, "tang", { now: at });
+    expect(brief.content.gaps).not.toContain("还没记录和我的关系");
+    expect(
+      brief.content.profile.some(
+        (item) =>
+          item.text.includes("大学室友") && item.sources.some((ref) => ref.id === "ego-relation"),
+      ),
+    ).toBe(true);
+  });
   it("builds a saved snapshot with fact-level source references and separated suggestions", () => {
     const brief = buildMeetingBrief(input(), "tang", { id: "brief-1", now: at });
 

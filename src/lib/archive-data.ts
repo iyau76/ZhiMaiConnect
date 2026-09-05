@@ -290,6 +290,7 @@ const lifeEventSchema = z
     dateEnd: z.string().optional(),
     precision: z.enum(["day", "month", "year", "range"]).optional(),
     dateText: z.string().optional(),
+    timeText: z.string().max(500).optional(),
     title: z.string(),
     detail: z.string().optional(),
     place: z.string().optional(),

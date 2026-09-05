@@ -237,13 +237,19 @@ export function projectToday(input: TodayProjectionInput): TodayProjection {
   }
 
   for (const run of input.runs) {
-    if (!run.resumable || proposalRunIds.has(run.id)) continue;
+    if (proposalRunIds.has(run.id)) continue;
+    if (!run.resumable && run.status !== "awaiting_approval") continue;
     if (!new Set(["running", "suspended", "awaiting_approval"]).has(run.status)) continue;
-    open.push({
+    const waitingForApproval = run.status === "awaiting_approval";
+    (waitingForApproval ? urgent : open).push({
       id: `run:${run.id}`,
       kind: "run",
       title: run.title || "未完成的 AI 任务",
-      detail: run.status === "suspended" ? "已暂停，可以继续" : "仍在处理中",
+      detail: waitingForApproval
+        ? "整理完成，等待你确认"
+        : run.status === "suspended"
+          ? "已暂停，可以继续"
+          : "仍在处理中",
       personIds: [],
       target: {
         view: viewForEntrypoint(run.entrypoint),

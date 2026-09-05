@@ -48,6 +48,13 @@ export function ensureIntakeWorkspace(candidate: IngestCandidate): IngestCandida
       personDraftId: remapPersonRef(warning.personDraftId) ?? warning.personDraftId,
     })),
     people,
+    collections: candidate.collections?.map((collection) => ({
+      ...collection,
+      memberships: collection.memberships.map((member) => ({
+        ...member,
+        personDraftId: remapPersonRef(member.personDraftId),
+      })),
+    })),
     facts: (candidate.facts ?? []).map((fact) =>
       withRecordRef("fact", {
         ...fact,
@@ -129,6 +136,14 @@ export function intakeWorkspaceView(candidate: IngestCandidate) {
   const workspace = ensureIntakeWorkspace(candidate);
   return {
     revision: workspace._revision,
+    collections: workspace.collections?.map((collection) => ({
+      name: collection.name,
+      kind: collection.kind,
+      memberships: collection.memberships.map((member) => ({
+        person: member.person,
+        action: member.action,
+      })),
+    })),
     people: (workspace.people ?? []).map(publicPerson),
     facts: (workspace.facts ?? []).map(({ _draftId, _audit, personId: _personId, ...value }) => ({
       recordRef: _draftId,

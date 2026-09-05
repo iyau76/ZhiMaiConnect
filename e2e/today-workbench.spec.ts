@@ -20,6 +20,9 @@ test("今天页从源记录汇总事项，并回到同一事件完成原位编�
       {
         id: "event-today",
         date: "2026-09-05",
+        timeText: "下午3点",
+        place: "书店",
+        kind: "meeting",
         title: "讨论校园记忆展",
         personIds: ["person-tang"],
         createdAt: NOW,
@@ -56,13 +59,20 @@ test("今天页从源记录汇总事项，并回到同一事件完成原位编�
   await page.locator('[data-today-item-id="event:event-today"]').click();
   await expect(page.getByRole("heading", { name: "编辑这件事" })).toBeVisible();
   const editor = page.locator("[data-event-editor]");
+  await expect(editor.getByRole("textbox", { name: "具体时间（可选）" })).toHaveValue("下午3点");
   await expect(editor.getByRole("textbox", { name: /发生了什么/ })).toHaveValue("讨论校园记忆展");
   await editor.getByRole("textbox", { name: /发生了什么/ }).fill("确认校园记忆展拍摄分工");
   await editor.getByRole("button", { name: "保存修改" }).click();
 
   const events = await readIndexedDbStore<{ id: string; title: string }>(page, "lifeEvents");
   expect(events).toEqual([
-    expect.objectContaining({ id: "event-today", title: "确认校园记忆展拍摄分工" }),
+    expect.objectContaining({
+      id: "event-today",
+      title: "确认校园记忆展拍摄分工",
+      timeText: "下午3点",
+      place: "书店",
+      kind: "meeting",
+    }),
   ]);
 
   await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
@@ -75,6 +85,30 @@ test("今天页从源记录汇总事项，并回到同一事件完成原位编�
   await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
   await page.locator('[data-today-item-id="task:task-open"]').click();
   await expect(page.locator('[data-task-id="task-open"]')).toHaveClass(/ring-2/);
+  await page.getByRole("button", { name: "编辑任务：补充展览预算" }).click();
+  const taskEditor = page.getByRole("dialog");
+  await taskEditor.getByRole("textbox", { name: "任务标题" }).fill("确认印刷报价");
+  await taskEditor.getByRole("textbox", { name: "任务详情" }).fill("向两家印刷店询价");
+  await taskEditor.getByLabel("截止日期").fill("2026-09-09");
+  await taskEditor.getByLabel("负责人", { exact: true }).fill("唐悦");
+  await taskEditor.getByLabel("优先级").selectOption("high");
+  await taskEditor.getByRole("checkbox", { name: "唐悦" }).check();
+  await taskEditor.getByRole("button", { name: "保存任务" }).click();
+  await expect(taskEditor).toBeHidden();
+  await page.reload();
+  await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
+  expect(await readIndexedDbStore(page, "tasks")).toEqual([
+    expect.objectContaining({
+      id: "task-open",
+      title: "确认印刷报价",
+      detail: "向两家印刷店询价",
+      due: "2026-09-09",
+      assignee: "唐悦",
+      priority: "high",
+      status: "doing",
+      personIds: ["person-tang"],
+    }),
+  ]);
 
   await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
   await page.locator('[data-today-item-id="birthday:person-tang"]').click();

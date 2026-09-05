@@ -417,9 +417,9 @@ export function RelationsPanel({
     }
   };
 
-  /** 档案页：可用标签（预设 + 数据里已经出现过的） */
+  /** Only offer tags actually present; circle membership has its own shared filter. */
   const allTags = useMemo(() => {
-    const set = new Set<string>(presetTagLabels());
+    const set = new Set<string>();
     for (const person of people) for (const tag of tagsOf(person)) set.add(tag);
     return [...set];
   }, [people]);
@@ -434,6 +434,14 @@ export function RelationsPanel({
   const filteredPeople = useMemo(() => {
     const q = query.trim().toLowerCase();
     return people.filter((person) => {
+      if (
+        collectionFilterId &&
+        !collectionMemberships.some(
+          (membership) =>
+            membership.collectionId === collectionFilterId && membership.personId === person.id,
+        )
+      )
+        return false;
       const tags = tagsOf(person);
       if (filterTags.length && !filterTags.every((tag) => tags.includes(tag))) return false;
       if (!q) return true;
@@ -452,7 +460,7 @@ export function RelationsPanel({
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [people, query, filterTags]);
+  }, [people, query, filterTags, collectionFilterId, collectionMemberships]);
 
   const allChecked =
     filteredPeople.length > 0 && filteredPeople.every((person) => checkedIds.includes(person.id));
@@ -1358,7 +1366,28 @@ export function RelationsPanel({
                 className="pl-9"
               />
             </div>
+            <label className="flex items-center gap-2 text-xs">
+              {t("圈层 / 集合")}
+              <select
+                aria-label={t("按圈层筛选档案")}
+                className="h-8 rounded-md border border-border bg-background px-2"
+                value={collectionFilterId ?? ""}
+                onChange={(event) => setCollectionFilterId(event.target.value || null)}
+              >
+                <option value="">{t("全部人物")}</option>
+                {collections
+                  .filter((collection) => collection.kind !== "computed_community")
+                  .map((collection) => (
+                    <option key={collection.id} value={collection.id}>
+                      {collection.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
             <div className="flex flex-wrap gap-1.5">
+              {allTags.length > 0 && (
+                <span className="py-1 text-[11px] text-muted-foreground">{t("标签")}</span>
+              )}
               {allTags.map((tag) => {
                 const on = filterTags.includes(tag);
                 return (
@@ -1381,10 +1410,13 @@ export function RelationsPanel({
                   </button>
                 );
               })}
-              {filterTags.length > 0 && (
+              {(filterTags.length > 0 || collectionFilterId) && (
                 <button
                   type="button"
-                  onClick={() => setFilterTags([])}
+                  onClick={() => {
+                    setFilterTags([]);
+                    setCollectionFilterId(null);
+                  }}
                   className="rounded-full px-2 py-1 text-[11px] text-muted-foreground hover:underline"
                 >
                   <X className="mr-0.5 inline size-3" aria-hidden="true" />
@@ -1564,7 +1596,7 @@ export function RelationsPanel({
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-medium">{t("我的集合")}</span>
               <span className="text-[11px] text-muted-foreground">
-                {t("集合可以重叠，只用于筛选和整理，不决定图上的空间位置。")}
+                {t("一个人可以属于多个圈层；关系圈层参与圈层布局，场景集合用于筛选。")}
               </span>
               {collectionFilterId && (
                 <button

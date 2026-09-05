@@ -25,7 +25,9 @@ import type {
   RelationRecord,
   ReminderRecord,
 } from "./face-db";
-import type { IngestCandidate, IngestRelation } from "./intake-draft";
+import { ingestPersonSchema, type IngestCandidate, type IngestRelation } from "./intake-draft";
+import { describeAgentToolInput } from "./agent-tool-registry";
+import { ingestEventSchema, ingestReminderSchema } from "./intake-draft";
 import { askModel } from "./vision-client";
 import type { ProviderPreset } from "./vision-providers";
 import { ensureIntakeWorkspace, intakeWorkspaceView } from "./intake-workspace";
@@ -43,6 +45,7 @@ import type { SemanticIntakeIssue, SemanticIntakeTaskSnapshot } from "./intake-t
 import {
   parseSemanticCollectionClassificationBatch,
   parseSemanticIntakePlan,
+  organizeCollectionTaskSchema,
   type SemanticIntakeTask,
 } from "./intake-semantic-plan";
 import { resolveSemanticRecordRef } from "./archive-record-resolver";
@@ -128,13 +131,6 @@ type RelationClaimIssue = {
   message: string;
 };
 
-function sourcePassages(sourceMaterial: string) {
-  return (
-    sourceMaterial.match(/[^。！？!?；;\n]+[。！？!?；;]?/gu)?.map((passage) => passage.trim()) ??
-    []
-  ).filter(Boolean);
-}
-
 function personMentionIndex(passage: string, personName: string, personNames: string[]) {
   const target = compactClaimText(personName);
   if (!target) return -1;
@@ -206,20 +202,10 @@ function relationTextSupportsEndpoints(
   return false;
 }
 
-function passageForRelation(
-  sourceMaterial: string,
-  relation: IngestRelation,
-  personNames: string[],
-) {
-  return sourcePassages(sourceMaterial)
-    .filter((passage) => relationTextSupportsEndpoints(passage, relation, personNames))
-    .sort((left, right) => left.length - right.length)[0];
-}
-
 /**
  * Evidence wording is an audit concern, not a reason to regenerate a complete plan.
- * The compiler aligns paraphrased quotes to source passages when possible and keeps
- * unresolved claims visible as pending draft rows with an explicit reason.
+ * Keep the model's quote intact. Local name matching cannot choose a replacement
+ * source sentence or resolve pronouns on the model's behalf.
  */
 function auditModelRelations(
   draft: IngestCandidate,
@@ -234,7 +220,7 @@ function auditModelRelations(
     issues.push({ relation, message });
   };
   for (const relation of draft.relations ?? []) {
-    let basis = relation.basis?.trim() ?? "";
+    const basis = relation.basis?.trim() ?? "";
     if (!basis) {
       addIssue(relation, "AI 未提供可回查的原文依据");
       continue;
@@ -254,13 +240,7 @@ function auditModelRelations(
       context.sourceMaterial?.trim() &&
       (!compactClaimText(context.sourceMaterial).includes(compactBasis) || !basisNamesBothEndpoints)
     ) {
-      const passage = passageForRelation(context.sourceMaterial, relation, personNames);
-      if (passage) {
-        relation.basis = `原文：${passage}`;
-        basis = relation.basis;
-      } else {
-        addIssue(relation, "依据未能对齐到同时包含关系两端的原文片段");
-      }
+      addIssue(relation, "所附依据含转述或指代，请结合原材料核对；原依据已保留");
     }
     const predicate = inferRelationSemantics(relation.label).predicate;
     const cue = EXPLICIT_RELATION_CUES[predicate];
@@ -323,6 +303,7 @@ function auditModelRelations(
 const SEMANTIC_EXTRACTION_PRINCIPLES = `请把材料理解成语义任务，遵守以下边界：
 - 只声明材料明确表达的事实；不要把亲属或社交推导写成直接关系。
 - 人物自身属性写入 person；人与人之间的联系单独写 relation，并保留最短可核对依据。
+- 本次材料中新介绍的每个人都单独声明 person/create，即使只知道姓名；关系、事件、提醒和圈层中的引用依赖这份人物声明。后续补充时一并完成之前缺少人物而未形成的条目。
 - 已发生或计划发生、适合时间线/日历的内容写 event；仍需用户采取行动的内容写 reminder。同一内容只有同时具备两种含义时才写两项。
 - 时间原句可写 timeText；能确定时再规范化 date、dateEnd 与 precision。
 - evidence 只保留核对所需的短摘要或片段，不复制整份材料。
@@ -334,6 +315,18 @@ const SEMANTIC_RESPONSE_GUIDE = `只输出一个 semantic_plan JSON。不要调�
 根结构：
 {"version":1,"type":"semantic_plan","summary":"一句话摘要","tasks":[]}
 
+人物 changes 字段定义（与本地解析器同源，未列出的属性用 fact 任务的 key/value 表达）：
+${JSON.stringify(describeAgentToolInput(ingestPersonSchema.omit({ name: true, circle: true })))}
+
+事件 changes 的属性（people 另用人物语义引用，标题可放 target.title）：
+${JSON.stringify(describeAgentToolInput(ingestEventSchema.omit({ people: true })))}
+提醒 changes 的属性（people 同样使用人物语义引用）：
+${JSON.stringify(describeAgentToolInput(ingestReminderSchema.omit({ people: true })))}
+事件和提醒的其他补充写入 detail，保留具体内容。
+
+圈层 organize 任务定义（新建圈层和调整已有圈层均使用 organize；指定人物用单个 person 引用）：
+${JSON.stringify(describeAgentToolInput(organizeCollectionTaskSchema))}
+
 常用任务：
 {"id":"p1","domain":"person","intent":"update","target":{"kind":"person","name":"唐悦","hints":{"org":"知脉工作室"}},"changes":{"title":"品牌总监"}}
 {"id":"p2","domain":"person","intent":"create","target":{"kind":"person","name":"林柚"},"changes":{"title":"设计师"}}
@@ -344,6 +337,7 @@ const SEMANTIC_RESPONSE_GUIDE = `只输出一个 semantic_plan JSON。不要调�
 {"id":"m1","domain":"reminder","intent":"create","target":{"kind":"reminder","title":"给唐悦发送清单"},"changes":{"due":"2026-09-05","people":[{"kind":"person","name":"唐悦"}],"kind":"custom"}}
 {"id":"x1","domain":"evidence","intent":"create","target":{"kind":"evidence","title":"本次材料摘要"},"changes":{"kind":"note","text":"最短可核对摘要","origin":"用户输入"}}
 {"id":"c1","domain":"collection","intent":"organize","target":{"kind":"collection","name":"同事","collectionKind":"relationship_circle"},"memberships":[{"people":{"kind":"person_selection","scope":"all"},"action":"add"}]}
+{"id":"c3","domain":"collection","intent":"organize","target":{"kind":"collection","name":"活动合作","collectionKind":"relationship_circle"},"memberships":[{"people":{"kind":"person","name":"林柚"},"action":"add"}]}
 {"id":"c2","domain":"collection","intent":"classify","target":{"kind":"person_selection","scope":"all"},"guidance":"根据人物关系、组织和共同经历整理成少量清晰圈层"}
 
 需要逐一判断一批或全部人物应属于哪些圈层时，只声明 intent=classify，不要在初始计划中列人物；本地会枚举范围并分批提供临时 ref。更新未提交草稿时可使用 {"kind":"workspace","domain":"person|fact|relation|event|reminder|evidence","recordRef":"draft:..."}。人物 changes 只写人物自身属性；圈层只能写 collection 任务，不得写 person.circle。关系、事件和提醒中的人物都使用语义引用。“我/me”使用 {"kind":"self"}。`;

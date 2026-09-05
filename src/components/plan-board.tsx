@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { AgentRunInspector } from "@/components/agent-run-inspector";
+import { TaskEditor } from "@/components/task-editor";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { SourceBadge } from "@/components/source-badge";
 import { Button } from "@/components/ui/button";
@@ -109,6 +110,7 @@ export function PlanBoard({
   focusNonce?: number;
 }) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [editingTask, setEditingTask] = useState<TaskRecord | null>(null);
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [relations, setRelations] = useState<RelationRecord[]>([]);
   const [events, setEvents] = useState<LifeEventRecord[]>([]);
@@ -250,7 +252,9 @@ export function PlanBoard({
   };
 
   const patchTask = async (task: TaskRecord, next: Partial<TaskRecord>) => {
-    await facesDb.putTask({ ...task, ...next });
+    const current = (await facesDb.listTasks()).find((item) => item.id === task.id);
+    if (!current) throw new Error(t("任务已删除"));
+    await facesDb.putTask({ ...current, ...next });
     await refresh();
   };
 
@@ -628,7 +632,14 @@ export function PlanBoard({
                       )}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <p className="min-w-0 text-[13px] font-medium leading-snug">{task.title}</p>
+                        <button
+                          type="button"
+                          className="min-w-0 text-left text-[13px] font-medium leading-snug hover:text-primary"
+                          aria-label={`${t("编辑任务")}：${task.title}`}
+                          onClick={() => setEditingTask(task)}
+                        >
+                          {task.title}
+                        </button>
                         <button
                           type="button"
                           className="shrink-0 text-muted-foreground hover:text-destructive"
@@ -690,6 +701,15 @@ export function PlanBoard({
           })}
         </div>
       </section>
+      {editingTask && (
+        <TaskEditor
+          key={editingTask.id}
+          task={editingTask}
+          people={people}
+          onClose={() => setEditingTask(null)}
+          onSave={(changes) => patchTask(editingTask, changes)}
+        />
+      )}
     </div>
   );
 }

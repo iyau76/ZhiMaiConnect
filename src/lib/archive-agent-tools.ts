@@ -195,6 +195,8 @@ export function compactArchiveEvent(event: LifeEventRecord, names: ReadonlyMap<s
     date: event.date,
     dateEnd: event.dateEnd,
     precision: event.precision ?? "day",
+    timeText: cleanArchiveText(event.timeText, 500),
+    dateText: cleanArchiveText(event.dateText, 500),
     title: cleanArchiveText(event.title, 180),
     detail: cleanArchiveText(event.detail, 500),
     place: cleanArchiveText(event.place, 120),

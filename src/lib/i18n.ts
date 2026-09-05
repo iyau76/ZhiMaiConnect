@@ -62,6 +62,25 @@ export function useLang(): Lang {
 
 /** 中文原文 -> 英文。没有条目时回退中文原文。 */
 const EN: Record<string, string> = {
+  "具体时间（可选）": "Time of day (optional)",
+  "例如：下午3点、午饭后": "For example: 3 pm, after lunch",
+  约定与未完成事项: "Upcoming events and open items",
+  "圈层 / 集合": "Circles / collections",
+  按圈层筛选档案: "Filter profiles by circle",
+  圈层草稿: "Draft circles",
+  "与人物一起确认入库；圈层成员会跟随你选择的具体档案。":
+    "Save with the people drafts. Members follow the profiles you select.",
+  移除此项: "Remove item",
+  移出: "Remove",
+  "一个人可以属于多个圈层；关系圈层参与圈层布局，场景集合用于筛选。":
+    "People can belong to several circles. Relationship circles shape the circle layout; context collections filter the view.",
+  "记不清哪天，可以写「去年夏天」，我们会整理到时间轴；复杂说法由 AI 辅助理解。":
+    "If you cannot recall the day, write something like ‘last summer’. AI helps interpret more complex descriptions.",
+  编辑任务: "Edit task",
+  "修改任务内容、时间与参与者。": "Edit the task, date, and participants.",
+  任务标题: "Task title",
+  任务详情: "Task details",
+  保存任务: "Save task",
   "AI 助理": "AI assistant",
   "AI 正在整理": "AI is organising",
   分析轨迹: "Analysis trace",

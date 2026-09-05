@@ -282,7 +282,7 @@ const collectionMembershipSchema = z
   })
   .strict();
 
-const organizeCollectionTaskSchema = z
+export const organizeCollectionTaskSchema = z
   .object({
     id: taskIdSchema,
     domain: z.literal("collection"),
