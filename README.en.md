@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="https://zhimai-connect.zhimaiconnect.workers.dev/">Live demo</a> ·
+  <a href="https://github.com/iyau76/ZhiMaiConnect/releases">Downloads</a> ·
   <a href="#three-minute-tour">Three-minute tour</a> ·
   <a href="#design-and-architecture">Architecture</a> ·
   <a href="#data-and-privacy">Privacy</a> ·
@@ -127,11 +128,11 @@ Stable domain tools search people, read relationships, find events, compute path
 
 ### Choose an entry point
 
-| Entry point       | Getting started                                                        | Connectivity                                                 |
-| ----------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Web               | Open the [live app](https://zhimai-connect.zhimaiconnect.workers.dev/) | First load requires access to the website                    |
-| PWA               | Open Settings → Install on phone or computer                           | Once prepared, local records and input capture work offline  |
-| Windows / Android | Build and install an EXE / APK                                         | Bundled interface; direct connections to your model provider |
+| Entry point       | Getting started                                                                         | Connectivity                                                 |
+| ----------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Web               | Open the [live app](https://zhimai-connect.zhimaiconnect.workers.dev/)                  | First load requires access to the website                    |
+| PWA               | Open Settings → Install on phone or computer                                            | Once prepared, local records and input capture work offline  |
+| Windows / Android | Download an EXE / APK from [Releases](https://github.com/iyau76/ZhiMaiConnect/releases) | Bundled interface; direct connections to your model provider |
 
 All entry points work without an account. AI processing needs a reachable model service; archives are separate and move through full JSON backups.
 
@@ -141,7 +142,7 @@ The installable apps bundle the interface and keep data on the device, without a
 
 Build with `npm run package:windows` or `npm run package:android`. Outputs are in `release/windows/` and `release/android/`. Building Android requires JDK 21 and the Android SDK; running the app requires Android 7.0+ with WebView 111+. The APK currently uses a test signature; the Windows installer has no publisher certificate. See the [native build guide](doc/architecture/Windows与Android安装版.md).
 
-Packages are currently local build outputs, with no public binary download. The repository includes the build sources. On first launch, load synthetic demo records or configure an HTTPS model endpoint in AI Assistant.
+Download the Windows EXE or Android APK from [GitHub Releases](https://github.com/iyau76/ZhiMaiConnect/releases). The release page includes installation instructions, known issues, and SHA256 checksums. These are preview builds. On first launch, load synthetic demo records or configure your model endpoint in AI Assistant; Android requires HTTPS.
 
 ### Web development
 

@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="https://zhimai-connect.zhimaiconnect.workers.dev/">在线体验</a> ·
+  <a href="https://github.com/iyau76/ZhiMaiConnect/releases">下载安装</a> ·
   <a href="#快速体验">快速体验</a> ·
   <a href="#设计与架构">设计与架构</a> ·
   <a href="#数据与隐私">数据与隐私</a> ·
@@ -119,11 +120,11 @@ flowchart LR
 
 ### 选择使用入口
 
-| 入口              | 如何开始                                                          | 离线与网络                               |
-| ----------------- | ----------------------------------------------------------------- | ---------------------------------------- |
-| 网页              | 打开[在线应用](https://zhimai-connect.zhimaiconnect.workers.dev/) | 首次加载需要网站可访问                   |
-| PWA               | 网页中进入“设置 → 安装到手机或电脑”                               | 完成离线准备后可断网查看、编辑和记录材料 |
-| Windows / Android | 构建并安装 EXE / APK，见下方说明                                  | 页面随包交付，模型请求直接访问配置的服务 |
+| 入口              | 如何开始                                                                       | 离线与网络                               |
+| ----------------- | ------------------------------------------------------------------------------ | ---------------------------------------- |
+| 网页              | 打开[在线应用](https://zhimai-connect.zhimaiconnect.workers.dev/)              | 首次加载需要网站可访问                   |
+| PWA               | 网页中进入“设置 → 安装到手机或电脑”                                            | 完成离线准备后可断网查看、编辑和记录材料 |
+| Windows / Android | 从 [Releases](https://github.com/iyau76/ZhiMaiConnect/releases) 下载 EXE / APK | 页面随包交付，模型请求直接访问配置的服务 |
 
 各入口免登录。AI 整理需要可访问的模型接口，资料通过 JSON 完整备份手动迁移，不自动跨设备共享。
 
@@ -133,7 +134,7 @@ flowchart LR
 
 开发者可运行 `npm run package:windows` 或 `npm run package:android`，产物位于 `release/windows/` 和 `release/android/`。构建 Android 需要 JDK 21 和 Android SDK；手机运行需要 Android 7.0+、WebView 111+。当前 APK 使用测试签名，Windows 安装程序尚未配置发布者签名。构建与测试说明见 [安装版文档](doc/architecture/Windows与Android安装版.md)。
 
-安装包目前由本机构建提供，未发布公共下载；仓库包含完整构建源码。手机首次打开后，在 AI 助理中配置 HTTPS 模型接口，或先载入演示资料体验离线功能。
+从 [GitHub Releases](https://github.com/iyau76/ZhiMaiConnect/releases) 下载 Windows EXE 或 Android APK；发布页提供安装说明、已知问题与 SHA256 校验文件。当前提供预览版，首次打开后可先载入演示资料，再在 AI 助理中配置模型接口；手机使用 HTTPS 接口。
 
 ### 在线使用
 

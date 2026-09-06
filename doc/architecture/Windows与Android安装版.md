@@ -2,6 +2,12 @@
 
 安装版将页面和离线资料操作随安装包交付。Windows 使用 Electron，Android 使用 Capacitor；二者共用 React 界面、IndexedDB、Agent 运行与 `archive@2`，免登录使用。
 
+## 下载与安装
+
+在 [GitHub Releases](https://github.com/iyau76/ZhiMaiConnect/releases) 下载 Windows EXE 或 Android APK。发布页列出签名状态、已知问题与 SHA256 校验文件。当前为预览版；不需要自行编译，也无需下载 Source code 压缩包。
+
+安装后先载入合成演示资料，或到 AI 助理配置自己的模型接口与密钥。升级或更换设备前，在设置页导出 JSON 完整备份。
+
 ## 与网页版的连接方式
 
 | 入口 | 页面来源 | 模型请求 | 数据位置 |
