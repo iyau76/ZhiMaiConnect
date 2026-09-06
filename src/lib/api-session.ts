@@ -1,3 +1,5 @@
+import { isNativeRuntime } from "./native-runtime";
+
 let cached: { token: string; expiresAt: number } | null = null;
 let pending: Promise<string> | null = null;
 
@@ -56,6 +58,7 @@ export async function fetchWithApiSession(
   input: string | URL,
   init: ReplayableApiRequestInit = {},
 ) {
+  if (isNativeRuntime()) return (await import("./native-api")).nativeApi(input, init);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await fetch(input, {
       ...init,

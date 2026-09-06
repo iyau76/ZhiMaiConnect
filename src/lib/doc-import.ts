@@ -3,6 +3,7 @@
 import { askModel } from "./vision-client";
 import { assertVision, type ProviderPreset } from "./vision-providers";
 import { normalizeArchive } from "./archive-data";
+import { CAPTURE_LIMITS } from "./local-capture-store";
 
 export interface ImportedDoc {
   name: string;
@@ -11,8 +12,8 @@ export interface ImportedDoc {
 }
 
 export const IMPORT_LIMITS = {
-  maxFiles: 4,
-  maxFileBytes: 12 * 1024 * 1024,
+  maxFiles: CAPTURE_LIMITS.files,
+  maxFileBytes: CAPTURE_LIMITS.fileBytes,
   maxPdfPages: 8,
   maxExtractedCharacters: 8_000,
   maxImageEdge: 1_600,

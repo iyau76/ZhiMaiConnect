@@ -9,6 +9,8 @@ export default tseslint.config(
     ignores: [
       "coverage",
       "dist",
+      "dist-native",
+      "android",
       ".output",
       "playwright-report",
       "test-results",
@@ -26,6 +28,12 @@ export default tseslint.config(
     languageOptions: {
       ecmaVersion: "latest",
       globals: globals.node,
+    },
+  },
+  {
+    files: ["scripts/pwa-worker.mjs"],
+    languageOptions: {
+      globals: { ...globals.serviceworker, __PWA_ASSETS__: "readonly" },
     },
   },
   {

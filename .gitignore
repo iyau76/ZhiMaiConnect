@@ -9,6 +9,11 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-native/
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
 dist-ssr
 .output
 .vinxi

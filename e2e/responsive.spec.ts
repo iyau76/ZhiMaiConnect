@@ -10,6 +10,7 @@ for (const width of [390, 768, 1440]) {
     await page.getByRole("button", { name: "清除本地录入材料" }).click();
     await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);
 
+    if (width < 768) await page.getByRole("button", { name: "更多", exact: true }).click();
     await clickVisible(page, page.getByRole("button", { name: /^设置/ }));
     await page.getByRole("button", { name: "载入完整 50 人演示库" }).click();
     await expect(page.getByText("当前已载入：50 人 · 80 条关系")).toBeVisible();
@@ -36,6 +37,7 @@ for (const width of [390, 768, 1440]) {
     await expect(candidateList).toContainText("秦月");
     await expect(candidateList).toContainText("叶青");
 
+    if (width < 768) await page.getByRole("button", { name: "更多", exact: true }).click();
     await clickVisible(page, page.getByRole("button", { name: /^日历/ }));
     const eventTitle = `响应式冒烟 ${width}px`;
     await page
@@ -44,10 +46,12 @@ for (const width of [390, 768, 1440]) {
     await page.getByRole("button", { name: "记下来" }).click();
     await expect(page.getByText(eventTitle, { exact: true }).first()).toBeVisible();
 
+    if (width < 768) await page.getByRole("button", { name: "更多", exact: true }).click();
     await clickVisible(page, page.getByRole("button", { name: /^计划/ }));
     await expect(page.getByTestId("plan-board")).toBeVisible();
     await expect(page.getByPlaceholder("目标，例如：筹备校园记忆展开幕活动")).toBeVisible();
 
+    if (width < 768) await page.getByRole("button", { name: "更多", exact: true }).click();
     await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
     await expect(page.getByText("模型配置", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "测试连接" }).click();

@@ -6,7 +6,9 @@ interface AgentRunOwnerStorage {
   setItem(key: string, value: string): void;
 }
 
-let serverOwnerId = `runtime:${crypto.randomUUID()}`;
+// Worker modules are evaluated outside a request; random generation belongs
+// to execution, not module initialization.
+let serverOwnerId: string | undefined;
 
 /**
  * One browser profile is one logical executor. Every claim still receives a
@@ -29,12 +31,12 @@ export function loadOrCreateAgentRunOwnerId(
 }
 
 export function browserAgentRunOwnerId() {
-  if (typeof window === "undefined") return serverOwnerId;
+  if (typeof window === "undefined") return (serverOwnerId ??= `runtime:${crypto.randomUUID()}`);
   return loadOrCreateAgentRunOwnerId(window.localStorage, window.sessionStorage);
 }
 
 export const agentRunOwnerStorageKey = AGENT_RUN_OWNER_KEY;
 
 export function resetServerAgentRunOwnerId() {
-  serverOwnerId = `runtime:${crypto.randomUUID()}`;
+  serverOwnerId = undefined;
 }

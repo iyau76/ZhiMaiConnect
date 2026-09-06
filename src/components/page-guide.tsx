@@ -1,4 +1,4 @@
-/** 每页各自的轻量指引：每次进这一页都会出现，关掉后可以用「怎么用」再打开 */
+/** 每页的操作指引按需展开，让首屏留给当前任务。 */
 
 import { HelpCircle, X } from "lucide-react";
 import { useState } from "react";
@@ -17,7 +17,7 @@ export function PageGuide({
   points: string[];
   className?: string;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   const close = () => setOpen(false);
 
@@ -29,7 +29,7 @@ export function PageGuide({
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          "inline-flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground",
+          "inline-flex min-h-11 items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground md:min-h-0 md:text-[11px]",
           className,
         )}
       >

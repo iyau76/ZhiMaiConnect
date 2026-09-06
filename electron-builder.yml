@@ -1,0 +1,26 @@
+appId: cn.zhimaiconnect.desktop
+productName: ZhiMai Connect
+directories:
+  app: desktop
+  output: release/windows
+files:
+  - main.cjs
+  - preload.cjs
+  - package.json
+  - "!node_modules/**/*"
+extraResources:
+  - from: dist-native
+    to: web
+asar: true
+win:
+  icon: public/icons/zhimai-1024.png
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ZhiMai-Connect-${version}-win-x64-setup.exe
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  deleteAppDataOnUninstall: false

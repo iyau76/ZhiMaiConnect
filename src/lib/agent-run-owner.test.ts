@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { agentRunOwnerStorageKey, loadOrCreateAgentRunOwnerId } from "./agent-run-owner";
 
@@ -15,6 +15,17 @@ class MemoryStorage {
 }
 
 describe("Agent run owner", () => {
+  it("does not generate random IDs at Worker module initialization", async () => {
+    vi.resetModules();
+    const random = vi.spyOn(crypto, "randomUUID");
+    const module = await import("./agent-run-owner");
+    expect(random).not.toHaveBeenCalled();
+    const owner = module.browserAgentRunOwnerId();
+    expect(owner).toMatch(/^runtime:/);
+    expect(module.browserAgentRunOwnerId()).toBe(owner);
+    expect(random).toHaveBeenCalledTimes(1);
+    random.mockRestore();
+  });
   it("keeps one fenced owner across browser restarts", () => {
     const local = new MemoryStorage();
     const first = loadOrCreateAgentRunOwnerId(local);

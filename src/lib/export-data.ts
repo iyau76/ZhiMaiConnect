@@ -1,6 +1,7 @@
 /** 把人物关系库和事务导出成 Markdown / Word / PDF（浏览器本地生成，不上传） */
 
 import { archiveRestorePlan, createArchiveV2 } from "./archive-data";
+import { isNativeRuntime, saveNativeFile } from "./native-runtime";
 import {
   facesDb,
   type FaceDbArchiveReplacement,
@@ -248,7 +249,8 @@ function stamp() {
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
 }
 
-function download(blob: Blob, filename: string) {
+async function download(blob: Blob, filename: string) {
+  if (isNativeRuntime()) return saveNativeFile(blob, filename);
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -393,10 +395,18 @@ async function exportDocx(payload: ExportPayload, filename: string) {
     ],
   });
 
-  download(await Packer.toBlob(doc), filename);
+  await download(await Packer.toBlob(doc), filename);
 }
 
-function exportPdf(payload: ExportPayload) {
+async function exportPdf(payload: ExportPayload) {
+  if (isNativeRuntime()) {
+    const result = await window.zhimaiNative!.printHtml({
+      name: payload.title,
+      html: toHtml(payload),
+    });
+    if (result.cancelled) throw new Error("已取消保存文件");
+    return;
+  }
   const win = window.open("", "_blank", "width=900,height=700");
   if (!win) throw new Error("popup-blocked");
   win.document.write(toHtml(payload));
@@ -415,7 +425,7 @@ export async function exportData(scope: ExportScope, format: ExportFormat) {
     // “完整备份”始终覆盖全库，不受当前页面的展示 scope 限制。
     // This prevents a projects-page backup from silently omitting relations.
     const archive = await buildMachineArchive();
-    download(
+    await download(
       new Blob([JSON.stringify(archive, null, 2)], {
         type: "application/json;charset=utf-8",
       }),
@@ -428,7 +438,7 @@ export async function exportData(scope: ExportScope, format: ExportFormat) {
 
   switch (format) {
     case "md":
-      download(
+      await download(
         new Blob([toMarkdown(payload)], { type: "text/markdown;charset=utf-8" }),
         `${base}.md`,
       );
@@ -437,7 +447,7 @@ export async function exportData(scope: ExportScope, format: ExportFormat) {
       await exportDocx(payload, `${base}.docx`);
       break;
     case "pdf":
-      exportPdf(payload);
+      await exportPdf(payload);
       break;
   }
 

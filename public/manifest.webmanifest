@@ -1,0 +1,33 @@
+{
+  "id": "/",
+  "name": "知脉 Connect",
+  "short_name": "知脉",
+  "description": "记住人，记住事，随手管理自己的关系。",
+  "lang": "zh-CN",
+  "start_url": "/?view=today",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "icons": [
+    { "src": "/icons/zhimai-384.png", "sizes": "384x384", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/zhimai-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "随手记", "url": "/?view=intake", "description": "记下刚认识的人或刚发生的事" },
+    { "name": "人物关系", "url": "/?view=people" }
+  ],
+  "share_target": {
+    "action": "/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        { "name": "files", "accept": ["image/*", ".pdf", ".docx", ".txt", ".md", ".csv", ".json"] }
+      ]
+    }
+  }
+}

@@ -3,6 +3,7 @@ import { confirmCloudTransfer, type CloudDataType } from "./cloud-consent";
 import { fetchWithApiSession } from "./api-session";
 import { assertVisionPromptFits, fitVisionHistory } from "./ai-request-contract";
 import { ModelTransportError } from "./model-transport-resilience";
+import { platformFetch } from "./native-runtime";
 
 function stripDataUrl(dataUrl: string) {
   const idx = dataUrl.indexOf(",");
@@ -40,7 +41,7 @@ async function streamOllama(
   const base = preset.baseUrl.replace(/\/+$/, "");
   const messages = ollamaMessages(prompt, image, history);
 
-  const response = await fetch(`${base}/api/chat`, {
+  const response = await platformFetch(`${base}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -99,7 +100,7 @@ async function completeOllama(
   temperature?: number,
 ) {
   const base = preset.baseUrl.replace(/\/+$/, "");
-  const response = await fetch(`${base}/api/chat`, {
+  const response = await platformFetch(`${base}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -428,7 +429,7 @@ export async function testConnection(preset: ProviderPreset) {
   assertConfigured(preset);
   if (preset.kind === "ollama") {
     const base = preset.baseUrl.replace(/\/+$/, "");
-    const response = await fetch(`${base}/api/tags`);
+    const response = await platformFetch(`${base}/api/tags`);
     if (!response.ok) throw new Error(`Ollama 返回 ${response.status}`);
     const json = (await response.json()) as { models?: Array<{ name: string }> };
     const names = (json.models ?? []).map((m) => m.name);
@@ -480,7 +481,7 @@ async function askOnce(preset: ProviderPreset, prompt: string, image: string) {
   assertConfigured(preset);
   if (preset.kind === "ollama") {
     const base = preset.baseUrl.replace(/\/+$/, "");
-    const response = await fetch(`${base}/api/chat`, {
+    const response = await platformFetch(`${base}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -540,7 +541,7 @@ export async function auditVision(preset: ProviderPreset) {
 /** 从 ESP32 CameraWebServer 抓一帧，返回 data URL */
 export async function captureFrame(host: string) {
   const base = host.replace(/\/+$/, "");
-  const response = await fetch(`${base}/capture?_t=${Date.now()}`);
+  const response = await platformFetch(`${base}/capture?_t=${Date.now()}`);
   if (!response.ok) throw new Error(`摄像头返回 ${response.status}`);
   const blob = await response.blob();
   return await new Promise<string>((resolve, reject) => {

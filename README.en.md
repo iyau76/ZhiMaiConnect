@@ -29,7 +29,7 @@
 </p>
 
 > [!NOTE]
-> The current release is a local-first personal edition. Structured records stay in the visitor's browser. There is no account system, cloud contact database, or multi-device sync yet, so different browsers and devices do not share archives.
+> The current release is a local-first personal edition. Structured records stay in the current browser or installed app's local storage. There is no account system, cloud contact database, or multi-device sync yet, so different app installations and devices do not automatically share archives.
 
 The Chinese name “知脉” joins _zhī_ — cicada and knowing — with _mài_, a network of relationships. The logo is a cicada wing whose intersecting veins become nodes in a relationship graph.
 
@@ -51,6 +51,7 @@ Zhimai accepts the language people already use. Write who someone is, how you me
 - **Ask the archive** — searches people, relationships, events, and circles, and can prepare change proposals. Public web, weather, date, and news tools stay separate from private archive disclosure.
 - **Resumable Agent runs** — persists rounds, tool observations, proposals, checkpoints, and budgets. A 5xx response or page change does not force a completed tool sequence to start again.
 - **Portable records** — exports and restores a validated `zhimai-connect/archive@2` machine archive. Markdown, Word, and PDF exports serve human reading rather than recovery.
+- **Phone and desktop access** — browser-installed PWA plus buildable Windows and Android apps. Mobile navigation and a local input inbox support capturing material offline and choosing when to process it online.
 
 ## Product tour
 
@@ -92,7 +93,7 @@ Models interpret flexible language. Local code stores and computes stable facts.
 ```mermaid
 flowchart LR
     A[Notes / documents / images / audio] --> B[Agent understanding and tools]
-    D[(Browser-local ledger)] -->|Progressive disclosure| B
+    D[(Local IndexedDB)] -->|Progressive disclosure| B
     B --> C[Structured draft or change proposal]
     C -->|User approval| D
     D --> P[Deterministic projections and paths]
@@ -124,6 +125,26 @@ Stable domain tools search people, read relationships, find events, compute path
 
 ## Run locally
 
+### Choose an entry point
+
+| Entry point       | Getting started                                                        | Connectivity                                                 |
+| ----------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Web               | Open the [live app](https://zhimai-connect.zhimaiconnect.workers.dev/) | First load requires access to the website                    |
+| PWA               | Open Settings → Install on phone or computer                           | Once prepared, local records and input capture work offline  |
+| Windows / Android | Build and install an EXE / APK                                         | Bundled interface; direct connections to your model provider |
+
+All entry points work without an account. AI processing needs a reachable model service; archives are separate and move through full JSON backups.
+
+### Windows and Android packages
+
+The installable apps bundle the interface and keep data on the device, without an account. Model requests go directly to your configured provider. Devices have separate archives; use a full JSON backup to move data.
+
+Build with `npm run package:windows` or `npm run package:android`. Outputs are in `release/windows/` and `release/android/`. Building Android requires JDK 21 and the Android SDK; running the app requires Android 7.0+ with WebView 111+. The APK currently uses a test signature; the Windows installer has no publisher certificate. See the [native build guide](doc/architecture/Windows与Android安装版.md).
+
+Packages are currently local build outputs, with no public binary download. The repository includes the build sources. On first launch, load synthetic demo records or configure an HTTPS model endpoint in AI Assistant.
+
+### Web development
+
 Requirements: Node.js `>=22.12.0`, npm `>=10.9.0`.
 
 ```sh
@@ -144,38 +165,66 @@ The terminal prints the development URL. Profiles, graphs, calendars, reminders,
 
 ## Models
 
+The proxy paths below apply to the web app and PWA.
+
 | Provider                                                                    | Configuration                                            | Data path                                              |
 | --------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------ |
 | OpenAI-compatible endpoint                                                  | Endpoint URL, model name, and API key                    | Restricted same-origin proxy to an approved HTTPS host |
 | [Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai) | Official compatible endpoint; default `gemini-3.7-flash` | Restricted same-origin proxy to Google Gemini          |
 | Ollama                                                                      | Local endpoint configured in the model page              | Browser to the user's local model service              |
 
+Installed apps connect directly through native networking and ship without API keys. Windows can reach a local HTTP Ollama service; Android currently uses HTTPS endpoints. On a phone, `localhost` refers to the phone itself.
+
+Use **Save model configuration** to retain settings on the current device. Saved credentials do not yet use an OS credential vault; avoid saving personal keys on shared devices.
+
 Keep real keys in the ignored `.env.local` file. Production credentials belong in Cloudflare Secrets. Never give browser-exposed variables a `VITE_` prefix.
 
 ## Data and privacy
 
-- People, relationships, events, reminders, circles, and preferences live in the current browser's IndexedDB by default.
-- Clearing site data removes the local archive. Export a JSON machine backup regularly and treat it as a sensitive file.
+### Browser installation (PWA) and offline use
+
+Open **Settings → Install on phone or computer** to check installation and offline readiness. Supporting browsers can install Zhimai without an account. Once offline resources are ready, you can view and edit local records and write notes offline. Files, photos and offline recordings remain in a local input inbox until you choose to process them.
+
+Installed Android PWAs can receive system shares where supported by the browser; the APK does not yet register a system share target. AI processing needs a reachable model or transcription service. Unsubmitted inputs are excluded from archive backups. PWA installation still requires access to the website; it does not add device synchronization or scheduled notifications while the app is closed.
+
+Run `npm run build` followed by `npm run e2e:pwa` to test the production offline and sharing paths.
+
+- People, relationships, events, reminders, circles, and preferences live in the current browser or installed app's local IndexedDB by default.
+- Clearing site data or uninstalling the Android app removes its local archive. Export a JSON machine backup regularly and treat it as a sensitive file.
 - A cloud model receives only the text, media, or progressively disclosed archive fragments needed for the current task, after the corresponding transfer consent.
 - Public web and weather tools receive public queries or locations, without private profile context.
 - Private log payloads are off by default. The regular run log keeps status, rounds, tool names, duration, and token estimates.
 - Zhimai does not read personal WeChat, QQ, or Xiaohongshu accounts and does not send messages on the user's behalf.
-- Account login and multi-device sync are not part of the current release. Use the JSON archive to move data manually.
+- There is no account login, multi-device sync, native auto-updater, or scheduled OS notification while the app is closed. Android PDF, camera and microphone still require physical-device acceptance; see the [native guide](doc/architecture/Windows与Android安装版.md).
 
 ## Development and verification
 
-Stack: React 19, TypeScript, TanStack Start/Router, Vite 8, Tailwind CSS 4, Radix UI, IndexedDB, Vitest, Playwright, and a Cloudflare Module Worker target.
+Stack: React 19, TypeScript, TanStack Start/Router, Vite 8, Tailwind CSS 4, Radix UI, IndexedDB, Vitest and Playwright; Cloudflare Workers for web deployment, Electron for Windows, and Capacitor for Android.
 
-| Command           | Purpose                                                        |
-| ----------------- | -------------------------------------------------------------- |
-| `npm run dev`     | Start the development server                                   |
-| `npm run check`   | TypeScript, ESLint, Prettier, and Vitest                       |
-| `npm run e2e`     | Run browser end-to-end tests                                   |
-| `npm run build`   | Produce the Cloudflare Worker build                            |
-| `npm run preview` | Preview the production build at `127.0.0.1:4173` with Wrangler |
+| Command                   | Purpose                                                        |
+| ------------------------- | -------------------------------------------------------------- |
+| `npm run dev`             | Start the development server                                   |
+| `npm run check`           | TypeScript, ESLint, Prettier, and Vitest                       |
+| `npm run e2e`             | Run browser end-to-end tests                                   |
+| `npm run e2e:pwa`         | Test production offline, sharing and mobile paths              |
+| `npm run build:native`    | Build the shared native app interface                          |
+| `npm run desktop:dev`     | Launch the desktop shell after building native assets          |
+| `npm run e2e:desktop`     | Test desktop startup, offline access and exports               |
+| `npm run package:windows` | Build the Windows x64 NSIS installer                           |
+| `npm run package:android` | Build the Android test APK                                     |
+| `npm run build`           | Produce the Cloudflare Worker build                            |
+| `npm run preview`         | Preview the production build at `127.0.0.1:4173` with Wrangler |
+
+Deploy a fresh build from verified `main` using `npx wrangler deploy --config .output/server/wrangler.json`, after check, build, E2E and PWA tests pass. Confirm the live Worker version, static assets and the PWA fingerprint in `sw.js`. Existing PWA windows finish their work before activating a downloaded update; native apps need a separate package update.
 
 Key source locations:
 
+- `src/components/workspace.tsx` — shared web and native workspace;
+- `src/lib/local-capture-store.ts` — local input inbox and one-time handoff;
+- `src/lib/pwa-client.ts` / `scripts/build-pwa.mjs` — browser installation, offline assets and updates;
+- `src/lib/native-runtime.ts` / `src/lib/native-api.ts` — native streaming, file saves and provider transport;
+- `src/lib/provider-protocol.ts` — shared model payloads and response parsing;
+- `desktop/` / `android/` / `native/` — platform hosts and standalone frontend;
 - `src/lib/face-db.ts` — IndexedDB model, versions, and transaction boundary;
 - `src/lib/agent-runtime.ts` — shared round, tool, token, and time budgets;
 - `src/lib/archive-agent-tools.ts` — common archive, recommendation, and public tools;

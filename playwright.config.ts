@@ -4,10 +4,11 @@ const host = "127.0.0.1";
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 4173);
 const publicBaseURL = process.env.PLAYWRIGHT_BASE_URL?.trim();
 const baseURL = publicBaseURL || `http://${host}:${port}`;
+const productionPwa = process.env.PLAYWRIGHT_PWA_TEST === "1";
 
 export default defineConfig({
   testDir: "./e2e",
-  outputDir: "test-results/playwright",
+  outputDir: productionPwa ? "test-results/playwright-pwa" : "test-results/playwright",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
@@ -24,11 +25,16 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
+    launchOptions: productionPwa
+      ? { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] }
+      : undefined,
   },
   webServer: publicBaseURL
     ? undefined
     : {
-        command: `npm run dev -- --host ${host} --port ${port}`,
+        command: productionPwa
+          ? `npx wrangler dev --config .output/server/wrangler.json --ip ${host} --port ${port}`
+          : `npm run dev -- --host ${host} --port ${port}`,
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,

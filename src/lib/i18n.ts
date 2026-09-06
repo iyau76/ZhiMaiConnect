@@ -785,6 +785,7 @@ const EN: Record<string, string> = {
   "来源：办案人 / 地点 / 编号": "Source: officer / place / reference no.",
   现场录音: "Record audio",
   停止并转写: "Stop & transcribe",
+  停止录音: "Stop recording",
   上传录音文件: "Upload audio file",
   转写中: "Transcribing",
   转写完成: "Transcription done",
@@ -1304,6 +1305,67 @@ const EN: Record<string, string> = {
   中秋节: "Mid-Autumn Festival",
   国庆节: "National Day",
   中文: "中文",
+  手机导航: "Mobile navigation",
+  更多: "More",
+  拍照: "Take a photo",
+  录入材料: "Input material",
+  "例如：小雨，大学室友，3 月 12 日生日，爱喝手冲咖啡。":
+    "For example: Xiaoyu, my college roommate, birthday March 12, loves pour-over coffee.",
+  待整理材料: "Input inbox",
+  放入录入框: "Add to input",
+  删除材料: "Delete input",
+  分享的材料: "Shared material",
+  离线录音: "Offline recording",
+  保留到你手动清除: "Kept until you clear it",
+  "材料自动保存在本机，可离线填写，稍后继续":
+    "Input is saved locally. Write offline and continue later.",
+  "材料已保存在本机，联网后可读取。": "Saved on this device. Process it when connected.",
+  "录音已保存在本机，联网后可转写。":
+    "Recording saved on this device. Transcribe it when connected.",
+  "图片和录音已保存在本机，联网后再识别文字。":
+    "Images and recordings are saved locally. Connect to process them.",
+  "联网录音停止后使用当前转写服务；离线录音先保存在待整理材料中。转写文字会追加到输入框。":
+    "Online recordings use your transcription service when stopped. Offline recordings stay in the input inbox. Transcripts are appended to your input.",
+  "已保存在本机，尚未发送给 AI。图片和扫描件使用当前模型识别，录音使用转写服务；读取后仍需确认入库。":
+    "Saved locally; not yet sent to AI. Images and scans use your model, recordings use your transcription service. Review before saving to your archive.",
+  安装与本机存储: "Installation and local storage",
+  本机应用: "Local application",
+  "页面资源已随安装包提供，可断网查看和编辑。模型请求直接发送到你配置的接口。":
+    "The interface is bundled for offline viewing and editing. Model requests go directly to your configured endpoint.",
+  "资料保存在当前应用中，与浏览器和其他设备独立。卸载前请导出完整备份，未整理材料需另存。":
+    "Data stays in this application, separate from browsers and other devices. Export a full backup before uninstalling, and save unprocessed material separately.",
+  安装到手机或电脑: "Install on phone or computer",
+  安装知脉: "Install Zhimai",
+  离线资源已就绪: "Ready for offline use",
+  离线资源尚未就绪: "Offline resources are not ready yet",
+  已安装: "Installed",
+  检查应用更新: "Check for updates",
+  申请保留本机数据: "Request persistent storage",
+  安装方法与数据说明: "Installation and data storage",
+  "免登录使用，人物和事件保存在当前设备。首次打开并完成离线准备后，可以断网查看和编辑。":
+    "No account required. People and events stay on this device. Once offline resources are ready, you can view and edit without a connection.",
+  "已检查更新；下载完成后会显示提示。":
+    "Update check complete. A notice will appear when the download is ready.",
+  "已获准持久保存。仍请定期导出完整备份。":
+    "Persistent storage granted. Keep exporting backups regularly.",
+  "浏览器暂未授予持久保存，请定期导出完整备份。":
+    "The browser has not granted persistent storage. Export backups regularly.",
+  "无法申请持久保存，请检查浏览器站点设置。":
+    "Could not request persistent storage. Check browser site settings.",
+  "当前离线：可以记下材料、查看和编辑本机资料。AI 整理需要联网后点击继续。":
+    "Offline: write notes, view and edit local records. Connect and choose to continue AI processing.",
+  "新版本已下载。保存工作后关闭所有知脉窗口，再打开即可更新。":
+    "An update is ready. Save your work, close all Zhimai windows, then reopen to update.",
+  "Android Chrome / 桌面 Chrome、Edge：打开浏览器菜单，选择安装应用或添加到主屏幕。":
+    "Android Chrome / desktop Chrome and Edge: open the browser menu and choose Install app or Add to home screen.",
+  "iPhone：在浏览器分享菜单中选择添加到主屏幕。系统分享接收能力以浏览器支持为准。":
+    "iPhone: choose Add to Home Screen from the browser share menu. Receiving system shares depends on browser support.",
+  "不同设备、浏览器和网站地址各有独立的本地资料。换设备或换网址前，在设置中导出 JSON 完整备份。":
+    "Each device, browser and site address has separate local data. Export a full JSON backup before switching devices or addresses.",
+  "清理站点数据会删除资料和待整理材料。完整备份不包含未提交材料，请先整理或另存原文件。":
+    "Clearing site data deletes your archive and input inbox. Backups exclude unsubmitted inputs; process them or save the original files separately.",
+  "安装仍需网站可访问；AI 需要模型服务联网。当前没有云同步或关闭应用后的定时通知。":
+    "Installation requires access to the website; AI needs its model service. Cloud sync and scheduled notifications while closed are not available.",
   English: "English",
 };
 

@@ -1,0 +1,9 @@
+{
+  "appId": "cn.zhimaiconnect.app",
+  "appName": "知脉 Connect",
+  "webDir": "dist-native",
+  "loggingBehavior": "none",
+  "server": { "androidScheme": "https", "errorPath": "webview-upgrade.html" },
+  "android": { "allowMixedContent": false, "minWebViewVersion": 111 },
+  "plugins": { "CapacitorHttp": { "enabled": false } }
+}

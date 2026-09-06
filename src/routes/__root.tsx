@@ -12,6 +12,7 @@ import { useEffect, type ReactNode } from "react";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { THEME_BOOTSTRAP_SCRIPT } from "../lib/theme";
+import { startPwa } from "../lib/pwa-client";
 
 function NotFoundComponent() {
   return (
@@ -77,7 +78,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   head: () => ({
     meta: [
       { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
+      { name: "theme-color", content: "#0b1220" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-title", content: "知脉" },
       { title: "知脉 Connect · 人际关系记忆与行动助手" },
       {
         name: "description",
@@ -100,12 +104,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
     ],
     links: [
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,500;0,600;0,700;0,800;1,600;1,700&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,400&display=swap",
-      },
+      { rel: "manifest", href: "/manifest.webmanifest" },
+      { rel: "apple-touch-icon", href: "/icons/zhimai-384.png" },
       {
         rel: "stylesheet",
         href: appCss,
@@ -139,6 +139,9 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  useEffect(() => {
+    startPwa();
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

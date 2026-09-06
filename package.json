@@ -14,8 +14,12 @@
   },
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build && node scripts/configure-cloudflare-build.mjs",
-    "build:dev": "vite build --mode development && node scripts/configure-cloudflare-build.mjs",
+    "build:native": "vite build --config vite.native.config.ts",
+    "desktop:dev": "node scripts/run-desktop.mjs",
+    "package:windows": "npm run build:native && electron-builder --win --publish never",
+    "package:android": "npm run build:native && cap sync android && node scripts/build-android.mjs",
+    "build": "vite build && node scripts/configure-cloudflare-build.mjs && node scripts/build-pwa.mjs",
+    "build:dev": "vite build --mode development && node scripts/configure-cloudflare-build.mjs && node scripts/build-pwa.mjs",
     "preview": "wrangler dev --config .output/server/wrangler.json --ip 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings=0",
@@ -24,10 +28,14 @@
     "test": "vitest --passWithNoTests",
     "test:run": "vitest run --passWithNoTests",
     "e2e": "playwright test",
+    "e2e:pwa": "node scripts/test-pwa.mjs",
+    "e2e:desktop": "node scripts/test-native-desktop.mjs",
     "e2e:ui": "playwright test --ui",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test:run"
   },
   "dependencies": {
+    "@capacitor/android": "8.5.1",
+    "@capacitor/core": "8.5.1",
     "@hookform/resolvers": "^5.2.2",
     "@mediapipe/tasks-vision": "^1.0.0",
     "@radix-ui/react-accordion": "^1.2.12",
@@ -90,6 +98,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.5.1",
     "@eslint/js": "^9.32.0",
     "@lovable.dev/vite-tanstack-config": "^2.8.5",
     "@playwright/test": "^1.62.1",
@@ -99,6 +108,8 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "electron": "44.2.0",
+    "electron-builder": "26.15.3",
     "eslint": "^9.32.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",

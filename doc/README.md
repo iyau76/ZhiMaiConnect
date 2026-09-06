@@ -5,6 +5,8 @@
 - [`product/中期反思.md`](product/中期反思.md)：当前产品哲学与架构判据。
 - [`product/分阶段升级计划-2026-09-02.md`](product/分阶段升级计划-2026-09-02.md)：从 Agent 完成与恢复、个人关系工作台到移动端、账号同步和平台生态的阶段路线与验收门槛。
 - [`architecture/机器归档格式-v2.md`](architecture/机器归档格式-v2.md)：当前机器归档契约。
+- [`architecture/PWA与本机材料.md`](architecture/PWA与本机材料.md)：免登录安装、离线缓存、分享材料、更新与本地数据边界。
+- [`architecture/Windows与Android安装版.md`](architecture/Windows与Android安装版.md)：EXE/APK 构建、模型直连、本机存储与手机验收边界。
 - [`quality/ACCEPTANCE_LOG.md`](quality/ACCEPTANCE_LOG.md)：持续验收记录。
 - [`quality/阶段0可复现基线-2026-09-04.md`](quality/阶段0可复现基线-2026-09-04.md)：三套合成归档、五条主流程、版本锚点与发布门槛。
 - [`quality/Agent-harness结构审计-2026-09-02.md`](quality/Agent-harness结构审计-2026-09-02.md)：预算表象背后的执行契约、上下文与恢复机制审计。

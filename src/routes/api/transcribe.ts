@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { buildTranscriptionForm } from "../../lib/provider-protocol";
 
 import {
   API_LIMITS,
@@ -49,15 +50,7 @@ export async function handleTranscribePost(request: Request): Promise<Response> 
       throw new SafeApiError(400, "INVALID_REQUEST", "音频 base64 无法解码");
     }
 
-    const form = new FormData();
-    form.append(
-      "file",
-      new Blob([audio as unknown as BlobPart], { type: body.mime || "audio/webm" }),
-      body.filename || "audio.webm",
-    );
-    form.append("model", target.model);
-    if (body.hint) form.append("prompt", body.hint);
-    if (body.language && body.language !== "auto") form.append("language", body.language);
+    const form = buildTranscriptionForm(audio, { ...body, model: target.model });
 
     upstreamRequest = await startUpstreamRequest(
       target.url,

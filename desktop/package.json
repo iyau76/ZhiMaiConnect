@@ -1,0 +1,8 @@
+{
+  "name": "zhimai-connect-desktop",
+  "version": "0.2.0",
+  "description": "知脉 Connect · 本机关系秘书",
+  "author": "ZhiMai Connect",
+  "main": "main.cjs",
+  "private": true
+}

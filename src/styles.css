@@ -4,6 +4,24 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@media (max-width: 767px) {
+  .mobile-app-header {
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+  }
+  .mobile-app-nav {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-app-main {
+    padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+  }
+  /* Keep text input legible and avoid iOS focus zoom. */
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
 /*
  * Design system definition.
  *

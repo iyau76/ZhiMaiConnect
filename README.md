@@ -30,7 +30,7 @@
 </p>
 
 > [!NOTE]
-> 当前版本是本地优先的个人版：结构化档案保存在访问者自己的浏览器中，项目没有账号系统、云端人物数据库或多设备同步。不同浏览器和不同设备不会看到彼此的档案。
+> 当前版本是本地优先的个人版：结构化档案保存在当前浏览器或安装版的本机应用存储中，项目没有账号系统、云端人物数据库或多设备同步。不同应用入口和不同设备不会自动共享档案。
 
 “知”取自知了，“脉”取自人脉。Logo 是一片知了的脉翅，翅脉的交汇点也是关系图中的节点。
 
@@ -63,6 +63,7 @@
 - **见面简报**：输入“明天要见唐悦”，即可保存人物速记、近期共同事件、未完成事项、相关人物与可聊话题；每条事实能回到来源，档案变化后生成新版，旧版仍可查看。
 - **可恢复数据**：JSON 完整备份使用 `zhimai-connect/archive@2`；Markdown、Word 和 PDF 用于阅读与交付。完整恢复会预览记录数量并从事实重新计算派生关系。
 - **个人化界面**：中英文、主题、字号、减少动画和基础键盘/无障碍设置。
+- **手机与电脑入口**：网页可安装为 PWA，另提供 Windows / Android 安装版构建；移动底部导航、拍照、录音和本机材料收件箱共用同一套录入流程。离线时先记录，联网后由用户继续整理。
 
 ## 产品一览
 
@@ -83,7 +84,7 @@
 ```mermaid
 flowchart LR
     A[自然语言 / 文档 / 图片 / 录音] --> B[Agent 理解与工具调用]
-    D[(浏览器本地账本)] -->|渐进披露| B
+    D[(本机 IndexedDB)] -->|渐进披露| B
     B --> C[结构化草稿或变更提案]
     C -->|用户签字| D
     D --> P[本地关系投影与路径计算]
@@ -115,6 +116,24 @@ flowchart LR
 工具表达稳定的领域能力：查人物、读关系、找事件、计算路径、查询公开信息、生成批量变更计划。模型输出经过 `fact`、`gap`、`advice`、`language`、`uncertain` 等声明类型进入界面，单条依据异常不会吞掉整段回答。
 
 ## 快速体验
+
+### 选择使用入口
+
+| 入口              | 如何开始                                                          | 离线与网络                               |
+| ----------------- | ----------------------------------------------------------------- | ---------------------------------------- |
+| 网页              | 打开[在线应用](https://zhimai-connect.zhimaiconnect.workers.dev/) | 首次加载需要网站可访问                   |
+| PWA               | 网页中进入“设置 → 安装到手机或电脑”                               | 完成离线准备后可断网查看、编辑和记录材料 |
+| Windows / Android | 构建并安装 EXE / APK，见下方说明                                  | 页面随包交付，模型请求直接访问配置的服务 |
+
+各入口免登录。AI 整理需要可访问的模型接口，资料通过 JSON 完整备份手动迁移，不自动跨设备共享。
+
+### Windows / Android 安装版
+
+安装版内置页面资源，免登录保存和管理本机资料；AI 请求直接访问自己配置的模型接口。无需通过 Cloudflare 加载应用页面，各设备通过 JSON 完整备份迁移资料。
+
+开发者可运行 `npm run package:windows` 或 `npm run package:android`，产物位于 `release/windows/` 和 `release/android/`。构建 Android 需要 JDK 21 和 Android SDK；手机运行需要 Android 7.0+、WebView 111+。当前 APK 使用测试签名，Windows 安装程序尚未配置发布者签名。构建与测试说明见 [安装版文档](doc/architecture/Windows与Android安装版.md)。
+
+安装包目前由本机构建提供，未发布公共下载；仓库包含完整构建源码。手机首次打开后，在 AI 助理中配置 HTTPS 模型接口，或先载入演示资料体验离线功能。
 
 ### 在线使用
 
@@ -163,13 +182,17 @@ npm run dev
 
 ## 模型与环境变量
 
-知脉 Connect 支持三种模型来源：
+知脉 Connect 支持三种模型来源。下表中的代理路径适用于网页 / PWA：
 
 | 来源                                                            | 适用方式                                  | 数据路径                            |
 | --------------------------------------------------------------- | ----------------------------------------- | ----------------------------------- |
 | OpenAI 兼容接口                                                 | 用户填写接口地址、模型名和 API Key        | 经受限同源代理访问获准的 HTTPS 主机 |
 | [Gemini 兼容接口](https://ai.google.dev/gemini-api/docs/openai) | 默认使用官方兼容端点与 `gemini-3.7-flash` | 经受限同源代理访问 Google Gemini    |
 | Ollama                                                          | 用户运行本地模型并在模型设置中填写地址    | 浏览器直接访问用户配置的本地服务    |
+
+Windows / Android 安装版通过原生网络直接访问配置的模型端点，无需网站代理，安装包不包含 API Key。Windows 可连接本机 HTTP Ollama；Android 当前使用 HTTPS 接口，手机的 `localhost` 指手机自身。
+
+在 AI 助理中填写配置后，可点击“保存模型配置”保存在当前设备。保存在浏览器或安装版中的密钥尚未接入系统凭据库；共享设备不宜保存个人密钥。
 
 `.env.example` 只包含变量名。真实密钥放入未提交的 `.env.local`，生产密钥使用 Cloudflare Secret。
 
@@ -184,67 +207,90 @@ Ollama 需要允许当前网页来源访问。只为可信的本机环境配置 
 
 ## 数据与隐私
 
-- 人物、关系、事件、提醒、圈层和偏好默认保存在当前浏览器的 IndexedDB；服务端没有用户人物数据库。
-- 清理浏览器站点数据会删除本地档案。正式录入前后应定期导出 JSON 完整备份，并将备份当作敏感文件保管。
+### 浏览器安装（PWA）与离线使用
+
+打开知脉后，在“设置 → 安装到手机或电脑”查看安装方式与离线准备状态。支持的浏览器可将知脉安装到主屏幕，无需登录。完成离线准备后，可以断网查看、编辑本机档案和记录文字；离线导入的文件、拍照材料与录音先保存在“待整理材料”中，联网后由你点击继续。
+
+Android PWA 的系统分享入口可把文字和文件交给已安装的知脉，具体以浏览器支持为准；APK 暂未提供系统分享接收入口。AI 整理、图片识别和录音转写需要对应服务可用。未提交材料不随 JSON 完整备份导出，请先完成整理或另存原文件。
+
+首次安装仍需网站可访问；安装不会让手机和电脑自动同步，也不提供关闭应用后的定时通知。技术与测试说明见 [PWA 与本机材料](doc/architecture/PWA与本机材料.md)。
+
+- 人物、关系、事件、提醒、圈层和偏好默认保存在当前浏览器或安装版的本机 IndexedDB；服务端没有用户人物数据库。
+- 清理浏览器站点数据或卸载 Android 应用会删除本地档案。正式录入前后应定期导出 JSON 完整备份，并将备份当作敏感文件保管。
 - 选择云端模型后，完成当前任务所需的文字、图片、音频和按需读取的档案片段会发送给相应模型服务商。界面会在新的数据类型首次上云前请求确认。
 - 联网工具只发送公开检索词或地点，不把本地人物档案附在天气、新闻和网页搜索请求中。
 - Agent 私密日志正文默认不保存；常规运行日志记录轮次、工具名、耗时、token 估算和状态。
 - 关系的“常隐”只控制画面。引荐资格由独立策略控制，目标路径在浏览器中根据账本计算。
 - 应用不会读取个人微信、QQ 或小红书账号，也不会替用户自动向外发送消息。
-- 当前没有登录和多设备同步。需要换浏览器或设备时，使用 JSON 完整备份手动迁移。
+- 当前没有登录、多设备同步、安装包自动更新或关闭应用后的定时系统通知。需要换浏览器或设备时，使用 JSON 完整备份手动迁移。Android PDF、相机和麦克风仍需真机验收，模拟器测试范围见 [安装版说明](doc/architecture/Windows与Android安装版.md)。
 
 ## 开发与验证
 
-技术栈：React 19、TypeScript、TanStack Start/Router、Vite 8、Tailwind CSS 4、Radix UI、IndexedDB、Vitest、Playwright，以及 Cloudflare Module Worker 构建目标。
+技术栈：React 19、TypeScript、TanStack Start/Router、Vite 8、Tailwind CSS 4、Radix UI、IndexedDB、Vitest、Playwright；网页部署到 Cloudflare Workers，Windows 使用 Electron，Android 使用 Capacitor。
 
-| 命令                   | 用途                                         |
-| ---------------------- | -------------------------------------------- |
-| `npm run dev`          | 启动开发服务器                               |
-| `npm run typecheck`    | TypeScript 静态检查                          |
-| `npm run lint`         | ESLint，警告也会导致失败                     |
-| `npm run format:check` | 检查 Prettier 格式                           |
-| `npm run test:run`     | 单次运行 Vitest 测试                         |
-| `npm run check`        | 依次运行类型、Lint、格式和单元测试           |
-| `npm run e2e`          | 运行 Playwright 端到端测试                   |
-| `npm run build`        | 生成 Cloudflare Worker 产物                  |
-| `npm run preview`      | 用 Wrangler 在 `127.0.0.1:4173` 预览生产构建 |
+| 命令                      | 用途                                         |
+| ------------------------- | -------------------------------------------- |
+| `npm run dev`             | 启动开发服务器                               |
+| `npm run typecheck`       | TypeScript 静态检查                          |
+| `npm run lint`            | ESLint，警告也会导致失败                     |
+| `npm run format:check`    | 检查 Prettier 格式                           |
+| `npm run test:run`        | 单次运行 Vitest 测试                         |
+| `npm run check`           | 依次运行类型、Lint、格式和单元测试           |
+| `npm run e2e`             | 运行 Playwright 端到端测试                   |
+| `npm run e2e:pwa`         | 生产构建上的离线、分享与移动端专项测试       |
+| `npm run build:native`    | 构建安装版共用的前端资源                     |
+| `npm run desktop:dev`     | 打开桌面开发壳，需先构建原生前端             |
+| `npm run e2e:desktop`     | 桌面独立资料目录中的启动、离线与导出测试     |
+| `npm run package:windows` | 构建 Windows x64 NSIS 安装包                 |
+| `npm run package:android` | 构建 Android 测试 APK                        |
+| `npm run build`           | 生成 Cloudflare Worker 产物                  |
+| `npm run preview`         | 用 Wrangler 在 `127.0.0.1:4173` 预览生产构建 |
 
 生产构建位于 `.output/`。`npm run preview` 使用项目生成的 `.output/server/wrangler.json`，不能用普通 `vite preview` 代替。
 
 ## Cloudflare 部署
 
-登录 Wrangler 并确认 Worker 名称、公开策略和密钥后执行：
+从已验证的 `main` 分支构建部署。首次部署时登录 Wrangler 并配置所需 Secret；后续更新保留已有 Secret，无需每次重新输入。
 
 ```powershell
 npm run check
 npm run build
-npx wrangler secret put ZHIMAI_RATE_LIMIT_SALT --config .output/server/wrangler.json
+npm run e2e
+npm run e2e:pwa
 npx wrangler deploy --config .output/server/wrangler.json
 ```
 
-构建脚本会给 Worker 注入三组 Cloudflare Rate Limiting bindings。每次部署都应重新构建，避免发布旧的 `.output`。
+构建脚本会给 Worker 注入三组 Cloudflare Rate Limiting bindings，并生成 PWA 离线资源清单。首次配置伪名化盐可运行 `npx wrangler secret put ZHIMAI_RATE_LIMIT_SALT --config .output/server/wrangler.json`。每次部署都应重新构建并核对线上 Worker 版本、静态资源和 `sw.js` 中的 PWA 指纹。
+
+网页的新版本下载完成后，保存工作并关闭所有知脉窗口，再打开即可启用；更新不会主动刷新正在编辑的页面。EXE / APK 需另行打包和安装，Cloudflare 部署不会更新已安装的客户端。
 
 ## 源码导航
 
-| 位置                                     | 职责                                                |
-| ---------------------------------------- | --------------------------------------------------- |
-| `src/components/`                        | 录入、人物关系、提醒、日历、计划、AI 助理与设置界面 |
-| `src/lib/face-db.ts`                     | IndexedDB 数据模型、版本与事务入口                  |
-| `src/lib/today-projection.ts`            | 从源记录投影“今天”工作台                            |
-| `src/lib/meeting-brief.ts`               | 可追溯、版本化的见面简报                            |
-| `src/lib/demo-data.ts`                   | 四个生活场景与 50 人综合演示库                      |
-| `src/lib/archive-agent-tools.ts`         | Agent 共用的档案、推荐与联网工具注册表              |
-| `src/lib/agent-runtime.ts`               | 统一轮次、工具、token 和时限预算                    |
-| `src/lib/mutation-commit-coordinator.ts` | 变更提交、收据和整批撤销                            |
-| `src/lib/relation-ontology.ts`           | 关系谓词、方向与语义定义                            |
-| `src/lib/kinship-projector.ts`           | 从已确认断言计算亲属派生关系                        |
-| `src/lib/archive-data.ts`                | `archive@2` 导出、校验、迁移和恢复计划              |
-| `src/lib/intake-agent.ts`                | 多轮自然语言录入 Agent                              |
-| `src/lib/recommendation-agent.ts`        | “这事该拜托谁”的任务理解与档案披露                  |
-| `src/lib/planning-agent.ts`              | 目标拆解、按需查档和待批准行动草案                  |
-| `src/lib/assistant-agent.ts`             | “问一问”、工具记忆和修改提案                        |
-| `src/routes/api/`                        | 模型、转写与联网工具的同源服务端路由                |
-| `e2e/`                                   | 浏览器隔离、恢复、断点续跑和核心流程测试            |
+| 位置                                                  | 职责                                                |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| `src/components/`                                     | 录入、人物关系、提醒、日历、计划、AI 助理与设置界面 |
+| `src/components/workspace.tsx`                        | 网页和安装版共用的应用入口                          |
+| `src/lib/local-capture-store.ts`                      | 本机原始材料收件箱与一次追加                        |
+| `src/lib/pwa-client.ts` / `scripts/build-pwa.mjs`     | 浏览器安装、离线准备和更新生命周期                  |
+| `src/lib/native-runtime.ts` / `src/lib/native-api.ts` | 原生流式网络、文件保存和模型请求适配                |
+| `src/lib/provider-protocol.ts`                        | 网页与安装版共用的模型请求与响应格式                |
+| `desktop/` / `android/` / `native/`                   | Windows、Android 宿主与安装版前端                   |
+| `src/lib/face-db.ts`                                  | IndexedDB 数据模型、版本与事务入口                  |
+| `src/lib/today-projection.ts`                         | 从源记录投影“今天”工作台                            |
+| `src/lib/meeting-brief.ts`                            | 可追溯、版本化的见面简报                            |
+| `src/lib/demo-data.ts`                                | 四个生活场景与 50 人综合演示库                      |
+| `src/lib/archive-agent-tools.ts`                      | Agent 共用的档案、推荐与联网工具注册表              |
+| `src/lib/agent-runtime.ts`                            | 统一轮次、工具、token 和时限预算                    |
+| `src/lib/mutation-commit-coordinator.ts`              | 变更提交、收据和整批撤销                            |
+| `src/lib/relation-ontology.ts`                        | 关系谓词、方向与语义定义                            |
+| `src/lib/kinship-projector.ts`                        | 从已确认断言计算亲属派生关系                        |
+| `src/lib/archive-data.ts`                             | `archive@2` 导出、校验、迁移和恢复计划              |
+| `src/lib/intake-agent.ts`                             | 多轮自然语言录入 Agent                              |
+| `src/lib/recommendation-agent.ts`                     | “这事该拜托谁”的任务理解与档案披露                  |
+| `src/lib/planning-agent.ts`                           | 目标拆解、按需查档和待批准行动草案                  |
+| `src/lib/assistant-agent.ts`                          | “问一问”、工具记忆和修改提案                        |
+| `src/routes/api/`                                     | 模型、转写与联网工具的同源服务端路由                |
+| `e2e/`                                                | 浏览器隔离、恢复、断点续跑和核心流程测试            |
 
 开始修改前请阅读 [AGENTS.md](AGENTS.md)。它记录了产品边界、数据不变量、Agent 工具规范、写作要求和发布检查。
 
@@ -253,6 +299,8 @@ npx wrangler deploy --config .output/server/wrangler.json
 - [文档索引](doc/README.md)
 - [产品哲学与架构判据](doc/product/中期反思.md)
 - [机器归档格式 v2](doc/architecture/机器归档格式-v2.md)
+- [PWA 与本机材料](doc/architecture/PWA与本机材料.md)
+- [Windows 与 Android 安装版](doc/architecture/Windows与Android安装版.md)
 - [持续验收记录](doc/quality/ACCEPTANCE_LOG.md)
 - [亲属关系推理回归样例](doc/quality/亲属关系推理-红楼梦测试样例.md)
 - [关系图与引荐算法调研](doc/research/文献调研-关系网与推荐.md)

@@ -66,11 +66,14 @@ test("文件解析失败不会覆盖已经在编辑的草稿", async ({ page }) 
     "reminder",
   ]);
 
-  await page.locator('input[type="file"]').setInputFiles({
-    name: "broken.docx",
-    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    buffer: Buffer.from("not-a-valid-docx"),
-  });
+  await page
+    .locator('input[type="file"]')
+    .first()
+    .setInputFiles({
+      name: "broken.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      buffer: Buffer.from("not-a-valid-docx"),
+    });
 
   await expect(page.getByText(/broken\.docx：/)).toBeVisible();
   await expect(page.getByRole("button", { name: "导入图片 / PDF / Word / 文本" })).toBeEnabled();
@@ -248,13 +251,23 @@ test("语言切换同步 html、标题和关键控件的可访问名称", async 
   await expect(page.getByRole("button", { name: "Next month" })).toBeVisible();
 });
 
-test("超过 24 小时的本地录入材料不会恢复", async ({ page }) => {
+test("超过 24 小时的本地录入材料仍会恢复", async ({ page }) => {
   await openApp(page);
+  await page
+    .getByRole("textbox", { name: "录入材料", exact: true })
+    .fill("合成离线材料，下周继续整理");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => JSON.parse(localStorage.getItem("zhimai.intake.draft.v1") ?? "null")?.raw,
+      ),
+    )
+    .toBe("合成离线材料，下周继续整理");
   await page.evaluate(() => {
     localStorage.setItem(
       "zhimai.intake.draft.v1",
       JSON.stringify({
-        raw: "这段过期材料不应恢复",
+        raw: "合成离线材料，下周继续整理",
         supplement: "",
         draft: null,
         attached: [],
@@ -265,10 +278,7 @@ test("超过 24 小时的本地录入材料不会恢复", async ({ page }) => {
   await page.reload();
   await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
   const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
-  await expect(intake.getByRole("textbox")).toHaveValue("");
-  await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("zhimai.intake.draft.v1")))
-    .toBeNull();
+  await expect(intake.getByRole("textbox")).toHaveValue("合成离线材料，下周继续整理");
 });
 
 test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", async ({ page }) => {

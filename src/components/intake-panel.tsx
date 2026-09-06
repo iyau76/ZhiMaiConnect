@@ -2,6 +2,7 @@ import {
   ArrowRight,
   Bell,
   CalendarDays,
+  Camera,
   Check,
   Clock3,
   Loader2,
@@ -36,6 +37,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
+import { LocalCaptureInbox } from "@/components/local-capture-inbox";
+import { saveCapture, type LocalCapture } from "@/lib/local-capture-store";
+import { usePwaState } from "@/lib/pwa-client";
 import { startRecording, transcribeAudio, type Recorder } from "@/lib/audio-client";
 import { IMPORT_LIMITS, importFiles } from "@/lib/doc-import";
 import {
@@ -325,7 +329,6 @@ function buildPrompt(text: string, known: string[]) {
 
 /** 未提交的录入内容随状态变化写入本地，切换页签后可以继续。 */
 const DRAFT_KEY = "zhimai.intake.draft.v1";
-const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface StashShape {
   raw: string;
@@ -337,6 +340,7 @@ interface StashShape {
   resolutionIssues?: SemanticIntakeIssue[];
   intakeState?: SemanticIntakeTaskSnapshot | null;
   attached: { name: string; block: string }[];
+  importedCaptureIds?: string[];
   at: number;
 }
 
@@ -346,10 +350,6 @@ function readStash(): StashShape | null {
     const text = window.localStorage.getItem(DRAFT_KEY);
     if (!text) return null;
     const stored = JSON.parse(text) as StashShape;
-    if (!Number.isFinite(stored.at) || Date.now() - stored.at > DRAFT_TTL_MS) {
-      window.localStorage.removeItem(DRAFT_KEY);
-      return null;
-    }
     return stored;
   } catch {
     window.localStorage.removeItem(DRAFT_KEY);
@@ -660,6 +660,10 @@ export function IntakePanel({
   const [stashedAt, setStashedAt] = useState<number | null>(null);
   const [draftPersisted, setDraftPersisted] = useState(false);
   const [stashLoaded, setStashLoaded] = useState(false);
+  const [stashError, setStashError] = useState<string | null>(null);
+  const [importedCaptureIds, setImportedCaptureIds] = useState<string[]>([]);
+  const [captureRevision, setCaptureRevision] = useState(0);
+  const { online } = usePwaState();
   const [acceptAllOpen, setAcceptAllOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -671,6 +675,8 @@ export function IntakePanel({
   const consumedRunFocus = useRef("");
   const recorderRef = useRef<Recorder | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const lastPersistedPayload = useRef("");
   const runInspectorRef = useRef<HTMLDivElement | null>(null);
   const proposalRef = useRef<HTMLElement | null>(null);
   const handledFocus = useRef("");
@@ -714,6 +720,7 @@ export function IntakePanel({
     setResolutionIssues(stored.resolutionIssues ?? []);
     setIntakeState(stored.intakeState ?? null);
     setAttached(stored.attached);
+    setImportedCaptureIds(stored.importedCaptureIds ?? []);
     setStashedAt(stored.at);
     setDraftPersisted(Boolean(stored.draft));
   }, []);
@@ -884,6 +891,7 @@ export function IntakePanel({
   /** 草稿状态变化后立即短暂防抖写入；15 秒仅作为静态页面兜底。 */
   const snapshot = useRef({
     stashLoaded,
+    importedCaptureIds,
     raw,
     supplement,
     draft,
@@ -894,6 +902,7 @@ export function IntakePanel({
   });
   snapshot.current = {
     stashLoaded,
+    importedCaptureIds,
     raw,
     supplement,
     draft,
@@ -905,6 +914,12 @@ export function IntakePanel({
   const persistSnapshot = useCallback(() => {
     const now = snapshot.current;
     if (!now.stashLoaded) return;
+    const payload = JSON.stringify(now);
+    // An unchanged background tab must not overwrite a newer window's draft.
+    if (payload === lastPersistedPayload.current) {
+      setDraftPersisted(Boolean(now.draft));
+      return;
+    }
     const empty =
       !now.raw.trim() &&
       !now.supplement.trim() &&
@@ -916,12 +931,20 @@ export function IntakePanel({
       window.localStorage.removeItem(DRAFT_KEY);
       setDraftPersisted(false);
       setStashedAt(null);
+      lastPersistedPayload.current = payload;
       return;
     }
     const at = Date.now();
-    window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...now, at }));
-    setDraftPersisted(Boolean(now.draft));
-    setStashedAt(at);
+    try {
+      window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...now, at }));
+      lastPersistedPayload.current = payload;
+      setDraftPersisted(Boolean(now.draft));
+      setStashedAt(at);
+      setStashError(null);
+    } catch {
+      setDraftPersisted(false);
+      setStashError("本机草稿未能保存，请先复制材料，或释放站点存储空间。");
+    }
   }, []);
 
   useEffect(() => {
@@ -930,6 +953,7 @@ export function IntakePanel({
     return () => window.clearTimeout(timer);
   }, [
     stashLoaded,
+    importedCaptureIds,
     attached,
     draft,
     intakeState,
@@ -999,6 +1023,7 @@ export function IntakePanel({
     setIntakeState(null);
     setDurableIntake(null);
     setAttached([]);
+    setImportedCaptureIds([]);
     setStashedAt(null);
     window.localStorage.removeItem(DRAFT_KEY);
     toast.success(t("已清除本地录入草稿"));
@@ -1011,6 +1036,23 @@ export function IntakePanel({
     const validationErrors = validateIntakeFiles(selected);
     if (validationErrors.length) {
       validationErrors.forEach((message) => toast.error(message));
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    // Offline input has the same destination as OS sharing. Do not start OCR
+    // or cloud consent while there is no network; preserve the original file.
+    if (!navigator.onLine) {
+      try {
+        await saveCapture({
+          title: selected.map((file) => file.name).join("、"),
+          text: "",
+          files: selected,
+        });
+        setCaptureRevision((value) => value + 1);
+        toast.success(t("材料已保存在本机，联网后可读取。"));
+      } catch (error) {
+        toast.error((error as Error).message);
+      }
       if (fileRef.current) fileRef.current.value = "";
       return;
     }
@@ -1049,6 +1091,49 @@ export function IntakePanel({
     }
   };
 
+  const importCapture = async (capture: LocalCapture) => {
+    if (snapshot.current.importedCaptureIds.includes(capture.id)) return;
+    if (capture.files.some((file) => /^(image|audio)\//.test(file.type)) && !navigator.onLine) {
+      throw new Error(t("图片和录音已保存在本机，联网后再识别文字。"));
+    }
+    const documents = capture.files.filter((file) => !file.type.startsWith("audio/"));
+    const docs = documents.length ? await importFiles(documents, preset, () => undefined) : [];
+    for (const file of capture.files.filter((file) => file.type.startsWith("audio/"))) {
+      docs.push({
+        name: file.name,
+        text: await transcribeAudio(file, { preset, filename: file.name }),
+      });
+    }
+    const failures = docs.filter((doc) => doc.error);
+    if (failures.length)
+      throw new Error(failures.map((doc) => `${doc.name}：${doc.error}`).join("；"));
+    const entries = docs
+      .filter((doc) => doc.text.trim())
+      .map((doc) => ({
+        name: doc.name,
+        block: `【${t("来自文件")}：${doc.name}】\n${doc.text.trim()}`,
+      }));
+    if (!capture.text.trim() && !entries.length) throw new Error(t("没有从文件里读到文字"));
+    const current = snapshot.current;
+    const next = {
+      ...current,
+      raw: [current.raw.trim(), capture.text.trim(), ...entries.map((item) => item.block)]
+        .filter(Boolean)
+        .join("\n\n"),
+      attached: [...current.attached, ...entries],
+      importedCaptureIds: [...current.importedCaptureIds, capture.id],
+      at: Date.now(),
+    };
+    // Text and receipt are committed together before removing the inbox item.
+    // If the tab closes between those writes, reopening cannot append it twice.
+    window.localStorage.setItem(DRAFT_KEY, JSON.stringify(next));
+    snapshot.current = next;
+    setRaw(next.raw);
+    setAttached(next.attached);
+    setImportedCaptureIds(next.importedCaptureIds);
+    setStashedAt(next.at);
+  };
+
   /** Ctrl/⌘+V：直接把剪贴板里的截图或文件贴进来 */
   const pasteRef = useRef(pickFiles);
   pasteRef.current = pickFiles;
@@ -1067,6 +1152,16 @@ export function IntakePanel({
     setTranscribing(true);
     try {
       const filename = `recording-${Date.now()}.webm`;
+      if (!navigator.onLine) {
+        await saveCapture({
+          title: t("离线录音"),
+          text: "",
+          files: [new File([blob], filename, { type: blob.type || "audio/webm" })],
+        });
+        setCaptureRevision((value) => value + 1);
+        toast.success(t("录音已保存在本机，联网后可转写。"));
+        return;
+      }
       const transcript = await transcribeAudio(blob, {
         preset,
         filename,
@@ -3077,12 +3172,12 @@ export function IntakePanel({
             Intake
           </span>
         </h2>
-        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+        <p className="mt-2 hidden text-[11px] leading-relaxed text-muted-foreground md:block">
           {t(
             "不用一格一格填表。把你知道的人和事一口气写下来，人物、关系、待办会自动拆好，缺的内容会提醒你补。",
           )}
         </p>
-        <ul className="mt-2 list-inside list-disc space-y-1 text-[11px] text-muted-foreground">
+        <ul className="mt-2 hidden list-inside list-disc space-y-1 text-[11px] text-muted-foreground md:block">
           <li>
             {t("写人：小雨，大学室友，3 月 12 日生日，爱喝手冲咖啡、不吃香菜，现在在杭州做产品。")}
           </li>
@@ -3090,19 +3185,32 @@ export function IntakePanel({
         </ul>
 
         <Textarea
+          aria-label={t("录入材料")}
           value={raw}
           onChange={(event) => setRaw(event.target.value)}
           disabled={saving || busy}
           rows={8}
           className="mt-4 text-sm"
-          placeholder=""
+          placeholder={t("例如：小雨，大学室友，3 月 12 日生日，爱喝手冲咖啡。")}
         />
 
         <p className="mt-1.5 text-[10px] text-muted-foreground">
           {stashedAt
-            ? `${t("已自动暂存")} · ${new Date(stashedAt).toLocaleTimeString()} · ${t("24 小时后自动过期")}`
-            : t("内容会自动暂存在本浏览器，并于 24 小时后过期")}
+            ? `${t("已自动暂存")} · ${new Date(stashedAt).toLocaleTimeString()} · ${t("保留到你手动清除")}`
+            : t("材料自动保存在本机，可离线填写，稍后继续")}
         </p>
+        {stashError && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            {t(stashError)}
+          </p>
+        )}
+        <div className="mt-4">
+          <LocalCaptureInbox
+            revision={captureRevision}
+            disabled={!stashLoaded || busy || saving || !!reading || approvingProposal}
+            onImport={importCapture}
+          />
+        </div>
 
         {attached.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
@@ -3127,9 +3235,10 @@ export function IntakePanel({
         )}
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button
-            className="rounded-full px-5"
+            className="min-h-11 rounded-full px-5 md:min-h-0"
             onClick={() => void organize()}
             disabled={
+              !online ||
               busy ||
               !!reading ||
               recording ||
@@ -3156,7 +3265,7 @@ export function IntakePanel({
           />
           <Button
             variant="outline"
-            className="rounded-full px-4"
+            className="min-h-11 rounded-full px-4 md:min-h-0"
             disabled={!!reading || busy || recording || transcribing || saving || approvingProposal}
             onClick={() => fileRef.current?.click()}
           >
@@ -3169,8 +3278,29 @@ export function IntakePanel({
           </Button>
           <Button
             type="button"
+            variant="outline"
+            className="min-h-11 rounded-full px-4 md:hidden"
+            disabled={!!reading || busy || recording || transcribing || saving || approvingProposal}
+            onClick={() => cameraRef.current?.click()}
+          >
+            <Camera className="size-4" aria-hidden="true" />
+            {t("拍照")}
+          </Button>
+          <input
+            ref={cameraRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(event) => {
+              void pickFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
+          <Button
+            type="button"
             variant={recording ? "destructive" : "outline"}
-            className="rounded-full px-4"
+            className="min-h-11 rounded-full px-4 md:min-h-0"
             onClick={() => void toggleRecording()}
             disabled={
               ((busy || !!reading || transcribing) && !recording) || saving || approvingProposal
@@ -3179,7 +3309,7 @@ export function IntakePanel({
             {recording ? (
               <>
                 <Square className="size-3.5" aria-hidden="true" />
-                {t("停止并转写")} · {recordingSeconds}s
+                {t("停止录音")} · {recordingSeconds}s
               </>
             ) : (
               <>
@@ -3268,7 +3398,9 @@ export function IntakePanel({
           {t("个字符。也可以 Ctrl/⌘+V 粘贴。")}
         </p>
         <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-          {t("录音会在停止后发送到当前转写服务；转写文字只会追加到输入框，不会自动整理或入库。")}
+          {t(
+            "联网录音停止后使用当前转写服务；离线录音先保存在待整理材料中。转写文字会追加到输入框。",
+          )}
         </p>
         {transcribing && (
           <p
