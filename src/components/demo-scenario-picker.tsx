@@ -10,6 +10,11 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 
+import campusArt from "@/assets/art/web/campus.webp";
+import familyArt from "@/assets/art/web/family.webp";
+import workplaceArt from "@/assets/art/web/workplace.webp";
+import smallBusinessArt from "@/assets/art/web/small-business.webp";
+
 import { Button } from "@/components/ui/button";
 import { DEMO_SCENARIOS, loadDemoData, type DemoScenarioId } from "@/lib/demo-data";
 import { getLang, t } from "@/lib/i18n";
@@ -28,6 +33,13 @@ const SCENARIO_ICON: Record<Exclude<DemoScenarioId, "all">, LucideIcon> = {
   family: HeartHandshake,
   workplace: BriefcaseBusiness,
   small_business: Store,
+};
+
+const SCENARIO_ART: Record<Exclude<DemoScenarioId, "all">, string> = {
+  campus: campusArt,
+  family: familyArt,
+  workplace: workplaceArt,
+  small_business: smallBusinessArt,
 };
 
 export function DemoScenarioPicker({
@@ -66,21 +78,33 @@ export function DemoScenarioPicker({
               type="button"
               disabled={loadingId !== null}
               onClick={() => void load(scenario.id)}
-              className="group rounded-xl border border-border bg-background/65 p-3 text-left transition-colors hover:border-primary/60 hover:bg-primary/5 disabled:cursor-wait disabled:opacity-60"
+              className="group flex overflow-hidden rounded-xl border border-border bg-background/65 text-left transition-colors hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-wait disabled:opacity-60 sm:flex-col"
             >
-              <span className="flex items-center gap-2 text-sm font-medium">
-                {loading ? (
-                  <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
-                ) : (
-                  <Icon className="size-4 text-primary" aria-hidden="true" />
-                )}
-                {t(scenario.name)}
-              </span>
-              <span className="mt-1.5 block text-[11px] leading-relaxed text-muted-foreground">
-                {t(scenario.description)}
-              </span>
-              <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground/80">
-                {t(scenario.example)}
+              <img
+                src={SCENARIO_ART[scenario.id]}
+                alt=""
+                width={640}
+                height={480}
+                loading="lazy"
+                decoding="async"
+                className="w-24 shrink-0 self-stretch object-cover sm:aspect-[2/1] sm:w-full sm:self-auto"
+                data-testid={`scenario-art-${scenario.id}`}
+              />
+              <span className="block min-w-0 p-3">
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  {loading ? (
+                    <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
+                  ) : (
+                    <Icon className="size-4 text-primary" aria-hidden="true" />
+                  )}
+                  {t(scenario.name)}
+                </span>
+                <span className="mt-1.5 block text-[11px] leading-relaxed text-muted-foreground">
+                  {t(scenario.description)}
+                </span>
+                <span className="mt-1 block text-[10px] leading-relaxed text-muted-foreground/80">
+                  {t(scenario.example)}
+                </span>
               </span>
             </button>
           );

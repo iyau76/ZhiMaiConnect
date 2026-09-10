@@ -19,6 +19,8 @@ import {
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
+import intakeArt from "@/assets/art/web/intake.webp";
+
 import { DraftGraph } from "@/components/draft-graph";
 import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
@@ -3163,8 +3165,20 @@ export function IntakePanel({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <div className="rounded-2xl border border-border bg-card/60 p-5">
-        <h2 className="flex items-baseline gap-2.5">
+      <div className="relative rounded-2xl border border-border bg-card/60 p-5">
+        {stashLoaded && !raw.trim() && !draft && !attached.length && (
+          <img
+            src={intakeArt}
+            alt=""
+            width={400}
+            height={400}
+            loading="lazy"
+            decoding="async"
+            data-testid="intake-empty-art"
+            className="pointer-events-none absolute right-5 top-5 size-24 rounded-xl object-cover sm:size-28"
+          />
+        )}
+        <h2 className="flex min-h-24 flex-wrap content-start items-baseline gap-2.5 pr-28 sm:min-h-28 sm:pr-32 md:min-h-0">
           <span className="font-display text-xl leading-none tracking-tight">
             {t("随手写，AI 来整理")}
           </span>
@@ -3172,12 +3186,12 @@ export function IntakePanel({
             Intake
           </span>
         </h2>
-        <p className="mt-2 hidden text-[11px] leading-relaxed text-muted-foreground md:block">
+        <p className="mt-2 hidden pr-32 text-[11px] leading-relaxed text-muted-foreground md:block">
           {t(
             "不用一格一格填表。把你知道的人和事一口气写下来，人物、关系、待办会自动拆好，缺的内容会提醒你补。",
           )}
         </p>
-        <ul className="mt-2 hidden list-inside list-disc space-y-1 text-[11px] text-muted-foreground md:block">
+        <ul className="mt-2 hidden min-h-16 list-inside list-disc space-y-1 pr-32 text-[11px] text-muted-foreground md:block">
           <li>
             {t("写人：小雨，大学室友，3 月 12 日生日，爱喝手冲咖啡、不吃香菜，现在在杭州做产品。")}
           </li>

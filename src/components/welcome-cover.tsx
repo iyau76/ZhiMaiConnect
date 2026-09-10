@@ -1,11 +1,13 @@
 /** 首次进入时只做一次选择：看演示、带材料开始，或从空库开始。 */
 
-import { ArrowLeft, Database, FileInput, NotebookPen, X } from "lucide-react";
+import { ArrowLeft, Database, FileInput, NotebookPen } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import logoUrl from "@/assets/logo-mark-384.png";
+import welcomeArt from "@/assets/art/web/welcome.webp";
 import { DemoScenarioPicker } from "@/components/demo-scenario-picker";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { t } from "@/lib/i18n";
 
 const SEEN_KEY = "openglass.welcomeSeen";
@@ -40,31 +42,32 @@ export function WelcomeCover({ onPasteMaterial, onDemoLoaded }: WelcomeCoverProp
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-4 backdrop-blur-md">
-      <div className="relative w-full max-w-2xl rounded-2xl border border-border bg-card p-6 shadow-2xl sm:p-8">
-        <button
-          type="button"
-          onClick={() => close()}
-          aria-label={t("关闭")}
-          className="absolute right-4 top-4 text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <X className="size-4" aria-hidden="true" />
-        </button>
-
-        <div className="flex flex-col items-center text-center">
-          <img
-            src={logoUrl}
-            alt="知脉 Connect"
-            width={192}
-            height={192}
-            className="mb-4 size-24 opacity-95 transition-opacity duration-500 hover:opacity-100"
-          />
-
-          <p className="text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Welcome</p>
-          <h1 className="mt-2 text-xl font-semibold">{t("先从你手边的生活开始")}</h1>
-          <p className="mt-2 max-w-lg text-sm leading-relaxed text-muted-foreground">
+    <Dialog open={open} onOpenChange={(next) => !next && close()}>
+      <DialogContent
+        data-testid="welcome-cover"
+        className="max-h-[90dvh] w-[calc(100%-2rem)] max-w-3xl gap-0 overflow-y-auto rounded-2xl bg-card p-0 sm:rounded-2xl [&>button]:grid [&>button]:size-8 [&>button]:place-items-center [&>button]:rounded-full [&>button]:bg-card [&>button]:opacity-100"
+      >
+        {!choosingDemo && (
+          <div className="relative overflow-hidden bg-[#fbf7f2]" data-testid="welcome-art">
+            <img
+              src={welcomeArt}
+              alt=""
+              width={1280}
+              height={720}
+              fetchPriority="high"
+              className="h-36 w-full object-cover object-right sm:h-60"
+            />
+            <div className="absolute bottom-4 left-5 flex items-center gap-2 rounded-full bg-[#fbf7f2]/95 px-3 py-1.5 text-sm font-medium text-slate-800 sm:bottom-auto sm:top-6">
+              <img src={logoUrl} alt="" width={32} height={32} className="size-8" />
+              知脉 Connect
+            </div>
+          </div>
+        )}
+        <div className="flex flex-col items-center p-5 text-center sm:p-7">
+          <DialogTitle className="text-xl leading-snug">{t("先从你手边的生活开始")}</DialogTitle>
+          <DialogDescription className="mt-2 max-w-lg text-sm leading-relaxed">
             {t("记下一个人或一件事，知脉会把关系、事件和下一步放回同一张工作台。")}
-          </p>
+          </DialogDescription>
 
           {choosingDemo ? (
             <div className="mt-6 w-full text-left">
@@ -123,7 +126,7 @@ export function WelcomeCover({ onPasteMaterial, onDemoLoaded }: WelcomeCoverProp
             </Button>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

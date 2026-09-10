@@ -31,6 +31,9 @@ test-results/
 # Generated release bundles stay local.
 release/
 
+# Keep full-resolution art masters locally; ship optimized assets from art/web.
+/src/assets/art/*.png
+
 # Private source material and locally produced video assets are not part of the
 # public application repository.
 /doc/background/

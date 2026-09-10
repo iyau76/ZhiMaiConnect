@@ -18,6 +18,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import peopleEmptyArt from "@/assets/art/web/people-empty.webp";
+
 import { ExportMenu } from "@/components/export-menu";
 import { PageGuide } from "@/components/page-guide";
 import { PersonProfileDialog } from "@/components/person-profile-dialog";
@@ -1486,9 +1488,21 @@ export function RelationsPanel({
           </div>
 
           {filteredPeople.length === 0 ? (
-            <p className="py-10 text-center text-xs text-muted-foreground">
-              {people.length === 0 ? t("还没有任何人物档案") : t("没有匹配的档案")}
-            </p>
+            <div className="flex flex-col items-center gap-4 py-8 text-center text-xs text-muted-foreground">
+              {people.length === 0 && (
+                <img
+                  src={peopleEmptyArt}
+                  alt=""
+                  width={400}
+                  height={400}
+                  loading="lazy"
+                  decoding="async"
+                  data-testid="people-empty-art"
+                  className="size-36 rounded-2xl object-cover sm:size-44"
+                />
+              )}
+              <p>{people.length === 0 ? t("还没有任何人物档案") : t("没有匹配的档案")}</p>
+            </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {filteredPeople.map((person) => (

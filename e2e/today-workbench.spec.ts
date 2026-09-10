@@ -4,13 +4,18 @@ const NOW = new Date("2026-09-05T08:00:00+08:00").getTime();
 
 test("今天页从源记录汇总事项，并回到同一事件完成原位编辑", async ({ page }) => {
   await openApp(page, { initialView: "today" });
+  const upcomingBirthday = await page.evaluate(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return `${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+  });
   await seedIndexedDb(page, {
     persons: [
       {
         id: "person-tang",
         name: "唐悦",
         note: "大学摄影社搭档",
-        profile: { birthday: "09-06" },
+        profile: { birthday: upcomingBirthday },
         descriptors: [],
         thumb: "",
         createdAt: NOW,
