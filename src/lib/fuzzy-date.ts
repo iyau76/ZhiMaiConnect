@@ -136,6 +136,15 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
     }
   }
 
+  const isoMonth = s.match(/^((?:19|20)\d{2})[-/.](\d{1,2})$/);
+  if (isoMonth) {
+    const y = Number(isoMonth[1]);
+    const m = Number(isoMonth[2]);
+    if (m >= 1 && m <= 12) {
+      return { date: `${y}-${pad(m)}-01`, precision: "month" };
+    }
+  }
+
   const relativeDays: Array<[RegExp, number]> = [
     [/今天|今日/, 0],
     [/明天|明日/, 1],
@@ -267,7 +276,7 @@ export function fuzzyPrompt(text: string, now = new Date()) {
   return [
     "把用户描述的模糊时间转成结构化时间，只输出 JSON，不要解释。",
     `今天是 ${now.toISOString().slice(0, 10)}。`,
-    'JSON 形如 {"precision":"day|month|year|range","date":"YYYY-MM-DD","dateEnd":"YYYY-MM-DD"}。',
+    'JSON 形如 {"precision":"day|month|year|range","date":"YYYY-MM-DD 或 YYYY-MM 或 YYYY","dateEnd":"YYYY-MM-DD"}。',
     "precision=year 时 date 用当年 1 月 1 日；month 用当月 1 日；range 时必须给 dateEnd。",
     `用户描述：${text}`,
   ].join("\n");
@@ -280,17 +289,28 @@ export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | nu
     const [year, month, day] = value.split("-").map(Number);
     return month >= 1 && month <= 12 && day >= 1 && day <= new Date(year, month, 0).getDate();
   };
-  if (!raw?.date || !validDate(raw.date)) return null;
+  const normalizeDate = (value: string) => {
+    if (/^\d{4}$/.test(value)) return `${value}-01-01`;
+    if (/^\d{4}-\d{2}$/.test(value)) return `${value}-01`;
+    return validDate(value) ? value : null;
+  };
+  const inferredPrecision = (value: string): DatePrecision =>
+    /^\d{4}$/.test(value) ? "year" : /^\d{4}-\d{2}$/.test(value) ? "month" : "day";
+  if (!raw?.date) return null;
+  const date = normalizeDate(raw.date);
+  if (!date) return null;
   const precision: DatePrecision =
     raw.precision === "day" ||
     raw.precision === "month" ||
     raw.precision === "year" ||
     raw.precision === "range"
       ? raw.precision
-      : "year";
-  if (raw.dateEnd && !validDate(raw.dateEnd)) return null;
-  const dateEnd = raw.dateEnd;
-  if (precision === "range" && !dateEnd) return { date: raw.date, precision: "month" };
-  if (precision === "range" && dateEnd! < raw.date) return null;
-  return { date: raw.date, dateEnd: precision === "range" ? dateEnd : undefined, precision };
+      : raw.precision === undefined
+        ? inferredPrecision(raw.date)
+        : "year";
+  const dateEnd = raw.dateEnd ? normalizeDate(raw.dateEnd) : null;
+  if (raw.dateEnd && !dateEnd) return null;
+  if (precision === "range" && !dateEnd) return { date, precision: "month" };
+  if (precision === "range" && dateEnd! < date) return null;
+  return { date, dateEnd: precision === "range" ? dateEnd! : undefined, precision };
 }

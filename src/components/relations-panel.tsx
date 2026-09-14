@@ -56,6 +56,11 @@ import {
   type RelationGraphGroupingMode,
 } from "@/lib/relation-graph-grouping";
 import {
+  buildFamilyTreeLayout,
+  familyTreeEdgeKind,
+  isFamilyTreeRelation,
+} from "@/lib/family-tree-layout";
+import {
   relationCategory,
   relationEvidenceMode,
   selectVisibleRelations,
@@ -94,6 +99,8 @@ type GraphDrill =
   | { mode: "blocks" }
   | { mode: "group"; key: string }
   | { mode: "members"; key: string; memberIds: string[] };
+
+type GraphLayoutMode = "auto" | "network" | "family";
 
 const DEFAULT_RELATION_LABELS = ["朋友", "同事", "同学", "亲属", "夫妻", "合作伙伴"];
 
@@ -159,6 +166,7 @@ export function RelationsPanel({
     "all" | "confirmed" | "pending"
   >("all");
   const [graphViewMode, setGraphViewMode] = useState<GraphViewMode>("overview");
+  const [graphLayoutMode, setGraphLayoutMode] = useState<GraphLayoutMode>("auto");
   const [focusDepth, setFocusDepth] = useState<1 | 2>(1);
   const [showEdgeLabels, setShowEdgeLabels] = useState(false);
   /** 档案页：搜索词、标签筛选、批量选中 */
@@ -672,6 +680,29 @@ export function RelationsPanel({
     [policyFilteredRelations, lifeEvents, graphViewMode, selectedId, focusDepth],
   );
 
+  const familyTreeRelations = useMemo(
+    () => graphVisibility.visible.filter(isFamilyTreeRelation),
+    [graphVisibility.visible],
+  );
+  const familyOnly =
+    graphVisibility.visible.length > 0 &&
+    familyTreeRelations.length === graphVisibility.visible.length;
+  const showFamilyTree =
+    graphLayoutMode === "family" ||
+    (graphLayoutMode === "auto" &&
+      familyOnly &&
+      familyTreeRelations.some((relation) =>
+        ["parent", "spouse"].includes(familyTreeEdgeKind(relation) ?? ""),
+      ));
+  const familyTree = useMemo(
+    () =>
+      buildFamilyTreeLayout({
+        people: visiblePeople,
+        relations: familyTreeRelations,
+      }),
+    [familyTreeRelations, visiblePeople],
+  );
+
   /**
    * Above this size, overview is a community map. It is a reversible visual
    * projection: clicking a community drills into the exact member ids.
@@ -680,7 +711,8 @@ export function RelationsPanel({
     graphViewMode === "overview" &&
     groupBy === "communities" &&
     drill.mode === "blocks" &&
-    visiblePeople.length > 60;
+    visiblePeople.length > 60 &&
+    !showFamilyTree;
   const communityOverview = useMemo(
     () =>
       buildRelationCommunityOverview(visiblePeople, graphVisibility.visible, relationCommunities),
@@ -720,6 +752,43 @@ export function RelationsPanel({
 
   /** 关系网布局：默认一个大圆；按标签分组时每个圈层自成一簇。 */
   const graph = useMemo(() => {
+    if (showFamilyTree && familyTree.nodes.length > 0) {
+      const nodeById = new Map(familyTree.nodes.map((node) => [node.id, node]));
+      const nodes = familyTree.nodes.map((node) => ({
+        ...node,
+        group: "",
+        color: graphColor(`generation:${node.generation}`),
+      }));
+      const relationById = new Map(familyTreeRelations.map((relation) => [relation.id, relation]));
+      const edges = familyTree.edges
+        .map((edge) => {
+          const relation = relationById.get(edge.relationId);
+          const a = nodeById.get(edge.fromId);
+          const b = nodeById.get(edge.toId);
+          if (!relation || !a || !b) return null;
+          return {
+            id: relation.id,
+            label: relation.label,
+            mutual: edge.kind !== "parent",
+            evidenceMode: relationEvidenceMode(relation),
+            supportingRelationIds:
+              relation.supportingRelationIds ?? relation.derivedFromRelationIds ?? [],
+            confirmationStatus: relation.confirmationStatus ?? "confirmed",
+            visibility: relation.visibility ?? "auto",
+            cross: false,
+            pair: [relation.fromId, relation.toId].sort().join("|"),
+            familyKind: edge.kind,
+            a,
+            b,
+            lx: (a.x + b.x) / 2,
+            ly: (a.y + b.y) / 2 - 8,
+            lw: Math.max(relation.label.length * 6.4 + 12, 22),
+          };
+        })
+        .filter((edge): edge is NonNullable<typeof edge> => Boolean(edge));
+      return { size: familyTree.size, nodes, edges, clusters: [] };
+    }
+
     // In aggregate overview mode the community projection below is the only
     // graph we need. Avoid the quadratic edge-label placement work for a dense
     // 200-person graph that will not be rendered.
@@ -1007,6 +1076,9 @@ export function RelationsPanel({
     return { size, nodes, edges: labelled, clusters: shaped };
   }, [
     aggregateOverview,
+    familyTree,
+    familyTreeRelations,
+    showFamilyTree,
     visiblePeople,
     graphVisibility.visible,
     groupBy,
@@ -1067,6 +1139,40 @@ export function RelationsPanel({
   const viewSize = aggregateOverview ? overviewGraph.size : graph.size;
   const viewSizeRef = useRef(viewSize);
   viewSizeRef.current = viewSize;
+
+  const graphEdgePath = (edge: (typeof graph.edges)[number]) => {
+    if (showFamilyTree && "familyKind" in edge) {
+      const a = edge.a!;
+      const b = edge.b!;
+      if (edge.familyKind === "spouse") {
+        return `M ${a.x + 18} ${a.y} H ${b.x - 18}`;
+      }
+      if (edge.familyKind === "sibling") {
+        const lift = Math.min(a.y, b.y) + 38;
+        return `M ${a.x} ${a.y + 18} C ${a.x} ${lift}, ${b.x} ${lift}, ${b.x} ${b.y + 18}`;
+      }
+      const midY = a.y + (b.y - a.y) * 0.52;
+      return `M ${a.x} ${a.y + 20} V ${midY} H ${b.x} V ${b.y - 24}`;
+    }
+    const ax = edge.a!.x;
+    const ay = edge.a!.y;
+    const bx = edge.b!.x;
+    const by = edge.b!.y;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.hypot(dx, dy) || 1;
+    const gap = 20;
+    const ux = dx / len;
+    const uy = dy / len;
+    const x1 = ax + ux * gap;
+    const y1 = ay + uy * gap;
+    const x2 = bx - ux * gap;
+    const y2 = by - uy * gap;
+    const curve = "curve" in edge ? edge.curve : 0;
+    const cx = (x1 + x2) / 2 + -uy * curve * 2;
+    const cy = (y1 + y2) / 2 + ux * curve * 2;
+    return `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
+  };
 
   /** 屏幕坐标 → SVG 画布坐标的比例（含缩放） */
   const svgScale = () => {
@@ -1689,6 +1795,21 @@ export function RelationsPanel({
               {t("新建关系")}
             </Button>
             <select
+              value={graphLayoutMode}
+              onChange={(event) => {
+                setGraphLayoutMode(event.target.value as GraphLayoutMode);
+                setPositions({});
+                resetView();
+              }}
+              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+              aria-label={t("图形布局")}
+              title={t("图形布局")}
+            >
+              <option value="auto">{t("自动布局")}</option>
+              <option value="network">{t("关系网")}</option>
+              <option value="family">{t("家族树")}</option>
+            </select>
+            <select
               value={groupBy}
               onChange={(event) => {
                 setGroupBy(event.target.value as RelationGraphGroupingMode);
@@ -1699,6 +1820,7 @@ export function RelationsPanel({
               className="h-9 rounded-md border border-border bg-background px-2 text-sm"
               aria-label={t("分组布局")}
               title={t("布局")}
+              disabled={showFamilyTree}
             >
               <option value="none">{t("不分组")}</option>
               <option value="circles">{t("按圈层布局")}</option>
@@ -1805,6 +1927,18 @@ export function RelationsPanel({
                 {t("临时查看全部")}
               </button>
               <span>{t("常隐只影响画面，不会删除关系。")}</span>
+            </div>
+          )}
+
+          {showFamilyTree && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 text-[11px] text-muted-foreground">
+              <span>{t("家族树按世代排列；配偶同层，子女位于父母下一层。")}</span>
+              {graphVisibility.visible.length > familyTreeRelations.length && (
+                <span>
+                  {t("当前仅显示")} {familyTreeRelations.length} {t("条亲属关系，隐藏")}{" "}
+                  {graphVisibility.visible.length - familyTreeRelations.length} {t("条非亲属关系")}
+                </span>
+              )}
             </div>
           )}
 
@@ -2342,6 +2476,7 @@ export function RelationsPanel({
           <div
             ref={graphFrameRef}
             data-relation-graph-frame="true"
+            data-graph-layout={showFamilyTree ? "family" : "network"}
             className={cn(
               "relative overflow-hidden rounded-xl border border-border bg-muted/20",
               graphFullscreen
@@ -2598,19 +2733,8 @@ export function RelationsPanel({
 
                 {!aggregateOverview &&
                   graph.edges.map((edge) => {
-                    const dx = edge.b!.x - edge.a!.x;
-                    const dy = edge.b!.y - edge.a!.y;
-                    const len = Math.hypot(dx, dy) || 1;
-                    const gap = 20;
-                    const ux = dx / len;
-                    const uy = dy / len;
-                    const x1 = edge.a!.x + ux * gap;
-                    const y1 = edge.a!.y + uy * gap;
-                    const x2 = edge.b!.x - ux * gap;
-                    const y2 = edge.b!.y - uy * gap;
+                    const path = graphEdgePath(edge);
                     // 同一对人的多条关系画成不同弧度的曲线
-                    const cx = (x1 + x2) / 2 + -uy * edge.curve * 2;
-                    const cy = (y1 + y2) / 2 + ux * edge.curve * 2;
                     const active =
                       !selectedId ||
                       (graphVisibility.focusNodeIds.has(edge.a!.id) &&
@@ -2639,7 +2763,7 @@ export function RelationsPanel({
                       >
                         <title>{`${edge.label} · ${t("点击查看来源、时间与确认状态")}`}</title>
                         <path
-                          d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
+                          d={path}
                           fill="none"
                           stroke="transparent"
                           strokeWidth={20}
@@ -2647,7 +2771,7 @@ export function RelationsPanel({
                           aria-hidden="true"
                         />
                         <path
-                          d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
+                          d={path}
                           fill="none"
                           className={
                             selectedId && active

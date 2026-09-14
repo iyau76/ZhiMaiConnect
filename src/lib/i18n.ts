@@ -1366,6 +1366,22 @@ const EN: Record<string, string> = {
     "Clearing site data deletes your archive and input inbox. Backups exclude unsubmitted inputs; process them or save the original files separately.",
   "安装仍需网站可访问；AI 需要模型服务联网。当前没有云同步或关闭应用后的定时通知。":
     "Installation requires access to the website; AI needs its model service. Cloud sync and scheduled notifications while closed are not available.",
+  复杂关系测试集: "Complex relationship test sets",
+  选择测试材料: "Choose test material",
+  填入录入框: "Fill input",
+  可试问: "Try asking",
+  "这会替换当前未提交内容。确定载入": "This replaces the current unsubmitted input. Load",
+  "测试材料吗？": "test material?",
+  已填入测试材料: "Test material loaded",
+  请先选择有效月份: "Choose a valid month first",
+  图形布局: "Graph layout",
+  自动布局: "Automatic layout",
+  家族树: "Family tree",
+  "家族树按世代排列；配偶同层，子女位于父母下一层。":
+    "The family tree is arranged by generation: spouses share a row and children sit below their parents.",
+  当前仅显示: "Showing",
+  "条亲属关系，隐藏": "kinship relations; hidden",
+  条非亲属关系: "non-kinship relations",
   English: "English",
 };
 

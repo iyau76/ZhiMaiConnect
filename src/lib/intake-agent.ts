@@ -305,7 +305,7 @@ const SEMANTIC_EXTRACTION_PRINCIPLES = `请把材料理解成语义任务，遵�
 - 人物自身属性写入 person；人与人之间的联系单独写 relation，并保留最短可核对依据。
 - 本次材料中新介绍的每个人都单独声明 person/create，即使只知道姓名；关系、事件、提醒和圈层中的引用依赖这份人物声明。后续补充时一并完成之前缺少人物而未形成的条目。
 - 已发生或计划发生、适合时间线/日历的内容写 event；仍需用户采取行动的内容写 reminder。同一内容只有同时具备两种含义时才写两项。
-- 时间原句可写 timeText；能确定时再规范化 date、dateEnd 与 precision。
+- 时间原句可写 timeText；只有月份时 date 用 YYYY-MM-01 且 precision=month，只有年份时 date 用 YYYY-01-01 且 precision=year，不能为了补齐格式而虚构具体日期。
 - evidence 只保留核对所需的短摘要或片段，不复制整份材料。
 - 圈层及成员变更只写 collection 与 memberships；不要写 person.circle。
 - 不确定的值留空；不得为了填满字段而猜测。`;

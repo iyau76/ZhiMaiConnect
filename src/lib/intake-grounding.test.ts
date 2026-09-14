@@ -420,6 +420,24 @@ describe("sensitive intake grounding", () => {
     expect(result.events?.map((event) => event._groundingVerified)).toEqual([true, false]);
   });
 
+  test("accepts a month-precision event when the source only records the month", () => {
+    const result = enforceSensitiveFieldGrounding(
+      {
+        events: [
+          {
+            title: "红岸基地完成关键发送",
+            date: "2015-06-01",
+            precision: "month",
+            confidence: 0.92,
+          },
+        ],
+      },
+      "2015 年 6 月，红岸基地完成关键发送，日期只记到月份。",
+    );
+
+    expect(result.events?.[0]?._groundingVerified).toBe(true);
+  });
+
   test("does not borrow an event field from a separate non-title clause", () => {
     const result = enforceSensitiveFieldGrounding(
       {

@@ -44,8 +44,8 @@ Zhimai accepts the language people already use. Write who someone is, how you me
 
 - **Today workspace** — brings due reminders, upcoming events, unfinished tasks, recent interactions, and resumable Agent runs into one place. Every card opens the original record.
 - **Natural intake** — accepts text, common documents, screenshots, and recordings; later input can update a draft or connect with an existing person.
-- **People and relationships** — combines profiles, evidence, interactive graphs, circle layouts, Louvain topology, focus modes, and explicit referral policies.
-- **Events and time** — links people to life events, birthdays, reminders, tasks, Gregorian dates, lunar dates, and fuzzy expressions such as “last summer.”
+- **People and relationships** — combines profiles, evidence, interactive graphs, generation-based family trees for kinship-only views, circle layouts, Louvain topology, focus modes, and explicit referral policies.
+- **Events and time** — links people to life events, birthdays, reminders, and tasks with day, month, or year precision, plus Gregorian dates, lunar dates, and fuzzy expressions such as “last summer.”
 - **Meeting briefs** — turns “I am meeting Tang Yue tomorrow” into a saved page of profile facts, recent shared events, open items, related people, conversation ideas, and information gaps. Fact lines link back to their sources; source changes produce a new version without erasing the old one.
 - **Who should I ask?** — lets a model understand an open-ended need while the local graph verifies candidates, paths, evidence, and referral eligibility.
 - **Action planning** — produces an editable plan from a goal. Only the selected and approved actions enter the task ledger.
