@@ -66,6 +66,7 @@ export function CalendarPanel({
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth()); // 0-based
   const [selected, setSelected] = useState(todayStr());
+  const [monthValue, setMonthValue] = useState(`${now.getFullYear()}-${pad(now.getMonth() + 1)}`);
   const [persons, setPersons] = useState<PersonRecord[]>([]);
   const [events, setEvents] = useState<LifeEventRecord[]>([]);
   const [reminders, setReminders] = useState<ReminderRecord[]>([]);
@@ -206,6 +207,7 @@ export function CalendarPanel({
     setPersonQuery("");
     setPhotos([]);
     setFuzzyText("");
+    setMonthValue(selected.slice(0, 7));
     setTimeText("");
     setFuzzyHint("");
   };
@@ -217,6 +219,7 @@ export function CalendarPanel({
     setYear(Number(event.date.slice(0, 4)));
     setMonth(Number(event.date.slice(5, 7)) - 1);
     setFuzzyText(precisionOf(event) === "day" ? "" : formatFuzzy(event));
+    setMonthValue(event.date.slice(0, 7));
     setTimeText(event.timeText ?? "");
     setFuzzyHint("");
     setTitle([event.title, event.detail].filter(Boolean).join("\n"));
@@ -245,7 +248,14 @@ export function CalendarPanel({
     let dateEnd: string | undefined;
     let stored: DatePrecision = precision;
 
-    if (precision !== "day") {
+    if (precision === "month") {
+      if (!/^\d{4}-\d{2}$/.test(monthValue)) {
+        toast.error(t("请先选择有效月份"));
+        return;
+      }
+      date = `${monthValue}-01`;
+      stored = "month";
+    } else if (precision !== "day") {
       const text = fuzzyText.trim();
       if (!text) {
         setFuzzyHint("先写一句大概的时间，比如「去年夏天」。");
@@ -689,6 +699,13 @@ export function CalendarPanel({
               type="date"
               value={selected}
               onChange={(event) => setSelected(event.target.value)}
+            />
+          ) : precision === "month" ? (
+            <Input
+              type="month"
+              value={monthValue}
+              onChange={(event) => setMonthValue(event.target.value)}
+              aria-label={t("事件月份")}
             />
           ) : (
             <div className="space-y-1.5">

@@ -30,6 +30,26 @@ const targetIdSchema = z.string().min(1).max(200);
 const reasonSchema = z.string().trim().min(1).max(1_000);
 const revisionSchema = z.string().regex(/^r1:[0-9a-f]{8}$/);
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "日期必须为 YYYY-MM-DD");
+const eventDateInputSchema = z
+  .string()
+  .trim()
+  .regex(/^(?:\d{4}|\d{4}-\d{2}|\d{4}-\d{2}-\d{2})$/, "日期必须为 YYYY、YYYY-MM 或 YYYY-MM-DD");
+
+function normalizeEventDateInput(value: string | undefined) {
+  if (!value) return undefined;
+  return /^\d{4}$/.test(value)
+    ? `${value}-01-01`
+    : /^\d{4}-\d{2}$/.test(value)
+      ? `${value}-01`
+      : value;
+}
+
+function precisionFromEventDateInput(value: string | undefined) {
+  if (!value) return undefined;
+  if (/^\d{4}$/.test(value)) return "year" as const;
+  if (/^\d{4}-\d{2}$/.test(value)) return "month" as const;
+  return "day" as const;
+}
 const preconditionSchema = z.object({ expectedRevision: revisionSchema }).strict();
 
 const PROFILE_TEXT_FIELDS = [
@@ -215,7 +235,7 @@ export const relationReplacementSchema = z
 
 const eventSetSchema = z
   .object({
-    date: isoDateSchema.optional(),
+    date: eventDateInputSchema.optional(),
     dateEnd: isoDateSchema.optional(),
     precision: z.enum(["day", "month", "year", "range"]).optional(),
     dateText: z.string().trim().min(1).max(200).optional(),
@@ -226,7 +246,16 @@ const eventSetSchema = z
     personIds: z.array(targetIdSchema).max(100).optional(),
     kind: z.string().trim().min(1).max(100).optional(),
   })
-  .strict();
+  .strict()
+  .transform((set) => {
+    const precision = set.precision ?? precisionFromEventDateInput(set.date);
+    const date = normalizeEventDateInput(set.date);
+    return {
+      ...set,
+      ...(date ? { date } : {}),
+      ...(precision ? { precision } : {}),
+    };
+  });
 const EVENT_UNSET_FIELDS = [
   "dateEnd",
   "precision",

@@ -307,6 +307,28 @@ function datesIn(value: string) {
   }));
 }
 
+function monthsIn(value: string) {
+  const normalized = value.normalize("NFKC");
+  const exact = datesIn(normalized).map((date) => ({
+    year: date.year,
+    month: date.month,
+  }));
+  const partial = [
+    ...normalized.matchAll(
+      /(?:(\d{4})\s*(?:年|[-/.]))?\s*(\d{1,2})\s*(?:月|(?=$|[\s，,。;；:：]))/gu,
+    ),
+  ].map((match) => ({
+    year: match[1] ? Number(match[1]) : undefined,
+    month: Number(match[2]),
+  }));
+  return [...exact, ...partial].filter((date) => date.month >= 1 && date.month <= 12);
+}
+
+function yearsIn(value: string) {
+  const normalized = value.normalize("NFKC");
+  return [...normalized.matchAll(/(?:19|20)\d{2}/gu)].map((match) => Number(match[0]));
+}
+
 function dateOccurrences(value: string) {
   return [
     ...value
@@ -331,9 +353,28 @@ function sameDate(candidate: DateParts, source: DateParts) {
   );
 }
 
-function supportDateAnywhere(material: string, value: string): SupportResult {
+function supportDateAnywhere(
+  material: string,
+  value: string,
+  precision: "day" | "month" | "year" | "range" = "day",
+): SupportResult {
   const candidate = parseDateParts(value);
   if (!candidate) return { supported: false };
+  if (precision === "month") {
+    const matched = monthsIn(material).some(
+      (source) =>
+        source.month === candidate.month &&
+        (candidate.year === undefined || source.year === candidate.year),
+    );
+    return matched
+      ? { supported: true, evidenceQuote: excerpt(material, [value]) }
+      : { supported: false };
+  }
+  if (precision === "year") {
+    return candidate.year !== undefined && yearsIn(material).includes(candidate.year)
+      ? { supported: true, evidenceQuote: excerpt(material, [String(candidate.year)]) }
+      : { supported: false };
+  }
   const matched = datesIn(material).some((source) => sameDate(candidate, source));
   return matched
     ? { supported: true, evidenceQuote: excerpt(material, [value]) }
@@ -489,7 +530,8 @@ function eventGrounded(event: IngestEvent, material: string) {
     if (!compact(clause).includes(normalizedTitle) || CLAUSE_NEGATION.test(clause)) return false;
     if (!supportPositiveText(clause, event.title ?? "").supported) return false;
     if (event.detail && !supportPositiveText(clause, event.detail).supported) return false;
-    if (event.date && !supportDateAnywhere(clause, event.date).supported) return false;
+    if (event.date && !supportDateAnywhere(clause, event.date, event.precision ?? "day").supported)
+      return false;
     if (event.dateEnd && !supportDateAnywhere(clause, event.dateEnd).supported) return false;
     if (event.place && !supportPositiveText(clause, event.place).supported) return false;
     if (event.kind && !supportPositiveText(clause, event.kind).supported) return false;

@@ -93,6 +93,7 @@ describe("parseFuzzyLocal", () => {
   it.each([
     ["2024 年 5 月左右", { date: "2024-05-01", precision: "month" }],
     ["去年十二月", { date: "2025-12-01", precision: "month" }],
+    ["2026-08", { date: "2026-08-01", precision: "month" }],
     ["前年", { date: "2024-01-01", precision: "year" }],
     ["三年前", { date: "2023-01-01", precision: "year" }],
     ["十一年前", { date: "2015-01-01", precision: "year" }],
@@ -134,6 +135,11 @@ describe("parseFuzzyLocal", () => {
 
 describe("AI fuzzy-date normalization", () => {
   it("normalizes supported precisions and drops dateEnd outside a range", () => {
+    expect(normalizeFuzzy({ date: "2026-08", precision: "month" })).toEqual({
+      date: "2026-08-01",
+      dateEnd: undefined,
+      precision: "month",
+    });
     expect(normalizeFuzzy({ date: "2026-08-26", precision: "day", dateEnd: "2026-09-01" })).toEqual(
       {
         date: "2026-08-26",

@@ -385,6 +385,49 @@ describe("archive mutation plan integration", () => {
     await expect(facesDb.listLifeEvents()).resolves.toEqual([event]);
   });
 
+  it("normalizes a month-only event update and stores month precision", async () => {
+    const { facesDb } = await import("./face-db");
+    const {
+      applyArchiveMutationPlan,
+      createArchiveMutationPlan,
+      createUpdateEventOperation,
+      loadArchiveMutationSnapshot,
+    } = await import("./archive-mutation-plan");
+    const event: LifeEventRecord = {
+      id: "month-event",
+      date: "2026-09-01",
+      title: "项目启动",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    await facesDb.putLifeEvent(event);
+    const snapshot = await loadArchiveMutationSnapshot();
+    const operation = createUpdateEventOperation(snapshot, {
+      eventId: event.id,
+      reason: "只记得月份",
+      changes: { set: { date: "2026-08" } },
+    });
+
+    expect(operation.changes).toMatchObject({
+      set: { date: "2026-08-01", precision: "month" },
+    });
+    await applyArchiveMutationPlan(
+      createArchiveMutationPlan({
+        title: "修改事件月份",
+        reason: "用户只提供了月份",
+        operations: [operation],
+      }),
+      { now: 2 },
+    );
+    await expect(facesDb.listLifeEvents()).resolves.toEqual([
+      expect.objectContaining({
+        id: event.id,
+        date: "2026-08-01",
+        precision: "month",
+      }),
+    ]);
+  });
+
   it("previews every delete dependency and does not leave empty linked records", async () => {
     const { facesDb } = await import("./face-db");
     const {

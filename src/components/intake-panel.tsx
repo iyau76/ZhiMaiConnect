@@ -24,6 +24,7 @@ import intakeArt from "@/assets/art/web/intake.webp";
 import { DraftGraph } from "@/components/draft-graph";
 import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
+import { RelationshipSamplePicker } from "@/components/relationship-sample-picker";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -110,6 +111,7 @@ import {
 } from "@/lib/intake-commit-intent";
 import { resolveRelationSemanticsForPeople } from "@/lib/relation-ontology";
 import { isInferredRelationBasis, relationNeedsInferenceReview } from "@/lib/kinship-rules";
+import type { RelationshipTestSample } from "@/lib/relationship-test-samples";
 import { makeSource } from "@/lib/provenance";
 import { browserAgentRunOwnerId } from "@/lib/agent-run-owner";
 import { cn } from "@/lib/utils";
@@ -2207,12 +2209,21 @@ export function IntakePanel({
     }
   };
 
-  const loadOfflineDemoDraft = async () => {
-    if (
-      (raw.trim() || draft || proposal) &&
-      !window.confirm(t("这会替换当前未提交内容。确定载入合成的离线演示草稿吗？"))
-    ) {
-      return;
+  const replaceIntakeMaterial = async ({
+    material,
+    nextDraft,
+    confirmMessage,
+    successMessage,
+    reason,
+  }: {
+    material: string;
+    nextDraft: Draft | null;
+    confirmMessage: string;
+    successMessage: string;
+    reason: string;
+  }) => {
+    if ((raw.trim() || draft || proposal || durableIntake) && !window.confirm(confirmMessage)) {
+      return false;
     }
     if (proposalEntryId) {
       try {
@@ -2220,7 +2231,7 @@ export function IntakePanel({
         await intakeMutationCoordinator.flushPersistence();
       } catch (error) {
         toast.error(`${t("替换圈层提案失败")}：${(error as Error).message}`);
-        return;
+        return false;
       }
     }
     if (durableIntake) {
@@ -2232,14 +2243,14 @@ export function IntakePanel({
           archiveVersion,
           ownerId: browserAgentRunOwnerId(),
           state: { ...durableIntake, phase: "rejected", updatedAt: Date.now() },
-          reason: "replaced_by_offline_demo",
+          reason,
         });
       } catch (error) {
         toast.error(`${t("替换录入任务失败")}：${(error as Error).message}`);
-        return;
+        return false;
       }
     }
-    setRaw(OFFLINE_DEMO_MATERIAL);
+    setRaw(material);
     setSupplement("");
     setProposal(null);
     setProposalEntryId(null);
@@ -2247,14 +2258,33 @@ export function IntakePanel({
     setIntakeState(null);
     setDurableIntake(null);
     setAttached([]);
-    setDraft(
-      prepareIdentityDecisions(
+    setDraft(nextDraft);
+    toast.success(successMessage);
+    return true;
+  };
+
+  const loadOfflineDemoDraft = async () => {
+    await replaceIntakeMaterial({
+      material: OFFLINE_DEMO_MATERIAL,
+      nextDraft: prepareIdentityDecisions(
         enforceSensitiveFieldGrounding(makeOfflineDemoCandidate(), OFFLINE_DEMO_MATERIAL),
         existingPeople,
         existingEvents,
       ),
-    );
-    toast.success(t("已载入离线演示预置草稿（合成数据）"));
+      confirmMessage: t("这会替换当前未提交内容。确定载入合成的离线演示草稿吗？"),
+      successMessage: t("已载入离线演示预置草稿（合成数据）"),
+      reason: "replaced_by_offline_demo",
+    });
+  };
+
+  const loadRelationshipTestSample = async (sample: RelationshipTestSample) => {
+    await replaceIntakeMaterial({
+      material: sample.material,
+      nextDraft: null,
+      confirmMessage: `${t("这会替换当前未提交内容。确定载入")}“${sample.title}”${t("测试材料吗？")}`,
+      successMessage: `${t("已填入测试材料")}：${sample.title}`,
+      reason: "replaced_by_relationship_test_sample",
+    });
   };
 
   const acceptLowRiskItems = () => {
@@ -3206,6 +3236,20 @@ export function IntakePanel({
           rows={8}
           className="mt-4 text-sm"
           placeholder={t("例如：小雨，大学室友，3 月 12 日生日，爱喝手冲咖啡。")}
+        />
+
+        <RelationshipSamplePicker
+          className="mt-3"
+          disabled={
+            busy ||
+            !!reading ||
+            recording ||
+            transcribing ||
+            saving ||
+            approvingProposal ||
+            !proposalArtifactsLoaded
+          }
+          onSelect={(sample) => void loadRelationshipTestSample(sample)}
         />
 
         <p className="mt-1.5 text-[10px] text-muted-foreground">
