@@ -2,6 +2,13 @@ import { clickVisible, expect, openApp, readIndexedDbStore, seedIndexedDb, test 
 
 const NOW = new Date("2026-09-05T08:00:00+08:00").getTime();
 
+// 今天页按“今天”窗口投影，固定日期会随时间过期；统一用相对日期造数。
+function localDate(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 test("今天页从源记录汇总事项，并回到同一事件完成原位编辑", async ({ page }) => {
   await openApp(page, { initialView: "today" });
   const upcomingBirthday = await page.evaluate(() => {
@@ -24,7 +31,7 @@ test("今天页从源记录汇总事项，并回到同一事件完成原位编�
     lifeEvents: [
       {
         id: "event-today",
-        date: "2026-09-05",
+        date: localDate(),
         timeText: "下午3点",
         place: "书店",
         kind: "meeting",
@@ -37,7 +44,7 @@ test("今天页从源记录汇总事项，并回到同一事件完成原位编�
       {
         id: "reminder-today",
         title: "把拍摄清单发给唐悦",
-        due: "2026-09-05",
+        due: localDate(),
         personIds: ["person-tang"],
         done: false,
         createdAt: NOW,
@@ -94,7 +101,7 @@ test("今天页从源记录汇总事项，并回到同一事件完成原位编�
   const taskEditor = page.getByRole("dialog");
   await taskEditor.getByRole("textbox", { name: "任务标题" }).fill("确认印刷报价");
   await taskEditor.getByRole("textbox", { name: "任务详情" }).fill("向两家印刷店询价");
-  await taskEditor.getByLabel("截止日期").fill("2026-09-09");
+  await taskEditor.getByLabel("截止日期").fill(localDate(4));
   await taskEditor.getByLabel("负责人", { exact: true }).fill("唐悦");
   await taskEditor.getByLabel("优先级").selectOption("high");
   await taskEditor.getByRole("checkbox", { name: "唐悦" }).check();
@@ -107,7 +114,7 @@ test("今天页从源记录汇总事项，并回到同一事件完成原位编�
       id: "task-open",
       title: "确认印刷报价",
       detail: "向两家印刷店询价",
-      due: "2026-09-09",
+      due: localDate(4),
       assignee: "唐悦",
       priority: "high",
       status: "doing",
@@ -138,7 +145,7 @@ test("完成提醒后可把实际结果补记为同一人物的时间线事件",
       {
         id: "reminder-follow-up",
         title: "把拍摄清单发给唐悦",
-        due: "2026-09-05",
+        due: localDate(),
         personIds: ["person-tang"],
         done: false,
         createdAt: NOW,
