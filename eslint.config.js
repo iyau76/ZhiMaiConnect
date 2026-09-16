@@ -20,6 +20,10 @@ export default tseslint.config(
       ".codex/skills",
       "release",
       "videos",
+      "doc/background",
+      "output",
+      "tmp",
+      ".tmp",
     ],
   },
   {

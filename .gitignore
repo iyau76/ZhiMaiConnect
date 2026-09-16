@@ -40,6 +40,13 @@ release/
 /videos/
 /doc.zip
 
+# Local publicity deliverables and scratch: exported posters/trifold PDFs and
+# PPT builds, generated exploration art, raw brand references.
+/output/
+/src/assets/publicity/
+/.tmp/
+/tmp/
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
