@@ -753,12 +753,14 @@ export function RelationsPanel({
   /** 关系网布局：默认一个大圆；按标签分组时每个圈层自成一簇。 */
   const graph = useMemo(() => {
     if (showFamilyTree && familyTree.nodes.length > 0) {
-      const nodeById = new Map(familyTree.nodes.map((node) => [node.id, node]));
       const nodes = familyTree.nodes.map((node) => ({
         ...node,
+        ...(positions[node.id] ?? {}),
         group: "",
         color: graphColor(`generation:${node.generation}`),
       }));
+      // Nodes, edges and labels must all use the same final drag coordinates.
+      const nodeById = new Map(nodes.map((node) => [node.id, node]));
       const relationById = new Map(familyTreeRelations.map((relation) => [relation.id, relation]));
       const edges = familyTree.edges
         .map((edge) => {
@@ -769,7 +771,7 @@ export function RelationsPanel({
           return {
             id: relation.id,
             label: relation.label,
-            mutual: edge.kind !== "parent",
+            mutual: isMutualRelation(relation),
             evidenceMode: relationEvidenceMode(relation),
             supportingRelationIds:
               relation.supportingRelationIds ?? relation.derivedFromRelationIds ?? [],
@@ -1144,15 +1146,16 @@ export function RelationsPanel({
     if (showFamilyTree && "familyKind" in edge) {
       const a = edge.a!;
       const b = edge.b!;
-      if (edge.familyKind === "spouse") {
-        return `M ${a.x + 18} ${a.y} H ${b.x - 18}`;
-      }
       if (edge.familyKind === "sibling") {
         const lift = Math.min(a.y, b.y) + 38;
         return `M ${a.x} ${a.y + 18} C ${a.x} ${lift}, ${b.x} ${lift}, ${b.x} ${b.y + 18}`;
       }
-      const midY = a.y + (b.y - a.y) * 0.52;
-      return `M ${a.x} ${a.y + 20} V ${midY} H ${b.x} V ${b.y - 24}`;
+      if (edge.familyKind === "parent") {
+        const midY = a.y + (b.y - a.y) * 0.52;
+        return `M ${a.x} ${a.y + 20} V ${midY} H ${b.x} V ${b.y - 24}`;
+      }
+      // Other kinship and spouse edges use the common endpoint-aware path below.
+      // In particular, a dragged spouse may no longer share the other node's y.
     }
     const ax = edge.a!.x;
     const ay = edge.a!.y;

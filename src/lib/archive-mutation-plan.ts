@@ -48,7 +48,9 @@ function precisionFromEventDateInput(value: string | undefined) {
   if (!value) return undefined;
   if (/^\d{4}$/.test(value)) return "year" as const;
   if (/^\d{4}-\d{2}$/.test(value)) return "month" as const;
-  return "day" as const;
+  // A full date was already accepted before shorthand dates were added. Omitted
+  // precision means "leave it alone", not "set day" (and must allow unset).
+  return undefined;
 }
 const preconditionSchema = z.object({ expectedRevision: revisionSchema }).strict();
 
