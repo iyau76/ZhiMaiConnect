@@ -103,3 +103,13 @@ jobs:
           JS
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-results
+          path: |
+            test-results/playwright
+            playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
