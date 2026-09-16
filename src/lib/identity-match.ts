@@ -33,13 +33,13 @@ function toHalfWidthLower(value: string) {
 /**
  * 联系方式先分类再归一化：只有纯数字（允许 +、括号、空格、短横线）且位数像电话
  * （7–15 位，含 0086/86 前缀剥离）才做电话归一化；含 @ 视为邮箱；其余是自由
- * 文本，只做去空格与大小写归一，整串相等才算同一联系方式。避免“微信 alice123”
+ * 文本，只保留归一值供展示，不作为强匹配键。避免“微信 alice123”
  * 与“微信 bob123”因尾部数字相同而被折叠成同一联系人。
  */
 function classifyContact(value?: string): ClassifiedContact | null {
   const lowered = toHalfWidthLower(value ?? "");
   if (!lowered) return null;
-  if (lowered.includes("@")) {
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lowered)) {
     return { kind: "email", key: lowered.replace(/\s+/g, "") };
   }
   const compact = lowered.replace(/[\s\-－()（）+＋]/g, "");
@@ -75,13 +75,13 @@ function accountKeysOf(identities?: Array<{ platform?: string; account?: string 
   for (const identity of identities ?? []) {
     const account = normalizeAccount(identity.account);
     const platform = normalizePlatform(identity.platform);
-    if (account && platform) keys.add(`${platform}::${account}`);
+    if (account && platform) keys.add(JSON.stringify([platform, account]));
   }
   return keys;
 }
 
 /**
- * 姓名永远不作为自动合并的唯一依据。联系方式按类型整串匹配；平台账号按
+ * 姓名与自由文本不作为强匹配键。电话/邮箱按类型匹配；平台账号按
  * “平台＋账号”联合匹配；唯一命中时可建议更新。同名、历史昵称、缺平台的账号
  * 或多重命中一律交给用户选择，不做批量自动合并。
  */
@@ -93,11 +93,11 @@ export function matchIdentity(
   const candidateAccounts = accountKeysOf(candidate.identities);
   const strong: PersonRecord[] = [];
   let firedByContact = false;
-  let firedByAccount = false;
   for (const person of persons) {
     const personContact = classifyContact(person.profile?.contact);
     const contactHit =
       candidateContact !== null &&
+      candidateContact.kind !== "text" &&
       personContact !== null &&
       personContact.kind === candidateContact.kind &&
       personContact.key === candidateContact.key;
@@ -105,7 +105,6 @@ export function matchIdentity(
       candidateAccounts.size > 0 &&
       [...candidateAccounts].some((key) => accountKeysOf(person.profile?.identities).has(key));
     if (contactHit) firedByContact = true;
-    if (accountHit) firedByAccount = true;
     if (contactHit || accountHit) strong.push(person);
   }
   if (strong.length === 1) {

@@ -165,12 +165,8 @@ describe("AI fuzzy-date normalization", () => {
     );
   });
 
-  it("falls back to year for an unknown precision", () => {
-    expect(normalizeFuzzy({ date: "2026-01-01", precision: "unknown" as never })).toEqual({
-      date: "2026-01-01",
-      dateEnd: undefined,
-      precision: "year",
-    });
+  it("rejects unknown precision rather than inventing year precision", () => {
+    expect(normalizeFuzzy({ date: "2026-01-01", precision: "unknown" as never })).toBeNull();
   });
 
   it("rejects an incomplete range instead of downgrading it to month precision", () => {
@@ -205,5 +201,36 @@ describe("AI fuzzy-date normalization", () => {
     expect(
       normalizeFuzzy({ date: "2026-08-01", dateEnd: "2026-13-01", precision: "range" }),
     ).toBeNull();
+  });
+});
+
+describe("explicit date review regressions", () => {
+  it.each([
+    "2026-13",
+    "2026-00",
+    "2026-02-30",
+    "2027年2月29日",
+    "2026 到 2025",
+    "从2026-08-31到2026-06-01",
+    "2026-06-01到",
+    "2026-06-01～",
+    "2026-13左右",
+  ])("does not reinterpret malformed explicit input: %s", (text) =>
+    expect(parseFuzzyLocal(text)).toBeNull(),
+  );
+  it.each(["从2026-06-01到2026-08-31", "自 2026年6月1日 至 2026年8月31日 期间"])(
+    "keeps both endpoints with natural prefixes: %s",
+    (text) => {
+      expect(parseFuzzyLocal(text)).toEqual({
+        date: "2026-06-01",
+        dateEnd: "2026-08-31",
+        precision: "range",
+      });
+    },
+  );
+  it("uses the same invalid-input distinction as the editor, before AI is attempted", async () => {
+    const { parseExplicitEventDate } = await import("./explicit-event-date");
+    expect(parseExplicitEventDate("2026-13")).toEqual({ matched: true, value: null });
+    expect(parseExplicitEventDate("那次毕业旅行")).toEqual({ matched: false, value: null });
   });
 });

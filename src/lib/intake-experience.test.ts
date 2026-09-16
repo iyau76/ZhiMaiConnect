@@ -244,13 +244,16 @@ describe("intake user experience regressions", () => {
       personIds: ["person-final"],
       createdAt: 1,
     };
-    await facesDb.applyArchiveMutationBatch({
-      ...collections.forward,
-      persons: [
-        { id: "person-final", name: "许星", note: "", descriptors: [], thumb: "", createdAt: 1 },
-      ],
-      lifeEvents: [event],
-    });
+    await facesDb.applyArchiveMutationBatch(
+      {
+        ...collections.forward,
+        persons: [
+          { id: "person-final", name: "许星", note: "", descriptors: [], thumb: "", createdAt: 1 },
+        ],
+        lifeEvents: [event],
+      },
+      "receipt",
+    );
     expect((await facesDb.listCollectionMemberships())[0].personId).toBe("person-final");
     const archive = createArchiveV2(await facesDb.readArchiveSnapshot());
     const restored = archiveRestorePlan(JSON.stringify(archive));

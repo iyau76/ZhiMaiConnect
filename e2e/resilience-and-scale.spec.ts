@@ -333,3 +333,37 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
     .click();
   await expect(page.getByRole("button", { name: "打开人物卡" })).toBeVisible();
 });
+
+test("AI 批准后修改事件再刷新，撤销保留新值及其人物关联", async ({ page }) => {
+  await openApp(page);
+  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
+  await intake
+    .getByRole("textbox")
+    .fill(
+      "唐悦是我的大学摄影社搭档，生日 3 月 12 日。2026 年 8 月 29 日和唐悦一起讨论校园记忆展。",
+    );
+  await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
+  await acceptAllDraftItems(page);
+  await page.getByRole("button", { name: "确认入库" }).click();
+  await expect(page.getByRole("button", { name: "撤销最近一次录入" })).toBeVisible();
+  const changed = await page.evaluate(async () => {
+    const { facesDb } = await import("/src/lib/face-db.ts");
+    const [event] = await facesDb.listLifeEvents();
+    const next = { ...event, title: "批准后人工补充的合成标题" }; // deliberately keep timestamps
+    await facesDb.putLifeEvent(next);
+    return next;
+  });
+  await page.reload();
+  await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
+  const undo = page.getByRole("button", { name: "撤销最近一次录入" });
+  await expect(undo).toBeVisible();
+  await undo.click();
+  await expect(undo).toHaveCount(0);
+  const stored = await readIndexedDbStore(page, "lifeEvents");
+  expect(stored).toEqual([changed]);
+  const people = await readIndexedDbStore<{ id: string }>(page, "persons");
+  for (const id of changed.personIds ?? [])
+    expect(people.some((person) => person.id === id)).toBe(true);
+  expect(await readIndexedDbStore(page, "reminders")).toEqual([]);
+});

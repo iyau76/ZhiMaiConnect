@@ -98,7 +98,6 @@ import {
   validateIntakeFiles,
 } from "@/lib/intake-draft";
 import {
-  attachCommittedIntakeSnapshots,
   getLatestIntakeBatch,
   rememberIntakeBatch,
   rollbackIntakeBatch,
@@ -805,8 +804,8 @@ export function IntakePanel({
         }),
       );
       if (restored?.intakeReceipt) {
-        // 跨会话恢复的批次没有“提交时快照”，无法区分录入写入与后续人工修改，
-        // 撤销退回无条件回滚的旧语义；同一会话内的撤销具备冲突保护。
+        // The receipt ID restores the same transactional protection after reload.
+        // Legacy receipts without that persisted snapshot cannot overwrite current data.
         rememberIntakeBatch(restored.intakeReceipt);
         setLatestBatch(restored.intakeReceipt);
       }
@@ -1878,11 +1877,13 @@ export function IntakePanel({
       }
       await refreshArchiveSnapshot();
       setLatestBatch(null);
-      if (undone.conflicts.length) {
+      if (undone.conflicts.some((conflict) => conflict.reason === "missing_receipt")) {
+        toast.warning(t("此旧批次没有可验证的提交快照，未撤销任何记录。请逐条检查。"));
+      } else if (undone.conflicts.length) {
         const kept = undone.conflicts.length;
         toast.warning(
           `${t("已撤销最近一次录入批次")}；${t("另有")} ${kept} ${t(
-            "条记录在批准后被修改过，已保留新版本未回滚",
+            "条记录因后续修改、删除或关联依赖而保留，未强行回滚",
           )}`,
         );
       } else {
@@ -2363,7 +2364,6 @@ export function IntakePanel({
     window.localStorage.removeItem(DRAFT_KEY);
     await refreshArchiveSnapshot();
     if (intakeReceiptHasChanges(intent.receipt)) {
-      await attachCommittedIntakeSnapshots(intent.receipt);
       rememberIntakeBatch(intent.receipt);
       setLatestBatch(intent.receipt);
     }
@@ -3074,7 +3074,9 @@ export function IntakePanel({
 
       const applyResult = commitIntent
         ? await executeIntakeCommitIntent(commitIntent)
-        : await facesDb.applyArchiveMutationBatch(mutationBatch).then(() => "applied" as const);
+        : await facesDb
+            .applyArchiveMutationBatch(mutationBatch, batch.id)
+            .then(() => "applied" as const);
       if (applyResult === "conflict") throw new IntakeCommitConflictError();
       archiveApplied = true;
 
@@ -3102,7 +3104,6 @@ export function IntakePanel({
         window.localStorage.removeItem(DRAFT_KEY);
         await refreshArchiveSnapshot();
         if (intakeReceiptHasChanges(batch)) {
-          await attachCommittedIntakeSnapshots(batch);
           rememberIntakeBatch(batch);
           setLatestBatch(batch);
         }
@@ -3133,11 +3134,16 @@ export function IntakePanel({
         intakeReceiptHasChanges(batch)
       ) {
         try {
-          await rollbackIntakeBatch(batch);
-          toast.error(`${(error as Error).message} · ${t("本批次已自动回滚，未留下部分数据")}`);
+          const conflicts = await rollbackIntakeBatch(batch);
+          toast.error(
+            `${(error as Error).message} · ${t(
+              conflicts.length
+                ? "自动撤销保留了有冲突或依赖的记录，请检查本次内容"
+                : "本批次已自动回滚，未留下部分数据",
+            )}`,
+          );
         } catch {
           batch.committedAt = Date.now();
-          await attachCommittedIntakeSnapshots(batch).catch(() => undefined);
           rememberIntakeBatch(batch);
           setLatestBatch(batch);
           toast.error(`${(error as Error).message} · ${t("自动回滚失败，可用下方按钮撤销")}`);

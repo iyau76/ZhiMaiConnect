@@ -2,6 +2,7 @@
 
 import type { DatePrecision, LifeEventRecord } from "./face-db";
 import { pad } from "./personal";
+import { calendarDate, parseExplicitEventDate } from "./explicit-event-date";
 import solarLunar from "solarlunar";
 
 export const PRECISION_LABEL: Record<DatePrecision, string> = {
@@ -111,6 +112,8 @@ const SEASONS: Record<string, [number, number]> = {
 export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | null {
   const s = text.trim().replace(/\s+/g, "");
   if (!s) return null;
+  const explicitDate = parseExplicitEventDate(text);
+  if (explicitDate.matched) return explicitDate.value;
   const thisYear = now.getFullYear();
 
   /** 相对年份：今年 / 去年 / 前年 / 三年前 */
@@ -124,53 +127,6 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
   else {
     const ago = s.match(/([一二三四五六七八九十]{1,2}|\d+)\s*年前/);
     if (ago) year = thisYear - num(ago[1]);
-  }
-
-  /** 完整起止日期优先于单日：2026-06-01～2026-08-31 / 2026年6月1日到8月31日 */
-  const toIsoDay = (y: number, m: number, d: number) => {
-    if (m < 1 || m > 12 || d < 1 || d > new Date(y, m, 0).getDate()) return null;
-    return `${y}-${pad(m)}-${pad(d)}`;
-  };
-  const dayToken = "(?:19|20)\\d{2}[-/.年]\\d{1,2}[-/.月]\\d{1,2}日?";
-  const rangeSep = "到|至|~|～|—|–|-";
-  const rangeFull = s.match(new RegExp(`^(${dayToken})(?:${rangeSep})(${dayToken})$`));
-  if (rangeFull) {
-    const startParts = rangeFull[1].match(/((?:19|20)\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/)!;
-    const endParts = rangeFull[2].match(/((?:19|20)\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/)!;
-    const start = toIsoDay(Number(startParts[1]), Number(startParts[2]), Number(startParts[3]));
-    const end = toIsoDay(Number(endParts[1]), Number(endParts[2]), Number(endParts[3]));
-    // 倒序或不可能的日期直接拒绝，避免退回“只取首个日期”的截断行为。
-    if (!start || !end || end < start) return null;
-    return { date: start, dateEnd: end, precision: "range" };
-  }
-  const rangeSameYear = s.match(
-    new RegExp(
-      `^((?:19|20)\\d{2})[-/.年](\\d{1,2})[-/.月](\\d{1,2})日?(?:${rangeSep})(\\d{1,2})[-/.月](\\d{1,2})日?$`,
-    ),
-  );
-  if (rangeSameYear) {
-    const y = Number(rangeSameYear[1]);
-    const start = toIsoDay(y, Number(rangeSameYear[2]), Number(rangeSameYear[3]));
-    const end = toIsoDay(y, Number(rangeSameYear[4]), Number(rangeSameYear[5]));
-    if (!start || !end || end < start) return null;
-    return { date: start, dateEnd: end, precision: "range" };
-  }
-  const rangeMonths = s.match(
-    new RegExp(
-      `^((?:19|20)\\d{2})[-/.年](\\d{1,2})月?(?:${rangeSep})((?:19|20)\\d{2})[-/.年](\\d{1,2})月?$`,
-    ),
-  );
-  if (rangeMonths) {
-    const startYear = Number(rangeMonths[1]);
-    const endYear = Number(rangeMonths[3]);
-    const startMonth = Number(rangeMonths[2]);
-    const endMonth = Number(rangeMonths[4]);
-    if (startMonth >= 1 && startMonth <= 12 && endMonth >= 1 && endMonth <= 12) {
-      const start = `${startYear}-${pad(startMonth)}-01`;
-      const end = `${endYear}-${pad(endMonth)}-${pad(new Date(endYear, endMonth, 0).getDate())}`;
-      if (start <= end) return { date: start, dateEnd: end, precision: "range" };
-    }
-    return null;
   }
 
   const iso = s.match(/((?:19|20)\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?/);
@@ -242,6 +198,7 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
   /** 一段时间：2019 到 2021 */
   const span = s.match(/((?:19|20)\d{2})\s*年?\s*(?:到|至|-|—|~)\s*((?:19|20)\d{2})/);
   if (span) {
+    if (span[2] < span[1]) return null;
     return { date: `${span[1]}-01-01`, dateEnd: `${span[2]}-12-31`, precision: "range" };
   }
 
@@ -334,7 +291,7 @@ export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | nu
   const validDate = (value: string) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
     const [year, month, day] = value.split("-").map(Number);
-    return month >= 1 && month <= 12 && day >= 1 && day <= new Date(year, month, 0).getDate();
+    return calendarDate(year, month, day) === value;
   };
   const normalizeDate = (value: string) => {
     if (/^\d{4}$/.test(value)) return `${value}-01-01`;
@@ -346,7 +303,10 @@ export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | nu
   };
   const inferredPrecision = (value: string): DatePrecision =>
     /^\d{4}$/.test(value) ? "year" : /^\d{4}-\d{2}$/.test(value) ? "month" : "day";
-  if (!raw?.date) return null;
+  if (!raw || typeof raw.date !== "string" || !raw.date) return null;
+  if (raw.dateEnd !== undefined && typeof raw.dateEnd !== "string") return null;
+  if (raw.precision !== undefined && !["day", "month", "year", "range"].includes(raw.precision))
+    return null;
   const date = normalizeDate(raw.date);
   if (!date) return null;
   const precision: DatePrecision =

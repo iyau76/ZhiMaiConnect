@@ -91,10 +91,12 @@ test("编辑只改时间不截断长标题", async ({ page }) => {
     title: longTitle,
     createdAt: 1,
   });
+  await editor.getByRole("textbox", { name: "具体时间（可选）" }).fill("午饭后");
   await editor.getByRole("button", { name: /^保存/ }).click();
   await expect(editor.getByRole("button", { name: "记下来" })).toBeVisible();
   const [stored] = await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents");
   expect(stored.title).toBe(longTitle);
+  expect(stored.timeText).toBe("午饭后");
   expect(stored.date).toBe("2026-06-03");
   expect(stored.createdAt).toBe(1);
 });
@@ -125,8 +127,11 @@ test("保存前发现其他窗口已修改时不覆盖", async ({ page }) => {
     title: "另一窗口已保存的标题",
     updatedAt: 12345,
   });
-  await editor.getByRole("button", { name: /^保存/ }).click();
-  await expect(page.getByText("在其他窗口被修改过")).toBeVisible();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await editor.getByRole("button", { name: /^保存/ }).click();
+    await expect(page.getByText("在其他窗口被修改过").first()).toBeVisible();
+    await expect(editor.getByRole("button", { name: /^保存/ })).toBeEnabled();
+  }
   const [stored] = await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents");
   expect(stored.title).toBe("另一窗口已保存的标题");
   expect(stored.updatedAt).toBe(12345);
@@ -257,3 +262,76 @@ for (const { personId, edgeId, dx, dy } of [
     await expect(circle).toHaveAttribute("cy", initialY!);
   });
 }
+
+test("合法长详情可追加编辑，标题和详情分别计限", async ({ page }) => {
+  const detail = "合成详情".repeat(150);
+  const editor = await editEvent(page, {
+    id: "long-detail",
+    date: "2026-06-03",
+    title: "合成标题",
+    detail,
+    createdAt: 1,
+  });
+  const field = editor.locator("textarea").first();
+  await field.focus();
+  await field.press("ControlOrMeta+End");
+  await field.pressSequentially("追加");
+  await expect(field).toHaveValue(`合成标题\n${detail}追加`);
+  await editor.getByRole("button", { name: /^保存/ }).click();
+  await expect(editor.getByRole("button", { name: "记下来" })).toBeVisible();
+  const [stored] = await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents");
+  expect(stored.title).toBe("合成标题");
+  expect(stored.detail).toBe(`${detail}追加`);
+});
+
+test("明确非法日期不调用 AI 猜测，修正后保留完整区间", async ({ page, mockNetwork }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: /^日历/ }).click();
+  const editor = page.locator("[data-event-editor]");
+  await editor.getByRole("button", { name: "不记得具体哪天" }).click();
+  await editor.locator("textarea").first().fill("合成区间");
+  const input = editor.getByPlaceholder(/大概什么时候/);
+  for (const invalid of ["2026-13", "2026 到 2025", "2026-06-01到"]) {
+    await input.fill(invalid);
+    await editor.getByRole("button", { name: "记下来" }).click();
+    await expect(editor.getByText("日期或区间无效，请检查月份、日数和先后顺序。")).toBeVisible();
+    expect(await readIndexedDbStore(page, "lifeEvents")).toEqual([]);
+  }
+  expect(mockNetwork.visionRequests).toHaveLength(0);
+  await input.fill("从2026-06-01到2026-08-31");
+  await editor.getByRole("button", { name: "记下来" }).click();
+  await expect
+    .poll(async () => (await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents"))[0])
+    .toMatchObject({
+      date: "2026-06-01",
+      dateEnd: "2026-08-31",
+      precision: "range",
+    });
+});
+
+test("提交成功但确认信号丢失后重试，不复制事件", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: /^日历/ }).click();
+  await page.evaluate(async () => {
+    const { facesDb } = await import("/src/lib/face-db.ts");
+    const save = facesDb.compareAndSwapLifeEvent;
+    let lost = false;
+    facesDb.compareAndSwapLifeEvent = async (...args: Parameters<typeof save>) => {
+      const result = await save(...args);
+      if (!lost) {
+        lost = true;
+        throw new Error("模拟提交确认丢失");
+      }
+      return result;
+    };
+  });
+  const editor = page.locator("[data-event-editor]");
+  await editor.locator("textarea").first().fill("确认丢失后的合成事件");
+  await editor.getByRole("button", { name: "记下来" }).click();
+  await expect(page.getByText(/保存失败，内容已保留/)).toBeVisible();
+  await expect(editor.locator("textarea").first()).toHaveValue("确认丢失后的合成事件");
+  const [committed] = await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents");
+  await editor.getByRole("button", { name: "记下来" }).click();
+  await expect(editor.locator("textarea").first()).toHaveValue("");
+  expect(await readIndexedDbStore(page, "lifeEvents")).toEqual([committed]);
+});

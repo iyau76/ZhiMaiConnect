@@ -40,6 +40,8 @@ import {
   touchesMonth,
   type FuzzyParse,
 } from "@/lib/fuzzy-date";
+import { recordRevision } from "@/lib/record-revision";
+import { parseExplicitEventDate } from "@/lib/explicit-event-date";
 import { getLang, t } from "@/lib/i18n";
 import { birthdayMd, festivalsForYear, lunarDateLabel, pad, todayStr } from "@/lib/personal";
 import { cn } from "@/lib/utils";
@@ -202,8 +204,19 @@ export function CalendarPanel({
 
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const editingSnapshot = useRef<LifeEventRecord | null>(null);
+  const newRecord = useRef<{ id: string; createdAt: number } | null>(null);
+  const saveIntent = useRef<{
+    formKey: string;
+    record: LifeEventRecord;
+    expectedRevision: string | null;
+    decisionId: string;
+  } | null>(null);
 
   const resetForm = () => {
+    editingSnapshot.current = null;
+    newRecord.current = null;
+    saveIntent.current = null;
     setEditingId(null);
     setTitle("");
     setWithIds([]);
@@ -216,6 +229,10 @@ export function CalendarPanel({
   };
 
   const edit = useCallback((event: LifeEventRecord) => {
+    if (savingRef.current) return;
+    editingSnapshot.current = structuredClone(event);
+    saveIntent.current = null;
+    newRecord.current = null;
     setEditingId(event.id);
     setPrecision(precisionOf(event));
     setSelected(event.date);
@@ -245,21 +262,24 @@ export function CalendarPanel({
   }, [edit, events, focusEventId, focusNonce]);
 
   const add = async () => {
-    // saving 状态更新是异步的；同一次点击事件的连击要靠同步 ref 挡住，
-    // 否则两次调用都会通过闭包里的旧 saving，各自生成新 ID 写入重复记录。
-    if (!title.trim() || saving || savingRef.current) return;
+    if (!title.trim() || savingRef.current) return;
     savingRef.current = true;
+    setSaving(true);
     try {
       await addGuarded();
+    } catch (error) {
+      toast.error(`${t("保存失败，内容已保留，请重试")}：${(error as Error).message}`);
     } finally {
       savingRef.current = false;
+      setSaving(false);
     }
   };
 
   const addGuarded = async () => {
-    const previous = editingId ? events.find((event) => event.id === editingId) : undefined;
-    // 一次用户意图持有一个稳定 ID：重放或双击都写同一条记录，不产生重复。
-    const recordId = previous?.id ?? crypto.randomUUID();
+    // The editor's baseline does not move when a list refreshes after a conflict.
+    const previous = editingSnapshot.current ?? undefined;
+    newRecord.current ??= { id: crypto.randomUUID(), createdAt: Date.now() };
+    const recordId = previous?.id ?? newRecord.current.id;
     let date = selected;
     let dateEnd: string | undefined;
     let stored: DatePrecision | undefined = precision;
@@ -293,31 +313,30 @@ export function CalendarPanel({
         setFuzzyHint("先写一句大概的时间，比如「去年夏天」。");
         return;
       }
-      setSaving(true);
-      try {
-        let parsed = parseFuzzyLocal(text);
-        if (!parsed && preset) {
-          // 本地猜不出来的说法交给 AI 理解
-          try {
-            setFuzzyHint("正在整理时间…");
-            parsed = normalizeFuzzy(
-              parseLooseJson<Partial<FuzzyParse>>(await askText(preset, fuzzyPrompt(text))),
-            );
-          } catch {
-            parsed = null;
-          }
-        }
-        if (!parsed) {
-          setFuzzyHint("这个时间没看懂，换个说法试试，比如「2019 年秋天」。");
-          return;
-        }
-        date = parsed.date;
-        dateEnd = parsed.dateEnd;
-        stored = parsed.precision;
-        dateText = text;
-      } finally {
-        setSaving(false);
+      const explicit = parseExplicitEventDate(text);
+      if (explicit.matched && !explicit.value) {
+        setFuzzyHint("日期或区间无效，请检查月份、日数和先后顺序。");
+        return;
       }
+      let parsed = parseFuzzyLocal(text);
+      if (!parsed && preset) {
+        try {
+          setFuzzyHint("正在整理时间…");
+          parsed = normalizeFuzzy(
+            parseLooseJson<Partial<FuzzyParse>>(await askText(preset, fuzzyPrompt(text))),
+          );
+        } catch {
+          parsed = null;
+        }
+      }
+      if (!parsed) {
+        setFuzzyHint("这个时间没看懂，换个说法试试，比如「2019 年秋天」。");
+        return;
+      }
+      date = parsed.date;
+      dateEnd = parsed.dateEnd;
+      stored = parsed.precision;
+      dateText = text;
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       toast.error(t("请先选择有效日期"));
@@ -335,52 +354,66 @@ export function CalendarPanel({
       return;
     }
 
-    // 一栏输入：第一行当标题，剩下的当细节
+    // First line is the title; the detail has its own independent limit.
     const raw = title.trim().replace(/\r/g, "");
     const [head, ...rest] = raw.split("\n");
-    const body = rest.join("\n").trim();
-
-    // 忙碌状态覆盖校验与提交整个生命周期；失败保留表单并给出可操作的提示。
-    setSaving(true);
-    try {
-      if (editingId) {
-        const current = (await facesDb.listLifeEvents()).find((event) => event.id === editingId);
-        if (!current) {
-          toast.error(t("这条事件已被删除，本次未保存。请重新新建。"));
-          return;
-        }
-        if (
-          previous &&
-          (current.updatedAt ?? current.createdAt) !== (previous.updatedAt ?? previous.createdAt)
-        ) {
-          toast.error(t("这条事件在其他窗口被修改过，本次未覆盖保存。请重新打开再改。"));
-          await load();
-          return;
-        }
-      }
-      await facesDb.putLifeEvent({
-        id: recordId,
-        date,
-        dateEnd,
-        precision: stored,
-        dateText,
-        timeText: timeText.trim() || undefined,
-        place: previous?.place,
-        kind: previous?.kind,
-        title: (head || raw).slice(0, 500),
-        detail: body || undefined,
-        personIds: withIds,
-        photos: photos.length ? photos : undefined,
-        createdAt: previous?.createdAt ?? Date.now(),
-        updatedAt: previous ? Date.now() : undefined,
-        source: previous?.source,
-      });
-      resetForm();
+    const originalText = previous
+      ? [previous.title, previous.detail].filter(Boolean).join("\n")
+      : "";
+    const textUnchanged = previous && title === originalText;
+    const nextTitle = textUnchanged ? previous.title : head || raw;
+    const nextDetail = textUnchanged ? previous.detail : rest.join("\n").trim() || undefined;
+    if (
+      (nextTitle !== previous?.title && nextTitle.length > 500) ||
+      (nextDetail !== previous?.detail && (nextDetail?.length ?? 0) > 4000)
+    ) {
+      toast.error(t("标题最多 500 字，详情最多 4000 字；内容未被截断。"));
+      return;
+    }
+    const record: LifeEventRecord = {
+      ...previous,
+      id: recordId,
+      date,
+      dateEnd,
+      precision: stored,
+      dateText,
+      timeText: timeText.trim() || undefined,
+      title: nextTitle,
+      detail: nextDetail,
+      personIds: withIds,
+      photos: photos.length ? photos : undefined,
+      createdAt: previous?.createdAt ?? newRecord.current.createdAt,
+      updatedAt: previous ? Date.now() : undefined,
+    };
+    const formKey = recordRevision({ ...record, updatedAt: undefined });
+    if (saveIntent.current?.formKey !== formKey) {
+      saveIntent.current = {
+        formKey,
+        record,
+        expectedRevision: previous ? recordRevision(previous) : null,
+        decisionId: `calendar-save:${crypto.randomUUID()}`,
+      };
+    }
+    const intent = saveIntent.current;
+    const result = await facesDb.compareAndSwapLifeEvent(
+      intent.record,
+      intent.expectedRevision,
+      intent.decisionId,
+    );
+    if (result.status === "missing") {
+      toast.error(t("这条事件已被删除，本次未保存。请重新新建。"));
+      return;
+    }
+    if (result.status === "conflict") {
+      toast.error(t("这条事件在其他窗口被修改过，本次未覆盖保存。请重新打开再改。"));
       await load();
-    } catch (error) {
-      toast.error(`${t("保存失败，内容已保留，请重试")}：${(error as Error).message}`);
-    } finally {
-      setSaving(false);
+      return;
+    }
+    resetForm();
+    try {
+      await load();
+    } catch {
+      toast.warning(t("事件已保存，列表刷新失败，请重新打开日历。"));
     }
   };
 
@@ -714,176 +747,178 @@ export function CalendarPanel({
         data-event-editor
         className="scroll-mt-6 rounded-2xl border border-border bg-card/40 p-4 md:p-5"
       >
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-medium">{t(editingId ? "编辑这件事" : "记一件事")}</h3>
-          {editingId && (
-            <Button size="sm" variant="ghost" onClick={resetForm}>
-              <X className="size-3.5" aria-hidden="true" />
-              {t("取消编辑")}
-            </Button>
-          )}
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("记不清哪天，可以写「去年夏天」，我们会整理到时间轴；复杂说法由 AI 辅助理解。")}
-        </p>
-
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {PRECISIONS.map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => setPrecision(item)}
-              aria-pressed={precision === item}
-              className={cn(
-                "rounded-full border px-3 py-1 text-[11px] transition-colors",
-                precision === item
-                  ? "border-primary bg-primary/10 text-foreground"
-                  : "border-border text-muted-foreground hover:bg-accent/50",
-              )}
-            >
-              {t(PRECISION_TABS[item])}
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-3">
-          {precision === "day" ? (
-            <Input
-              type="date"
-              value={selected}
-              onChange={(event) => setSelected(event.target.value)}
-            />
-          ) : precision === "month" ? (
-            <Input
-              type="month"
-              value={monthValue}
-              onChange={(event) => setMonthValue(event.target.value)}
-              aria-label={t("事件月份")}
-            />
-          ) : (
-            <div className="space-y-1.5">
-              <Input
-                value={fuzzyText}
-                onChange={(event) => setFuzzyText(event.target.value)}
-                placeholder={t("大概什么时候？例如：去年夏天、2019年前后、三年前秋天")}
-              />
-              <p className="text-[11px] text-muted-foreground">
-                {fuzzyHint ? t(fuzzyHint) : t("随手写个大概，保存时自动整理成时间轴上的位置。")}
-              </p>
-            </div>
-          )}
-        </div>
-
-        <label className="mt-3 block space-y-1 text-xs">
-          <span>{t("具体时间（可选）")}</span>
-          <Input
-            value={timeText}
-            onChange={(event) => setTimeText(event.target.value)}
-            maxLength={500}
-            placeholder={t("例如：下午3点、午饭后")}
-          />
-        </label>
-
-        {precision === "day" && (dayMarks.birthdays.length > 0 || dayMarks.festival) && (
-          <p className="mt-2 text-xs text-primary">
-            {dayMarks.birthdays.map((person) => `${person.name} ${t("生日")}`).join("、")}
-            {dayMarks.birthdays.length > 0 && dayMarks.festival ? " · " : ""}
-            {dayMarks.festival ? t(dayMarks.festival.name) : ""}
-          </p>
-        )}
-
-        {precision === "day" && (
-          <div className="mt-3 space-y-3">
-            {dayReminders.length > 0 && (
-              <section
-                className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-3"
-                role="region"
-                aria-label={`${selected} ${t("的待办")}`}
-              >
-                <h4 className="flex items-center gap-1.5 text-xs font-medium">
-                  <BellRing className="size-3.5 text-rose-500" aria-hidden="true" />
-                  {t("当天待办")} · {dayReminders.filter((reminder) => !reminder.done).length}{" "}
-                  {t("项未完成")}
-                </h4>
-                <ul className="mt-2 space-y-1.5">
-                  {dayReminders.map((reminder) => renderReminder(reminder))}
-                </ul>
-              </section>
+        <fieldset disabled={saving} className="min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-medium">{t(editingId ? "编辑这件事" : "记一件事")}</h3>
+            {editingId && (
+              <Button size="sm" variant="ghost" onClick={resetForm}>
+                <X className="size-3.5" aria-hidden="true" />
+                {t("取消编辑")}
+              </Button>
             )}
-            <ul className="space-y-1.5">
-              {dayEvents.map((event) => renderEvent(event))}
-              {dayEvents.length === 0 && dayReminders.length === 0 && (
-                <li className="text-xs text-muted-foreground">{t("这天还没有记录，写一条吧。")}</li>
-              )}
-            </ul>
           </div>
-        )}
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t("记不清哪天，可以写「去年夏天」，我们会整理到时间轴；复杂说法由 AI 辅助理解。")}
+          </p>
 
-        <div className="mt-4 space-y-2 border-t border-border pt-4">
-          <Textarea
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            rows={3}
-            maxLength={500}
-            placeholder={t("发生了什么？例如：和小雨吃火锅，聊到她想换工作，答应帮她看简历")}
-          />
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {PRECISIONS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setPrecision(item)}
+                aria-pressed={precision === item}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-[11px] transition-colors",
+                  precision === item
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "border-border text-muted-foreground hover:bg-accent/50",
+                )}
+              >
+                {t(PRECISION_TABS[item])}
+              </button>
+            ))}
+          </div>
 
-          <PhotoNotes photos={photos} onChange={setPhotos} />
-          {persons.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
+          <div className="mt-3">
+            {precision === "day" ? (
+              <Input
+                type="date"
+                value={selected}
+                onChange={(event) => setSelected(event.target.value)}
+              />
+            ) : precision === "month" ? (
+              <Input
+                type="month"
+                value={monthValue}
+                onChange={(event) => setMonthValue(event.target.value)}
+                aria-label={t("事件月份")}
+              />
+            ) : (
+              <div className="space-y-1.5">
                 <Input
-                  value={personQuery}
-                  onChange={(event) => setPersonQuery(event.target.value)}
-                  aria-label={t("搜索参与人物")}
-                  placeholder={t("搜索参与人物")}
-                  className="h-8 max-w-xs text-xs"
+                  value={fuzzyText}
+                  onChange={(event) => setFuzzyText(event.target.value)}
+                  placeholder={t("大概什么时候？例如：去年夏天、2019年前后、三年前秋天")}
                 />
-                {withIds.length > 0 && (
-                  <span className="text-[11px] text-muted-foreground">
-                    {t("已选")} {withIds.length} {t("人")}
-                  </span>
-                )}
+                <p className="text-[11px] text-muted-foreground">
+                  {fuzzyHint ? t(fuzzyHint) : t("随手写个大概，保存时自动整理成时间轴上的位置。")}
+                </p>
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {personOptions.map((person) => {
-                  const on = withIds.includes(person.id);
-                  return (
-                    <button
-                      key={person.id}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() =>
-                        setWithIds((prev) =>
-                          on ? prev.filter((id) => id !== person.id) : [...prev, person.id],
-                        )
-                      }
-                      className={cn(
-                        "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
-                        on
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border text-muted-foreground",
-                      )}
-                    >
-                      {person.name}
-                    </button>
-                  );
-                })}
-                {personOptions.length === 0 && (
-                  <span className="text-[11px] text-muted-foreground">
-                    {t("没有找到匹配的人物")}
-                  </span>
+            )}
+          </div>
+
+          <label className="mt-3 block space-y-1 text-xs">
+            <span>{t("具体时间（可选）")}</span>
+            <Input
+              value={timeText}
+              onChange={(event) => setTimeText(event.target.value)}
+              placeholder={t("例如：下午3点、午饭后")}
+            />
+          </label>
+
+          {precision === "day" && (dayMarks.birthdays.length > 0 || dayMarks.festival) && (
+            <p className="mt-2 text-xs text-primary">
+              {dayMarks.birthdays.map((person) => `${person.name} ${t("生日")}`).join("、")}
+              {dayMarks.birthdays.length > 0 && dayMarks.festival ? " · " : ""}
+              {dayMarks.festival ? t(dayMarks.festival.name) : ""}
+            </p>
+          )}
+
+          {precision === "day" && (
+            <div className="mt-3 space-y-3">
+              {dayReminders.length > 0 && (
+                <section
+                  className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-3"
+                  role="region"
+                  aria-label={`${selected} ${t("的待办")}`}
+                >
+                  <h4 className="flex items-center gap-1.5 text-xs font-medium">
+                    <BellRing className="size-3.5 text-rose-500" aria-hidden="true" />
+                    {t("当天待办")} · {dayReminders.filter((reminder) => !reminder.done).length}{" "}
+                    {t("项未完成")}
+                  </h4>
+                  <ul className="mt-2 space-y-1.5">
+                    {dayReminders.map((reminder) => renderReminder(reminder))}
+                  </ul>
+                </section>
+              )}
+              <ul className="space-y-1.5">
+                {dayEvents.map((event) => renderEvent(event))}
+                {dayEvents.length === 0 && dayReminders.length === 0 && (
+                  <li className="text-xs text-muted-foreground">
+                    {t("这天还没有记录，写一条吧。")}
+                  </li>
                 )}
-              </div>
+              </ul>
             </div>
           )}
-          <div className="flex justify-end">
-            <Button onClick={() => void add()} disabled={!title.trim() || saving}>
-              <Plus className="size-4" aria-hidden="true" />
-              {saving ? t("整理中…") : editingId ? t("保存修改") : t("记下来")}
-            </Button>
+
+          <div className="mt-4 space-y-2 border-t border-border pt-4">
+            <Textarea
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              rows={3}
+              placeholder={t("发生了什么？例如：和小雨吃火锅，聊到她想换工作，答应帮她看简历")}
+            />
+
+            <PhotoNotes photos={photos} onChange={setPhotos} />
+            {persons.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={personQuery}
+                    onChange={(event) => setPersonQuery(event.target.value)}
+                    aria-label={t("搜索参与人物")}
+                    placeholder={t("搜索参与人物")}
+                    className="h-8 max-w-xs text-xs"
+                  />
+                  {withIds.length > 0 && (
+                    <span className="text-[11px] text-muted-foreground">
+                      {t("已选")} {withIds.length} {t("人")}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {personOptions.map((person) => {
+                    const on = withIds.includes(person.id);
+                    return (
+                      <button
+                        key={person.id}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() =>
+                          setWithIds((prev) =>
+                            on ? prev.filter((id) => id !== person.id) : [...prev, person.id],
+                          )
+                        }
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+                          on
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border text-muted-foreground",
+                        )}
+                      >
+                        {person.name}
+                      </button>
+                    );
+                  })}
+                  {personOptions.length === 0 && (
+                    <span className="text-[11px] text-muted-foreground">
+                      {t("没有找到匹配的人物")}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <Button onClick={() => void add()} disabled={!title.trim() || saving}>
+                <Plus className="size-4" aria-hidden="true" />
+                {saving ? t("整理中…") : editingId ? t("保存修改") : t("记下来")}
+              </Button>
+            </div>
           </div>
-        </div>
+        </fieldset>
       </section>
     </div>
   );

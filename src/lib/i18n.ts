@@ -1382,6 +1382,25 @@ const EN: Record<string, string> = {
   当前仅显示: "Showing",
   "条亲属关系，隐藏": "kinship relations; hidden",
   条非亲属关系: "non-kinship relations",
+  只记得某月: "Only remember the month",
+  只记得某年: "Only remember the year",
+  "日期或区间无效，请检查月份、日数和先后顺序。":
+    "Invalid date or range. Check the month, day and endpoint order.",
+  "标题最多 500 字，详情最多 4000 字；内容未被截断。":
+    "Titles support 500 characters and details support 4,000. Your text has not been truncated.",
+  "保存失败，内容已保留，请重试": "Save failed. Your input is preserved; retry the save",
+  "这条事件已被删除，本次未保存。请重新新建。":
+    "This event was deleted. Nothing was saved. Create a new event to continue.",
+  "这条事件在其他窗口被修改过，本次未覆盖保存。请重新打开再改。":
+    "This event changed in another window. Nothing was overwritten. Reopen it before editing.",
+  "事件已保存，列表刷新失败，请重新打开日历。":
+    "The event was saved, but the list could not refresh. Reopen the calendar.",
+  "此旧批次没有可验证的提交快照，未撤销任何记录。请逐条检查。":
+    "This old batch has no verifiable commit snapshot. Nothing was reverted. Review the records individually.",
+  "条记录因后续修改、删除或关联依赖而保留，未强行回滚":
+    "records were protected because of later changes, deletion or dependencies; no forced rollback was performed",
+  "自动撤销保留了有冲突或依赖的记录，请检查本次内容":
+    "Automatic undo kept records with conflicts or dependencies. Review this batch.",
   English: "English",
 };
 

@@ -115,12 +115,12 @@ describe("matchIdentity", () => {
     expect(result.decision).not.toBe("update");
   });
 
-  it("still matches identical free-text contact", () => {
+  it("does not make identical free-text contact a strong identifier", () => {
     const result = matchIdentity({ name: "甲", contact: "微信 alice123" }, [
       person("same", "乙", "微信 alice 123"),
     ]);
-    expect(result.decision).toBe("update");
-    expect(result.matches[0].id).toBe("same");
+    expect(result.decision).toBe("create");
+    expect(result.matches).toEqual([]);
   });
 
   it("requires a choice when a home phone is shared by two people", () => {
@@ -161,4 +161,25 @@ describe("matchIdentity", () => {
     expect(result.decision).toBe("update");
     expect(result.reasons).toContain("平台账号唯一匹配");
   });
+});
+
+it.each(["暂无", "保密", "未提供", "通过前台联系", "@未提供"])(
+  "does not update a different person from free-text contact %s",
+  (contact) => {
+    expect(
+      matchIdentity({ name: "合成人物乙", contact }, [person("a", "合成人物甲", contact)]).decision,
+    ).toBe("create");
+  },
+);
+it("encodes platform/account pairs without delimiter collisions", () => {
+  const existing = personWithIdentity("a", "合成人物甲", {
+    platform: "a::b",
+    account: "c",
+    alias: "",
+  });
+  expect(
+    matchIdentity({ name: "合成人物乙", identities: [{ platform: "a", account: "b::c" }] }, [
+      existing,
+    ]).decision,
+  ).toBe("create");
 });

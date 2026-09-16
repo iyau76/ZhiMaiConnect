@@ -70,6 +70,7 @@ describe("intake commit intent", () => {
     expect(apply.mock.calls[0]?.[1]).toEqual({
       decisionId: "intake-decision:run-1",
       expectedRevision: 4,
+      undoReceiptId: "batch-1",
     });
   });
 

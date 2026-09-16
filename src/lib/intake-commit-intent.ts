@@ -37,6 +37,7 @@ export function createIntakeCommitIntent(input: Omit<IntakeCommitIntent, "versio
   return structuredClone({
     version: INTAKE_COMMIT_INTENT_VERSION,
     ...input,
+    receipt: { ...input.receipt, undoReceiptId: input.receipt.id },
   }) satisfies IntakeCommitIntent;
 }
 
@@ -81,7 +82,7 @@ export function parseIntakeCommitIntent(value: unknown): IntakeCommitIntent | un
 export interface IntakeCommitRepository {
   applyArchiveMutationBatchOnce(
     batch: ArchiveMutationWriteBatch,
-    guard: { decisionId: string; expectedRevision: number },
+    guard: { decisionId: string; expectedRevision: number; undoReceiptId?: string },
   ): Promise<ArchiveMutationDecisionApplyResult>;
   hasAppliedArchiveMutationDecision(decisionId: string): Promise<boolean>;
 }
@@ -95,6 +96,7 @@ export async function executeIntakeCommitIntent(
     return await repository.applyArchiveMutationBatchOnce(intent.batch, {
       decisionId: intent.decisionId,
       expectedRevision: intent.expectedArchiveRevision,
+      undoReceiptId: intent.receipt.undoReceiptId ?? intent.receipt.id,
     });
   } catch (error) {
     if (await repository.hasAppliedArchiveMutationDecision(intent.decisionId)) {

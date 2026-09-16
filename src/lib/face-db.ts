@@ -1,6 +1,17 @@
 /** 浏览器本地人脸库（IndexedDB），完全离线，人脸数据不出本机 */
 
 import type { Provenance } from "./provenance";
+import { recordRevision } from "./record-revision";
+import {
+  ARCHIVE_UNDO_STORES,
+  archiveUndoReceiptId,
+  captureArchiveReceipt,
+  readArchiveTransactionRows,
+  planArchiveUndo,
+  type ArchiveRows,
+  type ArchiveUndoReceipt,
+  type ArchiveUndoConflict,
+} from "./archive-receipt";
 import { normalizeCloseness } from "./person-profile";
 import {
   KINSHIP_PROJECTOR_VERSION,
@@ -107,21 +118,9 @@ export function normalizePersonRecord(person: PersonRecord): PersonRecord {
   };
 }
 
-function stableValue(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableValue).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .filter(([, item]) => item !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableValue(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
 /** Opaque revision token used by the database-level compare-and-swap write. */
 export function personRecordRevision(person: PersonRecord): string {
-  return stableValue(person);
+  return recordRevision(person);
 }
 
 export interface SightingRecord {
@@ -803,8 +802,9 @@ async function run<T>(
   return new Promise<T>((resolve, reject) => {
     const tx = db.transaction(store, mode);
     const request = fn(tx.objectStore(store));
-    request.onsuccess = () => resolve(request.result as T);
-    request.onerror = () => reject(request.error ?? new Error("数据库操作失败"));
+    tx.oncomplete = () => resolve(request.result as T);
+    tx.onerror = () => reject(tx.error ?? request.error ?? new Error("数据库操作失败"));
+    tx.onabort = () => reject(tx.error ?? request.error ?? new Error("数据库事务已中止"));
   });
 }
 
@@ -968,6 +968,8 @@ export interface ArchiveMutationDecisionGuard {
   /** Coordinator proposals are optional for an already user-approved local write intent. */
   proposalIds?: string[];
   expectedRevision: number;
+  /** Capture true before/after rows in the same transaction as this decision. */
+  undoReceiptId?: string;
 }
 
 export type ArchiveMutationDecisionApplyResult = "applied" | "already_applied" | "conflict";
@@ -1193,6 +1195,14 @@ async function replaceArchiveSnapshot(replacement: FaceDbArchiveReplacement) {
       store.clear();
       for (const row of rows) store.put(row);
     };
+    const metaRequest = tx.objectStore(APP_META).getAllKeys();
+    metaRequest.onsuccess = () => {
+      for (const key of metaRequest.result) {
+        if (typeof key === "string" && key.startsWith("archiveUndoReceipt:")) {
+          tx.objectStore(APP_META).delete(key);
+        }
+      }
+    };
     replace(PERSONS, normalizedPersons);
     replace(RELATION_ASSERTIONS, replacement.relationAssertions);
     replace(DERIVED_RELATIONS, projection.relations);
@@ -1273,6 +1283,7 @@ async function hasAppliedArchiveMutationDecision(decisionId: string) {
 async function applyArchiveMutationBatchInternal(
   batch: ArchiveMutationWriteBatch,
   guard?: ArchiveMutationDecisionGuard,
+  undoReceiptId = guard?.undoReceiptId,
 ): Promise<ArchiveMutationDecisionApplyResult> {
   const normalizedPersons = (batch.persons ?? []).map(normalizePersonRecord);
   for (const person of normalizedPersons) assertValidPersonName(person.name);
@@ -1296,6 +1307,7 @@ async function applyArchiveMutationBatchInternal(
     REFERRAL_POLICIES,
     APP_META,
     ...(guardedProposalIds.length ? [MUTATION_PROPOSALS] : []),
+    ...(undoReceiptId ? [SIGHTINGS, VOICEPRINTS, RELATIONS] : []),
   ];
 
   return new Promise<ArchiveMutationDecisionApplyResult>((resolve, reject) => {
@@ -1318,10 +1330,15 @@ async function applyArchiveMutationBatchInternal(
     let proposalClaimsLoaded = guardedProposalIds.length === 0;
     const proposalClaims: Array<{ id: string; status: string; decisionId?: string }> = [];
     let applied = false;
+    let receiptLoaded = !undoReceiptId;
+    let receiptExists = false;
+    let beforeReceipt: ArchiveRows | undefined;
 
     const apply = () => {
       if (
         applied ||
+        !receiptLoaded ||
+        (undoReceiptId && !beforeReceipt) ||
         !currentPersons ||
         !currentAssertions ||
         !markerLoaded ||
@@ -1331,7 +1348,7 @@ async function applyArchiveMutationBatchInternal(
         return;
       applied = true;
 
-      if (markerExists) {
+      if (markerExists || receiptExists) {
         result = "already_applied";
         return;
       }
@@ -1499,8 +1516,21 @@ async function applyArchiveMutationBatchInternal(
         id: ARCHIVE_MUTATION_REVISION_ID,
         value: archiveRevision + 1,
       });
+      if (undoReceiptId && beforeReceipt) captureArchiveReceipt(tx, undoReceiptId, beforeReceipt);
     };
 
+    if (undoReceiptId) {
+      readArchiveTransactionRows(tx, (rows) => {
+        beforeReceipt = rows;
+        apply();
+      });
+      const receiptRequest = tx.objectStore(APP_META).get(archiveUndoReceiptId(undoReceiptId));
+      receiptRequest.onsuccess = () => {
+        receiptExists = Boolean(receiptRequest.result);
+        receiptLoaded = true;
+        apply();
+      };
+    }
     personRequest.onsuccess = () => {
       currentPersons = personRequest.result as PersonRecord[];
       apply();
@@ -1547,8 +1577,11 @@ async function applyArchiveMutationBatchInternal(
   });
 }
 
-async function applyArchiveMutationBatch(batch: ArchiveMutationWriteBatch): Promise<void> {
-  await applyArchiveMutationBatchInternal(batch);
+async function applyArchiveMutationBatch(
+  batch: ArchiveMutationWriteBatch,
+  undoReceiptId?: string,
+): Promise<void> {
+  await applyArchiveMutationBatchInternal(batch, undefined, undoReceiptId);
 }
 
 async function applyArchiveMutationBatchOnce(
@@ -2057,6 +2090,149 @@ async function compareAndSwapPerson(
   });
 }
 
+export type LifeEventCompareAndSwapResult =
+  | { status: "saved" | "already_saved" }
+  | { status: "missing" }
+  | { status: "conflict"; current: LifeEventRecord };
+
+/** expectedRevision=null means create-only; decisionId makes a lost reply safe to retry. */
+async function compareAndSwapLifeEvent(
+  event: LifeEventRecord,
+  expectedRevision: string | null,
+  decisionId: string,
+): Promise<LifeEventCompareAndSwapResult> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([LIFE_EVENTS, PERSONS, APP_META], "readwrite");
+    const store = tx.objectStore(LIFE_EVENTS);
+    const meta = tx.objectStore(APP_META);
+    const currentRequest = store.get(event.id);
+    const markerRequest = meta.get(archiveMutationDecisionMarkerId(decisionId));
+    const revisionRequest = meta.get(ARCHIVE_MUTATION_REVISION_ID);
+    const peopleRequest = tx.objectStore(PERSONS).getAllKeys();
+    let remaining = 4;
+    let result: LifeEventCompareAndSwapResult;
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error ?? new Error("事件保存失败"));
+    tx.onabort = () => reject(tx.error ?? new Error("事件保存事务已中止"));
+    const apply = () => {
+      if (--remaining) return;
+      if (markerRequest.result) {
+        // A decision ID is bound to one exact write, never to a later edited form.
+        if (markerRequest.result.value !== recordRevision(event)) {
+          reject(new Error("保存请求已改变，请重新打开事件"));
+          tx.abort();
+          return;
+        }
+        result = { status: "already_saved" };
+        return;
+      }
+      const current = currentRequest.result as LifeEventRecord | undefined;
+      if (!current && expectedRevision !== null) {
+        result = { status: "missing" };
+        return;
+      }
+      if (current && (expectedRevision === null || recordRevision(current) !== expectedRevision)) {
+        result = { status: "conflict", current };
+        return;
+      }
+      const personIds = new Set(peopleRequest.result);
+      if (event.personIds?.some((id) => !personIds.has(id))) {
+        reject(new Error("参与人物已被删除，请重新打开事件"));
+        tx.abort();
+        return;
+      }
+      store.put(event);
+      meta.put({ id: archiveMutationDecisionMarkerId(decisionId), value: recordRevision(event) });
+      meta.put({
+        id: ARCHIVE_MUTATION_REVISION_ID,
+        value: Number(revisionRequest.result?.value ?? 0) + 1,
+      });
+      result = { status: "saved" };
+    };
+    for (const request of [currentRequest, markerRequest, revisionRequest, peopleRequest]) {
+      request.onsuccess = apply;
+    }
+  });
+}
+
+/** Receipt checks, dependency checks, writes and projection rebuild share one transaction. */
+async function undoArchiveMutation(receiptId: string): Promise<ArchiveUndoConflict[]> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([...ARCHIVE_UNDO_STORES, APP_META], "readwrite");
+    const meta = tx.objectStore(APP_META);
+    const receiptRequest = meta.get(archiveUndoReceiptId(receiptId));
+    const revisionRequest = meta.get(ARCHIVE_MUTATION_REVISION_ID);
+    let rows: ArchiveRows | undefined;
+    let loaded = 0;
+    let result: ArchiveUndoConflict[] = [];
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error ?? new Error("撤销事务失败"));
+    tx.onabort = () => reject(tx.error ?? new Error("撤销事务已中止，未改动任何记录"));
+    const apply = () => {
+      if (!rows || loaded !== 2) return;
+      const receipt = receiptRequest.result as ArchiveUndoReceipt | undefined;
+      if (!receipt || receipt.version !== 1) {
+        result = [{ kind: "batch", id: receiptId, reason: "missing_receipt" }];
+        return;
+      }
+      if (receipt.status === "undone") {
+        result = receipt.conflicts ?? [];
+        return;
+      }
+      const plan = planArchiveUndo(receipt, rows);
+      result = plan.conflicts;
+      for (const change of plan.changes) {
+        const store = tx.objectStore(change.store);
+        if (change.before) store.put(change.before);
+        else store.delete(change.id);
+        rows[change.store] = rows[change.store].filter((row) => row.id !== change.id);
+        if (change.before) rows[change.store].push(change.before);
+      }
+      const assertions = currentRelationAssertions(
+        rows.relationAssertions as unknown as RelationAssertionRecord[],
+      );
+      const projection = projectKinshipRelations({
+        assertions: assertions.map((assertion) => ({
+          id: assertion.id,
+          fromId: assertion.fromId,
+          toId: assertion.toId,
+          predicate: assertion.predicate,
+          qualifiers: assertion.qualifiers,
+          label: assertion.label,
+          basis: assertion.evidence.basis,
+          confidence: assertion.confidence,
+          confirmationStatus: assertion.confirmationStatus,
+          evidenceMode: "explicit" as const,
+        })),
+        persons: rows.persons as unknown as PersonRecord[],
+      });
+      const derivedStore = tx.objectStore(DERIVED_RELATIONS);
+      derivedStore.clear();
+      for (const relation of projection.relations) derivedStore.put(relation);
+      meta.put({ ...receipt, status: "undone", conflicts: result } satisfies ArchiveUndoReceipt);
+      meta.put({ id: "kinshipProjectionVersion", value: KINSHIP_PROJECTOR_VERSION });
+      meta.put({
+        id: ARCHIVE_MUTATION_REVISION_ID,
+        value: Number(revisionRequest.result?.value ?? 0) + 1,
+      });
+    };
+    readArchiveTransactionRows(tx, (snapshot) => {
+      rows = snapshot;
+      apply();
+    });
+    receiptRequest.onsuccess = () => {
+      loaded++;
+      apply();
+    };
+    revisionRequest.onsuccess = () => {
+      loaded++;
+      apply();
+    };
+  });
+}
+
 async function deleteSightings(ids: string[]): Promise<void> {
   const uniqueIds = [...new Set(ids)];
   if (!uniqueIds.length) return;
@@ -2072,6 +2248,8 @@ async function deleteSightings(ids: string[]): Promise<void> {
 }
 
 export const facesDb = {
+  compareAndSwapLifeEvent,
+  undoArchiveMutation,
   putBatch,
   putRelationshipBatch,
   applyArchiveMutationBatch,
