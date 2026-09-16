@@ -61,6 +61,23 @@ for (const event of legacyEvents) {
   });
 }
 
+test("编辑只改时间不截断长标题", async ({ page }) => {
+  const longTitle =
+    "一段超过六十个字符的合成事件标题，用来验证日历编辑保存不会把原文悄悄裁短，其余字段也应原样保留，标题里还带着日期地点与人物等细节的完整记录。";
+  const editor = await editEvent(page, {
+    id: "long-title",
+    date: "2026-06-03",
+    title: longTitle,
+    createdAt: 1,
+  });
+  await editor.getByRole("button", { name: /^保存/ }).click();
+  await expect(editor.getByRole("button", { name: "记下来" })).toBeVisible();
+  const [stored] = await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents");
+  expect(stored.title).toBe(longTitle);
+  expect(stored.date).toBe("2026-06-03");
+  expect(stored.createdAt).toBe(1);
+});
+
 test("模糊时间入口可以新增去年夏天", async ({ page }) => {
   await openApp(page);
   const lastYear = await page.evaluate(() => new Date().getFullYear() - 1);

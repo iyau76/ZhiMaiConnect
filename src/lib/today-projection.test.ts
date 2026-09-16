@@ -212,4 +212,41 @@ describe("projectToday", () => {
       expect.objectContaining({ id: "event:summer", timing: "today" }),
     ]);
   });
+
+  it("keeps year and month memories out of today's urgent list", () => {
+    const result = projectToday({
+      today: "2026-09-05",
+      persons: [],
+      reminders: [],
+      tasks: [],
+      runs: [],
+      proposals: [],
+      events: [
+        {
+          id: "met-this-year",
+          date: "2026-01-01",
+          precision: "year",
+          title: "今年见过这位学长",
+          createdAt: now,
+        },
+        {
+          id: "met-this-month",
+          date: "2026-09-01",
+          precision: "month",
+          title: "九月某天吃过饭",
+          createdAt: now,
+        },
+        {
+          id: "exact-today",
+          date: "2026-09-05",
+          title: "确定今天的会面",
+          createdAt: now,
+        },
+      ],
+    });
+
+    expect(result.urgent.map((item) => item.id)).toEqual(["event:exact-today"]);
+    expect(result.recent).toEqual([]);
+    expect(result.upcoming).toEqual([]);
+  });
 });

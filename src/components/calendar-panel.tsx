@@ -332,7 +332,7 @@ export function CalendarPanel({
       timeText: timeText.trim() || undefined,
       place: previous?.place,
       kind: previous?.kind,
-      title: (head || raw).slice(0, 60),
+      title: (head || raw).slice(0, 500),
       detail: body || undefined,
       personIds: withIds,
       photos: photos.length ? photos : undefined,
@@ -784,6 +784,7 @@ export function CalendarPanel({
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             rows={3}
+            maxLength={500}
             placeholder={t("发生了什么？例如：和小雨吃火锅，聊到她想换工作，答应帮她看简历")}
           />
 

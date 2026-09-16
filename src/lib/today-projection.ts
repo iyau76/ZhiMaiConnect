@@ -182,6 +182,7 @@ export function projectToday(input: TodayProjectionInput): TodayProjection {
     const startDistance = daysFrom(input.today, span.start);
     const endDistance = daysFrom(input.today, span.end);
     if (startDistance === null || endDistance === null) continue;
+    const precision = event.precision ?? "day";
     const item: TodayProjectionItem = {
       id: `event:${event.id}`,
       kind: "event",
@@ -192,6 +193,9 @@ export function projectToday(input: TodayProjectionInput): TodayProjection {
       target: { view: "calendar", recordType: "event", recordId: event.id },
     };
     if (startDistance <= 0 && endDistance >= 0) {
+      // 年/月精度只表达“这段时间内发生过”，覆盖今天不等于今天必须处理；
+      // 显式区间（range）仍视为进行中，保持进入急办。
+      if (precision === "year" || precision === "month") continue;
       urgent.push({ ...item, timing: "today" });
     } else if (startDistance > 0 && startDistance <= upcomingDays) {
       upcoming.push({ ...item, timing: "upcoming" });

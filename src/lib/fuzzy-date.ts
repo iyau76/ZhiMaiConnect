@@ -126,6 +126,53 @@ export function parseFuzzyLocal(text: string, now = new Date()): FuzzyParse | nu
     if (ago) year = thisYear - num(ago[1]);
   }
 
+  /** 完整起止日期优先于单日：2026-06-01～2026-08-31 / 2026年6月1日到8月31日 */
+  const toIsoDay = (y: number, m: number, d: number) => {
+    if (m < 1 || m > 12 || d < 1 || d > new Date(y, m, 0).getDate()) return null;
+    return `${y}-${pad(m)}-${pad(d)}`;
+  };
+  const dayToken = "(?:19|20)\\d{2}[-/.年]\\d{1,2}[-/.月]\\d{1,2}日?";
+  const rangeSep = "到|至|~|～|—|–|-";
+  const rangeFull = s.match(new RegExp(`^(${dayToken})(?:${rangeSep})(${dayToken})$`));
+  if (rangeFull) {
+    const startParts = rangeFull[1].match(/((?:19|20)\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/)!;
+    const endParts = rangeFull[2].match(/((?:19|20)\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/)!;
+    const start = toIsoDay(Number(startParts[1]), Number(startParts[2]), Number(startParts[3]));
+    const end = toIsoDay(Number(endParts[1]), Number(endParts[2]), Number(endParts[3]));
+    // 倒序或不可能的日期直接拒绝，避免退回“只取首个日期”的截断行为。
+    if (!start || !end || end < start) return null;
+    return { date: start, dateEnd: end, precision: "range" };
+  }
+  const rangeSameYear = s.match(
+    new RegExp(
+      `^((?:19|20)\\d{2})[-/.年](\\d{1,2})[-/.月](\\d{1,2})日?(?:${rangeSep})(\\d{1,2})[-/.月](\\d{1,2})日?$`,
+    ),
+  );
+  if (rangeSameYear) {
+    const y = Number(rangeSameYear[1]);
+    const start = toIsoDay(y, Number(rangeSameYear[2]), Number(rangeSameYear[3]));
+    const end = toIsoDay(y, Number(rangeSameYear[4]), Number(rangeSameYear[5]));
+    if (!start || !end || end < start) return null;
+    return { date: start, dateEnd: end, precision: "range" };
+  }
+  const rangeMonths = s.match(
+    new RegExp(
+      `^((?:19|20)\\d{2})[-/.年](\\d{1,2})月?(?:${rangeSep})((?:19|20)\\d{2})[-/.年](\\d{1,2})月?$`,
+    ),
+  );
+  if (rangeMonths) {
+    const startYear = Number(rangeMonths[1]);
+    const endYear = Number(rangeMonths[3]);
+    const startMonth = Number(rangeMonths[2]);
+    const endMonth = Number(rangeMonths[4]);
+    if (startMonth >= 1 && startMonth <= 12 && endMonth >= 1 && endMonth <= 12) {
+      const start = `${startYear}-${pad(startMonth)}-01`;
+      const end = `${endYear}-${pad(endMonth)}-${pad(new Date(endYear, endMonth, 0).getDate())}`;
+      if (start <= end) return { date: start, dateEnd: end, precision: "range" };
+    }
+    return null;
+  }
+
   const iso = s.match(/((?:19|20)\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?/);
   if (iso) {
     const y = Number(iso[1]);
@@ -291,7 +338,10 @@ export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | nu
   };
   const normalizeDate = (value: string) => {
     if (/^\d{4}$/.test(value)) return `${value}-01-01`;
-    if (/^\d{4}-\d{2}$/.test(value)) return `${value}-01`;
+    if (/^\d{4}-\d{2}$/.test(value)) {
+      const month = Number(value.slice(5));
+      return month >= 1 && month <= 12 ? `${value}-01` : null;
+    }
     return validDate(value) ? value : null;
   };
   const inferredPrecision = (value: string): DatePrecision =>
@@ -310,7 +360,8 @@ export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | nu
         : "year";
   const dateEnd = raw.dateEnd ? normalizeDate(raw.dateEnd) : null;
   if (raw.dateEnd && !dateEnd) return null;
-  if (precision === "range" && !dateEnd) return { date, precision: "month" };
+  // 缺结束日期的范围拒绝返回：不悄悄降级成另一种精度，交回上层保留原文。
+  if (precision === "range" && !dateEnd) return null;
   if (precision === "range" && dateEnd! < date) return null;
   return { date, dateEnd: precision === "range" ? dateEnd! : undefined, precision };
 }

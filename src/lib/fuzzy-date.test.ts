@@ -98,6 +98,15 @@ describe("parseFuzzyLocal", () => {
     ["三年前", { date: "2023-01-01", precision: "year" }],
     ["十一年前", { date: "2015-01-01", precision: "year" }],
     ["2019 到 2021", { date: "2019-01-01", dateEnd: "2021-12-31", precision: "range" }],
+    ["2026-06-01～2026-08-31", { date: "2026-06-01", dateEnd: "2026-08-31", precision: "range" }],
+    ["2025-12-20 至 2026-01-05", { date: "2025-12-20", dateEnd: "2026-01-05", precision: "range" }],
+    ["2026年6月1日到8月31日", { date: "2026-06-01", dateEnd: "2026-08-31", precision: "range" }],
+    [
+      "2026年6月1日至2026年9月15日",
+      { date: "2026-06-01", dateEnd: "2026-09-15", precision: "range" },
+    ],
+    ["2028-02-29~2028-03-05", { date: "2028-02-29", dateEnd: "2028-03-05", precision: "range" }],
+    ["2026-06～2026-08", { date: "2026-06-01", dateEnd: "2026-08-31", precision: "range" }],
     ["去年暑假", { date: "2025-07-01", dateEnd: "2025-08-31", precision: "range" }],
     ["2027 年冬天", { date: "2027-12-01", dateEnd: "2028-02-29", precision: "range" }],
     ["上个月", { date: "2026-07-01", precision: "month" }],
@@ -131,6 +140,13 @@ describe("parseFuzzyLocal", () => {
       expect(parseFuzzyLocal(input, now)).toBeNull();
     },
   );
+
+  it.each(["2026-08-31～2026-06-01", "2026年9月1日到8月31日", "2027-02-29～2027-03-05"])(
+    "rejects a reversed or impossible range instead of truncating it: %s",
+    (input) => {
+      expect(parseFuzzyLocal(input, now)).toBeNull();
+    },
+  );
 });
 
 describe("AI fuzzy-date normalization", () => {
@@ -157,11 +173,14 @@ describe("AI fuzzy-date normalization", () => {
     });
   });
 
-  it("downgrades an incomplete range to month precision", () => {
-    expect(normalizeFuzzy({ date: "2026-08-01", precision: "range" })).toEqual({
-      date: "2026-08-01",
-      precision: "month",
-    });
+  it("rejects an incomplete range instead of downgrading it to month precision", () => {
+    expect(normalizeFuzzy({ date: "2026-08-01", precision: "range" })).toBeNull();
+  });
+
+  it("rejects impossible short months instead of inventing a day", () => {
+    expect(normalizeFuzzy({ date: "2026-13", precision: "month" })).toBeNull();
+    expect(normalizeFuzzy({ date: "2026-13-01", precision: "day" })).toBeNull();
+    expect(normalizeFuzzy({ date: "2026-00", precision: "month" })).toBeNull();
   });
 
   it.each([null, {}, { date: "2026-8-1", precision: "month" }])(
