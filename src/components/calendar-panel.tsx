@@ -201,6 +201,7 @@ export function CalendarPanel({
   };
 
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
 
   const resetForm = () => {
     setEditingId(null);
@@ -244,8 +245,21 @@ export function CalendarPanel({
   }, [edit, events, focusEventId, focusNonce]);
 
   const add = async () => {
-    if (!title.trim() || saving) return;
+    // saving 状态更新是异步的；同一次点击事件的连击要靠同步 ref 挡住，
+    // 否则两次调用都会通过闭包里的旧 saving，各自生成新 ID 写入重复记录。
+    if (!title.trim() || saving || savingRef.current) return;
+    savingRef.current = true;
+    try {
+      await addGuarded();
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
+  const addGuarded = async () => {
     const previous = editingId ? events.find((event) => event.id === editingId) : undefined;
+    // 一次用户意图持有一个稳定 ID：重放或双击都写同一条记录，不产生重复。
+    const recordId = previous?.id ?? crypto.randomUUID();
     let date = selected;
     let dateEnd: string | undefined;
     let stored: DatePrecision | undefined = precision;
@@ -280,27 +294,30 @@ export function CalendarPanel({
         return;
       }
       setSaving(true);
-      let parsed = parseFuzzyLocal(text);
-      if (!parsed && preset) {
-        // 本地猜不出来的说法交给 AI 理解
-        try {
-          setFuzzyHint("正在整理时间…");
-          parsed = normalizeFuzzy(
-            parseLooseJson<Partial<FuzzyParse>>(await askText(preset, fuzzyPrompt(text))),
-          );
-        } catch {
-          parsed = null;
+      try {
+        let parsed = parseFuzzyLocal(text);
+        if (!parsed && preset) {
+          // 本地猜不出来的说法交给 AI 理解
+          try {
+            setFuzzyHint("正在整理时间…");
+            parsed = normalizeFuzzy(
+              parseLooseJson<Partial<FuzzyParse>>(await askText(preset, fuzzyPrompt(text))),
+            );
+          } catch {
+            parsed = null;
+          }
         }
+        if (!parsed) {
+          setFuzzyHint("这个时间没看懂，换个说法试试，比如「2019 年秋天」。");
+          return;
+        }
+        date = parsed.date;
+        dateEnd = parsed.dateEnd;
+        stored = parsed.precision;
+        dateText = text;
+      } finally {
+        setSaving(false);
       }
-      setSaving(false);
-      if (!parsed) {
-        setFuzzyHint("这个时间没看懂，换个说法试试，比如「2019 年秋天」。");
-        return;
-      }
-      date = parsed.date;
-      dateEnd = parsed.dateEnd;
-      stored = parsed.precision;
-      dateText = text;
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       toast.error(t("请先选择有效日期"));
@@ -323,25 +340,48 @@ export function CalendarPanel({
     const [head, ...rest] = raw.split("\n");
     const body = rest.join("\n").trim();
 
-    await facesDb.putLifeEvent({
-      id: previous?.id ?? crypto.randomUUID(),
-      date,
-      dateEnd,
-      precision: stored,
-      dateText,
-      timeText: timeText.trim() || undefined,
-      place: previous?.place,
-      kind: previous?.kind,
-      title: (head || raw).slice(0, 500),
-      detail: body || undefined,
-      personIds: withIds,
-      photos: photos.length ? photos : undefined,
-      createdAt: previous?.createdAt ?? Date.now(),
-      updatedAt: previous ? Date.now() : undefined,
-      source: previous?.source,
-    });
-    resetForm();
-    await load();
+    // 忙碌状态覆盖校验与提交整个生命周期；失败保留表单并给出可操作的提示。
+    setSaving(true);
+    try {
+      if (editingId) {
+        const current = (await facesDb.listLifeEvents()).find((event) => event.id === editingId);
+        if (!current) {
+          toast.error(t("这条事件已被删除，本次未保存。请重新新建。"));
+          return;
+        }
+        if (
+          previous &&
+          (current.updatedAt ?? current.createdAt) !== (previous.updatedAt ?? previous.createdAt)
+        ) {
+          toast.error(t("这条事件在其他窗口被修改过，本次未覆盖保存。请重新打开再改。"));
+          await load();
+          return;
+        }
+      }
+      await facesDb.putLifeEvent({
+        id: recordId,
+        date,
+        dateEnd,
+        precision: stored,
+        dateText,
+        timeText: timeText.trim() || undefined,
+        place: previous?.place,
+        kind: previous?.kind,
+        title: (head || raw).slice(0, 500),
+        detail: body || undefined,
+        personIds: withIds,
+        photos: photos.length ? photos : undefined,
+        createdAt: previous?.createdAt ?? Date.now(),
+        updatedAt: previous ? Date.now() : undefined,
+        source: previous?.source,
+      });
+      resetForm();
+      await load();
+    } catch (error) {
+      toast.error(`${t("保存失败，内容已保留，请重试")}：${(error as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const remove = async (id: string) => {

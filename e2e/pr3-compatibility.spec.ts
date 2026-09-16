@@ -44,6 +44,27 @@ async function editEvent(page: Page, event: LifeEventRecord) {
   return page.locator("[data-event-editor]");
 }
 
+/** 直接向 IndexedDB 写入修改后的事件，模拟另一个窗口的保存。 */
+async function overwriteEventFromOtherWindow(page: Page, event: LifeEventRecord) {
+  await page.evaluate(
+    async (record) => {
+      const relationshipModule = await import("/src/lib/face-db.ts");
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("openglass-faces", relationshipModule.FACE_DB_VERSION);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("lifeEvents", "readwrite");
+        tx.objectStore("lifeEvents").put(record);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    },
+    event as unknown as never,
+  );
+}
+
 for (const event of legacyEvents) {
   test(`只改标题完整保留日期字段：${event.id}`, async ({ page }) => {
     const editor = await editEvent(page, event);
@@ -76,6 +97,39 @@ test("编辑只改时间不截断长标题", async ({ page }) => {
   expect(stored.title).toBe(longTitle);
   expect(stored.date).toBe("2026-06-03");
   expect(stored.createdAt).toBe(1);
+});
+
+test("同一次双击保存只产生一条记录", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: /^日历/ }).click();
+  const editor = page.locator("[data-event-editor]");
+  await editor.locator("textarea").first().fill("双击保存的合成事件");
+  await editor.getByRole("button", { name: "记下来" }).click({ clickCount: 2 });
+  await expect(editor.getByRole("button", { name: /^保存/ })).toBeHidden();
+  const stored = await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents");
+  expect(stored).toHaveLength(1);
+  expect(stored[0].title).toBe("双击保存的合成事件");
+});
+
+test("保存前发现其他窗口已修改时不覆盖", async ({ page }) => {
+  const original = {
+    id: "conflict",
+    date: "2026-06-03",
+    title: "原始标题",
+    createdAt: 1,
+  } satisfies LifeEventRecord;
+  const editor = await editEvent(page, original);
+  await editor.locator("textarea").first().fill("本窗口迟到的修改");
+  await overwriteEventFromOtherWindow(page, {
+    ...original,
+    title: "另一窗口已保存的标题",
+    updatedAt: 12345,
+  });
+  await editor.getByRole("button", { name: /^保存/ }).click();
+  await expect(page.getByText("在其他窗口被修改过")).toBeVisible();
+  const [stored] = await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents");
+  expect(stored.title).toBe("另一窗口已保存的标题");
+  expect(stored.updatedAt).toBe(12345);
 });
 
 test("模糊时间入口可以新增去年夏天", async ({ page }) => {
