@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -13,10 +16,14 @@ jobs:
   check:
     name: check & build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,13 +31,43 @@ jobs:
           node-version: 22.12.0
           cache: npm
       - run: npm ci
+      # npm 的可选依赖 bug（npm/cli#4828）会让 Linux 原生绑定在 npm ci 时被漏装；
+      # 从各父包的 optionalDependencies 按锁定版本恢复，不改变依赖声明。
+      - name: Restore omitted Linux native bindings
+        if: runner.os == 'Linux'
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import os from 'node:os';
+          import { execFileSync } from 'node:child_process';
+          const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-native-'));
+          const parents = ['rolldown', 'rollup', 'oxc-parser', 'oxc-transform', '@tailwindcss/oxide', 'lightningcss', '@swc/core'];
+          for (const parent of parents) {
+            const manifest = path.join('node_modules', parent, 'package.json');
+            if (!fs.existsSync(manifest)) continue;
+            const metadata = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+            for (const [name, version] of Object.entries(metadata.optionalDependencies ?? {})) {
+              if (!/linux-x64-gnu$/.test(name)) continue;
+              const destination = path.join('node_modules', name);
+              if (fs.existsSync(path.join(destination, 'package.json'))) continue;
+              console.log(`Restoring ${name}@${version}, required by ${parent}@${metadata.version}`);
+              const packed = JSON.parse(execFileSync('npm', ['pack', `${name}@${version}`, '--json', '--pack-destination', temporary], { encoding: 'utf8' }));
+              fs.mkdirSync(destination, { recursive: true });
+              execFileSync('tar', ['-xzf', path.join(temporary, packed[0].filename), '--strip-components=1', '-C', destination]);
+            }
+          }
+          fs.rmSync(temporary, { recursive: true, force: true });
+          JS
       - run: npm run check
       - run: npm run build
 
   e2e:
     name: end-to-end (ubuntu)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       PLAYWRIGHT_CHANNEL: chromium
     steps:
       - uses: actions/checkout@v4
@@ -39,5 +76,30 @@ jobs:
           node-version: 22.12.0
           cache: npm
       - run: npm ci
+      - name: Restore omitted Linux native bindings
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import os from 'node:os';
+          import { execFileSync } from 'node:child_process';
+          const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-native-'));
+          const parents = ['rolldown', 'rollup', 'oxc-parser', 'oxc-transform', '@tailwindcss/oxide', 'lightningcss', '@swc/core'];
+          for (const parent of parents) {
+            const manifest = path.join('node_modules', parent, 'package.json');
+            if (!fs.existsSync(manifest)) continue;
+            const metadata = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+            for (const [name, version] of Object.entries(metadata.optionalDependencies ?? {})) {
+              if (!/linux-x64-gnu$/.test(name)) continue;
+              const destination = path.join('node_modules', name);
+              if (fs.existsSync(path.join(destination, 'package.json'))) continue;
+              console.log(`Restoring ${name}@${version}, required by ${parent}@${metadata.version}`);
+              const packed = JSON.parse(execFileSync('npm', ['pack', `${name}@${version}`, '--json', '--pack-destination', temporary], { encoding: 'utf8' }));
+              fs.mkdirSync(destination, { recursive: true });
+              execFileSync('tar', ['-xzf', path.join(temporary, packed[0].filename), '--strip-components=1', '-C', destination]);
+            }
+          }
+          fs.rmSync(temporary, { recursive: true, force: true });
+          JS
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
