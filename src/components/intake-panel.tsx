@@ -3239,7 +3239,7 @@ export function IntakePanel({
         />
 
         <RelationshipSamplePicker
-          className="mt-3"
+          className="mt-3 hidden md:block"
           disabled={
             busy ||
             !!reading ||
