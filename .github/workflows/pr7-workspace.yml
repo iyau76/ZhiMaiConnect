@@ -1,0 +1,56 @@
+name: PR7 isolated workspace
+on:
+  push:
+    branches: [fix/pr7-reviewed-data-integrity]
+    paths: [.github/workflows/pr7-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Archive reviewed source (no credentials)
+        run: git archive --format=tar.gz -o /tmp/pr7-source.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr7-source
+          path: /tmp/pr7-source.tar.gz
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+          cache: npm
+      - run: npm ci
+      - name: Restore exact optional native bindings
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import os from 'node:os';
+          import { execFileSync } from 'node:child_process';
+          const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'pr7-native-'));
+          for (const parent of ['rolldown', 'rollup', 'oxc-parser', 'oxc-transform', '@tailwindcss/oxide', 'lightningcss', '@swc/core']) {
+            const file = path.join('node_modules', parent, 'package.json');
+            if (!fs.existsSync(file)) continue;
+            const metadata = JSON.parse(fs.readFileSync(file, 'utf8'));
+            for (const [name, version] of Object.entries(metadata.optionalDependencies ?? {})) {
+              if (!/linux-x64-gnu$/.test(name)) continue;
+              const dest = path.join('node_modules', name);
+              if (fs.existsSync(path.join(dest, 'package.json'))) continue;
+              const packed = JSON.parse(execFileSync('npm', ['pack', `${name}@${version}`, '--json', '--pack-destination', temp], { encoding: 'utf8' }));
+              fs.mkdirSync(dest, { recursive: true });
+              execFileSync('tar', ['-xzf', path.join(temp, packed[0].filename), '--strip-components=1', '-C', dest]);
+            }
+          }
+          fs.rmSync(temp, { recursive: true, force: true });
+          JS
+      - run: tar -czf /tmp/pr7-dependencies.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr7-dependencies
+          path: /tmp/pr7-dependencies.tar.gz
+          compression-level: 0
