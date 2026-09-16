@@ -46,10 +46,12 @@ import { cn } from "@/lib/utils";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 const WEEK = ["一", "二", "三", "四", "五", "六", "日"];
-const PRECISIONS: DatePrecision[] = ["day", "month"];
-const PRECISION_TABS: Record<string, string> = {
+const PRECISIONS: DatePrecision[] = ["day", "month", "year", "range"];
+const PRECISION_TABS: Record<DatePrecision, string> = {
   day: "记得具体哪天",
-  month: "不记得具体哪天",
+  month: "只记得某月",
+  year: "只记得某年",
+  range: "不记得具体哪天",
 };
 
 export function CalendarPanel({
@@ -214,7 +216,7 @@ export function CalendarPanel({
 
   const edit = useCallback((event: LifeEventRecord) => {
     setEditingId(event.id);
-    setPrecision(precisionOf(event) === "day" ? "day" : "month");
+    setPrecision(precisionOf(event));
     setSelected(event.date);
     setYear(Number(event.date.slice(0, 4)));
     setMonth(Number(event.date.slice(5, 7)) - 1);
@@ -246,9 +248,25 @@ export function CalendarPanel({
     const previous = editingId ? events.find((event) => event.id === editingId) : undefined;
     let date = selected;
     let dateEnd: string | undefined;
-    let stored: DatePrecision = precision;
+    let stored: DatePrecision | undefined = precision;
+    let dateText: string | undefined;
+    const dateUnchanged =
+      previous &&
+      precision === precisionOf(previous) &&
+      (precision === "day"
+        ? selected === previous.date
+        : precision === "month"
+          ? monthValue === previous.date.slice(0, 7)
+          : fuzzyText.trim() === formatFuzzy(previous));
 
-    if (precision === "month") {
+    // Editing a title, participants or time must not reinterpret an old date.
+    // Preserve even an implicit precision and the original relative description.
+    if (previous && dateUnchanged) {
+      date = previous.date;
+      dateEnd = previous.dateEnd;
+      stored = previous.precision;
+      dateText = previous.dateText;
+    } else if (precision === "month") {
       if (!/^\d{4}-\d{2}$/.test(monthValue)) {
         toast.error(t("请先选择有效月份"));
         return;
@@ -262,14 +280,7 @@ export function CalendarPanel({
         return;
       }
       setSaving(true);
-      let parsed =
-        previous && text === formatFuzzy(previous)
-          ? {
-              date: previous.date,
-              dateEnd: previous.dateEnd,
-              precision: precisionOf(previous),
-            }
-          : parseFuzzyLocal(text);
+      let parsed = parseFuzzyLocal(text);
       if (!parsed && preset) {
         // 本地猜不出来的说法交给 AI 理解
         try {
@@ -289,6 +300,7 @@ export function CalendarPanel({
       date = parsed.date;
       dateEnd = parsed.dateEnd;
       stored = parsed.precision;
+      dateText = text;
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       toast.error(t("请先选择有效日期"));
@@ -316,7 +328,7 @@ export function CalendarPanel({
       date,
       dateEnd,
       precision: stored,
-      dateText: stored === "day" ? undefined : fuzzyText.trim(),
+      dateText,
       timeText: timeText.trim() || undefined,
       place: previous?.place,
       kind: previous?.kind,
@@ -681,6 +693,7 @@ export function CalendarPanel({
               key={item}
               type="button"
               onClick={() => setPrecision(item)}
+              aria-pressed={precision === item}
               className={cn(
                 "rounded-full border px-3 py-1 text-[11px] transition-colors",
                 precision === item

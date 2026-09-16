@@ -5,7 +5,7 @@ test("手工事件可以只精确到月份", async ({ page }) => {
   await page.getByRole("button", { name: /^日历/ }).click();
 
   const editor = page.locator("[data-event-editor]");
-  await editor.getByRole("button", { name: "不记得具体哪天" }).click();
+  await editor.getByRole("button", { name: "只记得某月" }).click();
   const month = editor.getByLabel("事件月份");
   await expect(month).toHaveAttribute("type", "month");
   await month.fill("2026-08");

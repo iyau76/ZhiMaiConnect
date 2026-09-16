@@ -12,7 +12,7 @@ const SIBLING_PREDICATES = new Set<RelationPredicate>([
   "step_sibling_of",
 ]);
 
-export type FamilyTreeEdgeKind = "parent" | "spouse" | "sibling";
+export type FamilyTreeEdgeKind = "parent" | "spouse" | "sibling" | "kinship";
 
 export interface FamilyTreeLayoutNode {
   id: string;
@@ -53,7 +53,8 @@ export function familyTreeEdgeKind(relation: RelationRecord): FamilyTreeEdgeKind
   if (PARENT_PREDICATES.has(predicate)) return "parent";
   if (SIBLING_PREDICATES.has(predicate)) return "sibling";
   if (predicate === "spouse_of") return "spouse";
-  return null;
+  // Keep every accepted kinship edge visible, even without a generational rule.
+  return isFamilyTreeRelation(relation) ? "kinship" : null;
 }
 
 function createDisjointSet(ids: string[]) {
@@ -121,7 +122,9 @@ export function buildFamilyTreeLayout(input: {
       kind,
       label: relation.label,
     });
-    if (kind !== "parent") union(relation.fromId, relation.toId);
+    // Generic kinship can span generations. It must not collapse a parent and
+    // child into one row or manufacture missing parents to complete a pedigree.
+    if (kind === "spouse" || kind === "sibling") union(relation.fromId, relation.toId);
   }
 
   const parentsByChild = new Map<string, string[]>();

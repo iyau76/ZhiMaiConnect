@@ -4,18 +4,43 @@ import { expect, openApp, readIndexedDbStore, seedIndexedDb, test } from "./fixt
 
 const legacyEvents: LifeEventRecord[] = [
   { id: "year", date: "2020-01-01", precision: "year", title: "旧年度事件", createdAt: 1 },
-  { id: "range", date: "2026-06-01", dateEnd: "2026-08-31", precision: "range", title: "旧区间事件", createdAt: 1 },
-  { id: "relative", date: "2021-06-01", dateEnd: "2021-08-31", precision: "range", dateText: "去年夏天", title: "旧模糊事件", createdAt: 1 },
-  { id: "month", date: "2020-03-01", precision: "month", dateText: "那年开春", title: "旧月份事件", createdAt: 1 },
+  {
+    id: "range",
+    date: "2026-06-01",
+    dateEnd: "2026-08-31",
+    precision: "range",
+    title: "旧区间事件",
+    createdAt: 1,
+  },
+  {
+    id: "relative",
+    date: "2021-06-01",
+    dateEnd: "2021-08-31",
+    precision: "range",
+    dateText: "去年夏天",
+    title: "旧模糊事件",
+    createdAt: 1,
+  },
+  {
+    id: "month",
+    date: "2020-03-01",
+    precision: "month",
+    dateText: "那年开春",
+    title: "旧月份事件",
+    createdAt: 1,
+  },
   { id: "implicit-day", date: "2026-06-03", title: "旧隐式精度事件", createdAt: 1 },
 ];
 
 async function editEvent(page: Page, event: LifeEventRecord) {
   await openApp(page);
-  await seedIndexedDb(page, { lifeEvents: [event] });
+  await seedIndexedDb(page, { lifeEvents: [{ ...event }] });
   await page.getByRole("button", { name: /^日历/ }).click();
   await page.getByRole("button", { name: "时间轴", exact: true }).click();
-  await page.locator(`[data-event-id="${event.id}"]`).getByRole("button", { name: "编辑事件" }).click();
+  await page
+    .locator(`[data-event-id="${event.id}"]`)
+    .getByRole("button", { name: "编辑事件" })
+    .click();
   return page.locator("[data-event-editor]");
 }
 
@@ -45,12 +70,18 @@ test("模糊时间入口可以新增去年夏天", async ({ page }) => {
   await editor.getByPlaceholder(/大概什么时候/).fill("去年夏天");
   await editor.locator("textarea").first().fill("合成夏日事件");
   await editor.getByRole("button", { name: "记下来" }).click();
-  await expect.poll(async () => (await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents")).find((event) => event.title === "合成夏日事件")).toMatchObject({
-    date: `${lastYear}-06-01`,
-    dateEnd: `${lastYear}-08-31`,
-    precision: "range",
-    dateText: "去年夏天",
-  });
+  await expect
+    .poll(async () =>
+      (await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents")).find(
+        (event) => event.title === "合成夏日事件",
+      ),
+    )
+    .toMatchObject({
+      date: `${lastYear}-06-01`,
+      dateEnd: `${lastYear}-08-31`,
+      precision: "range",
+      dateText: "去年夏天",
+    });
 });
 
 test("明确把区间改为月份时清除旧结束日期和旧描述", async ({ page }) => {
@@ -76,16 +107,40 @@ async function openFamilyGraph(page: Page) {
       { id: "cousin", name: "合成表亲", note: "", descriptors: [], thumb: "", createdAt: 1 },
     ],
     relations: [
-      { id: "father-daughter", fromId: "father", toId: "daughter", predicate: "parent_of", label: "父女", createdAt: 3 },
-      { id: "daughter-cousin", fromId: "daughter", toId: "cousin", predicate: "cousin_of", label: "表亲", createdAt: 2 },
-      { id: "parents", fromId: "father", toId: "spouse", predicate: "spouse_of", label: "夫妻", createdAt: 1 },
+      {
+        id: "father-daughter",
+        fromId: "father",
+        toId: "daughter",
+        predicate: "parent_of",
+        label: "父女",
+        createdAt: 3,
+      },
+      {
+        id: "daughter-cousin",
+        fromId: "daughter",
+        toId: "cousin",
+        predicate: "cousin_of",
+        label: "表亲",
+        createdAt: 2,
+      },
+      {
+        id: "parents",
+        fromId: "father",
+        toId: "spouse",
+        predicate: "spouse_of",
+        label: "夫妻",
+        createdAt: 1,
+      },
     ],
   });
   const people = page.getByRole("button", { name: /^人物/ });
   if (await people.count()) await people.first().click();
   await page.getByRole("tab", { name: "关系网" }).click();
   await page.getByLabel("关系类别筛选").selectOption("family");
-  await expect(page.locator("[data-relation-graph-frame]")).toHaveAttribute("data-graph-layout", "family");
+  await expect(page.locator("[data-relation-graph-frame]")).toHaveAttribute(
+    "data-graph-layout",
+    "family",
+  );
 }
 
 test("自动家族树同时显示父女和表亲连线", async ({ page }) => {
@@ -93,7 +148,10 @@ test("自动家族树同时显示父女和表亲连线", async ({ page }) => {
   await expect(page.locator('[data-relation-id="father-daughter"]')).toHaveCount(1);
   await expect(page.locator('[data-relation-id="daughter-cousin"]')).toHaveCount(1);
   await expect(page.locator('[data-person-id="cousin"]')).toBeVisible();
-  await expect(page.locator('[data-relation-id="daughter-cousin"]')).toHaveAttribute("aria-label", /⇄/);
+  await expect(page.locator('[data-relation-id="daughter-cousin"]')).toHaveAttribute(
+    "aria-label",
+    /⇄/,
+  );
 });
 
 for (const { personId, edgeId, dx, dy } of [
@@ -118,7 +176,9 @@ for (const { personId, edgeId, dx, dy } of [
     await page.mouse.down();
     await page.mouse.move(x + dx, y + dy, { steps: 8 });
     await page.mouse.up();
-    await expect.poll(async () => Number(await circle.getAttribute("cy"))).toBeGreaterThan(Number(initialY));
+    await expect
+      .poll(async () => Number(await circle.getAttribute("cy")))
+      .toBeGreaterThan(Number(initialY));
     await expect(edge).not.toHaveAttribute("d", initialPath!);
     await page.getByLabel("图形布局").selectOption("network");
     await page.getByLabel("图形布局").selectOption("family");

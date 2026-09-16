@@ -27,48 +27,51 @@ describe("PR #3 event mutation compatibility", () => {
     "range",
   ];
 
-  it.each(precisions)("preserves existing %s precision for a full-date-only update", async (precision) => {
-    const { facesDb } = await import("./face-db");
-    const {
-      applyArchiveMutationPlan,
-      createArchiveMutationPlan,
-      createUpdateEventOperation,
-      eventMutationPatchSchema,
-      loadArchiveMutationSnapshot,
-    } = await import("./archive-mutation-plan");
-    const event: LifeEventRecord = {
-      id: "legacy-event",
-      date: "2026-06-01",
-      precision,
-      dateEnd: precision === "range" ? "2026-08-31" : undefined,
-      dateText: "原始时间描述",
-      title: "合成事件",
-      createdAt: 1,
-      updatedAt: 1,
-    };
-    await facesDb.putLifeEvent(event);
-    const changes = { set: { date: "2026-07-01" } };
-    expect(eventMutationPatchSchema.parse(changes)).toEqual(changes);
-    const operation = createUpdateEventOperation(await loadArchiveMutationSnapshot(), {
-      eventId: event.id,
-      reason: "只调整起始日期",
-      changes,
-    });
-    expect(operation.changes.set).not.toHaveProperty("precision");
-    await applyArchiveMutationPlan(
-      createArchiveMutationPlan({
-        title: "更新旧事件",
-        reason: "保持旧请求的含义",
-        operations: [operation],
-      }),
-      { now: 2 },
-    );
-    const [stored] = await facesDb.listLifeEvents();
-    expect(stored.date).toBe("2026-07-01");
-    expect(stored.precision).toBe(precision);
-    expect(stored.dateEnd).toBe(event.dateEnd);
-    expect(stored.dateText).toBe(event.dateText);
-  });
+  it.each(precisions)(
+    "preserves existing %s precision for a full-date-only update",
+    async (precision) => {
+      const { facesDb } = await import("./face-db");
+      const {
+        applyArchiveMutationPlan,
+        createArchiveMutationPlan,
+        createUpdateEventOperation,
+        eventMutationPatchSchema,
+        loadArchiveMutationSnapshot,
+      } = await import("./archive-mutation-plan");
+      const event: LifeEventRecord = {
+        id: "legacy-event",
+        date: "2026-06-01",
+        precision,
+        dateEnd: precision === "range" ? "2026-08-31" : undefined,
+        dateText: "原始时间描述",
+        title: "合成事件",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      await facesDb.putLifeEvent(event);
+      const changes = { set: { date: "2026-07-01" } };
+      expect(eventMutationPatchSchema.parse(changes)).toEqual(changes);
+      const operation = createUpdateEventOperation(await loadArchiveMutationSnapshot(), {
+        eventId: event.id,
+        reason: "只调整起始日期",
+        changes,
+      });
+      expect(operation.changes.set).not.toHaveProperty("precision");
+      await applyArchiveMutationPlan(
+        createArchiveMutationPlan({
+          title: "更新旧事件",
+          reason: "保持旧请求的含义",
+          operations: [operation],
+        }),
+        { now: 2 },
+      );
+      const [stored] = await facesDb.listLifeEvents();
+      expect(stored.date).toBe("2026-07-01");
+      expect(stored.precision).toBe(precision);
+      expect(stored.dateEnd).toBe(event.dateEnd);
+      expect(stored.dateText).toBe(event.dateText);
+    },
+  );
 
   it("allows setting a full date while explicitly unsetting precision", async () => {
     const { facesDb } = await import("./face-db");
@@ -106,22 +109,29 @@ describe("PR #3 event mutation compatibility", () => {
   it.each([
     { date: "2020", normalized: "2020-01-01", precision: "year" },
     { date: "2026-08", normalized: "2026-08-01", precision: "month" },
-  ])("retains shorthand inference for $date and remains idempotent", async ({ date, normalized, precision }) => {
-    const { eventMutationPatchSchema } = await import("./archive-mutation-plan");
-    const parsed = eventMutationPatchSchema.parse({ set: { date } });
-    expect(parsed).toEqual({ set: { date: normalized, precision } });
-    expect(eventMutationPatchSchema.parse(parsed)).toEqual(parsed);
-  });
+  ])(
+    "retains shorthand inference for $date and remains idempotent",
+    async ({ date, normalized, precision }) => {
+      const { eventMutationPatchSchema } = await import("./archive-mutation-plan");
+      const parsed = eventMutationPatchSchema.parse({ set: { date } });
+      expect(parsed).toEqual({ set: { date: normalized, precision } });
+      expect(eventMutationPatchSchema.parse(parsed)).toEqual(parsed);
+    },
+  );
 
   it("honors explicit precision and still rejects a real set/unset conflict", async () => {
     const { eventMutationPatchSchema } = await import("./archive-mutation-plan");
-    expect(eventMutationPatchSchema.parse({ set: { date: "2020-06-12", precision: "day" } })).toEqual({
+    expect(
+      eventMutationPatchSchema.parse({ set: { date: "2020-06-12", precision: "day" } }),
+    ).toEqual({
       set: { date: "2020-06-12", precision: "day" },
     });
-    expect(() => eventMutationPatchSchema.parse({
-      set: { date: "2020-06-12", precision: "day" },
-      unset: ["precision"],
-    })).toThrow(/同时/);
+    expect(() =>
+      eventMutationPatchSchema.parse({
+        set: { date: "2020-06-12", precision: "day" },
+        unset: ["precision"],
+      }),
+    ).toThrow(/同时/);
   });
 });
 
@@ -129,7 +139,11 @@ function relation(predicate: RelationRecord["predicate"], id = "relation"): Rela
   return { id, fromId: "a", toId: "b", predicate, label: "合成亲属关系", createdAt: 1 };
 }
 
-const people = [{ id: "a", name: "甲" }, { id: "b", name: "乙" }, { id: "c", name: "丙" }];
+const people = [
+  { id: "a", name: "甲" },
+  { id: "b", name: "乙" },
+  { id: "c", name: "丙" },
+];
 
 describe("PR #3 family-tree edge completeness", () => {
   it.each(RELATION_PREDICATES.filter((predicate) => relationCategoryFor(predicate) === "kinship"))(
@@ -158,23 +172,28 @@ describe("PR #3 family-tree edge completeness", () => {
     const layout = buildFamilyTreeLayout({ people, relations: [parent, cousin] });
     expect(layout.edges.map((edge) => edge.relationId)).toEqual(["cousin", "parent"]);
     expect(layout.edges.find((edge) => edge.relationId === "cousin")).toMatchObject({
-      fromId: "b", toId: "c", kind: "kinship",
+      fromId: "b",
+      toId: "c",
+      kind: "kinship",
     });
     expect(layout.nodes.find((node) => node.id === "b")?.generation).toBe(1);
   });
 
-  it.each(["grandparent_of", "great_grandparent_of", "uncle_aunt_of", "in_law_of", "clan_of"] as const)(
-    "does not force %s endpoints into the same generation",
-    (predicate) => {
-      const layout = buildFamilyTreeLayout({
-        people,
-        relations: [relation("parent_of", "parent"), relation(predicate, "extended")],
-      });
-      expect(layout.edges).toHaveLength(2);
-      expect(layout.nodes.find((node) => node.id === "a")?.generation).toBe(0);
-      expect(layout.nodes.find((node) => node.id === "b")?.generation).toBe(1);
-    },
-  );
+  it.each([
+    "grandparent_of",
+    "great_grandparent_of",
+    "uncle_aunt_of",
+    "in_law_of",
+    "clan_of",
+  ] as const)("does not force %s endpoints into the same generation", (predicate) => {
+    const layout = buildFamilyTreeLayout({
+      people,
+      relations: [relation("parent_of", "parent"), relation(predicate, "extended")],
+    });
+    expect(layout.edges).toHaveLength(2);
+    expect(layout.nodes.find((node) => node.id === "a")?.generation).toBe(0);
+    expect(layout.nodes.find((node) => node.id === "b")?.generation).toBe(1);
+  });
 
   it("also keeps legacy label-only kinship and excludes social relationships", () => {
     const legacy = { ...relation(undefined, "legacy"), label: "祖孙" };
