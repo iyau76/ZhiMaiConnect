@@ -4,6 +4,7 @@ on:
     branches: [fix/pr3-date-family-compatibility]
     paths:
       - .github/workflows/pr3-compatibility.yml
+      - e2e/pr3-compatibility.spec.ts
 permissions:
   contents: read
 defaults:
@@ -75,7 +76,12 @@ jobs:
           if-no-files-found: warn
       - name: Run complete suite
         if: always()
-        run: npm run ${{ matrix.task }} 2>&1 | tee test-results/compatibility/${{ matrix.task }}.log
+        run: |
+          if [ '${{ matrix.task }}' = 'e2e' ]; then
+            npm run e2e -- --workers=2 2>&1 | tee test-results/compatibility/e2e.log
+          else
+            npm run ${{ matrix.task }} 2>&1 | tee test-results/compatibility/${{ matrix.task }}.log
+          fi
       - name: Upload verification results
         if: always()
         uses: actions/upload-artifact@v4

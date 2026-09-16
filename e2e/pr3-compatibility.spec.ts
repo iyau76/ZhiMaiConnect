@@ -136,7 +136,8 @@ async function openFamilyGraph(page: Page) {
   const people = page.getByRole("button", { name: /^人物/ });
   if (await people.count()) await people.first().click();
   await page.getByRole("tab", { name: "关系网" }).click();
-  await page.getByLabel("关系类别筛选").selectOption("family");
+  // Include affinal relationships too: the blood-family filter excludes spouses.
+  await page.getByLabel("关系类别筛选").selectOption("all");
   await expect(page.locator("[data-relation-graph-frame]")).toHaveAttribute(
     "data-graph-layout",
     "family",
