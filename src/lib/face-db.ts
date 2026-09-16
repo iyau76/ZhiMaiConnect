@@ -7,7 +7,10 @@ import {
   archiveUndoReceiptId,
   captureArchiveReceipt,
   readArchiveTransactionRows,
+  readArchiveWriteTokens,
   planArchiveUndo,
+  purgeArchiveWriteTokens,
+  trackArchiveWriteTokens,
   type ArchiveRows,
   type ArchiveUndoReceipt,
   type ArchiveUndoConflict,
@@ -800,7 +803,10 @@ async function run<T>(
 ) {
   const db = await openDb();
   return new Promise<T>((resolve, reject) => {
-    const tx = db.transaction(store, mode);
+    const tracked =
+      mode === "readwrite" && (ARCHIVE_UNDO_STORES as readonly string[]).includes(store);
+    const tx = db.transaction(tracked ? [store, APP_META] : store, mode);
+    if (tracked) trackArchiveWriteTokens(tx);
     const request = fn(tx.objectStore(store));
     tx.oncomplete = () => resolve(request.result as T);
     tx.onerror = () => reject(tx.error ?? request.error ?? new Error("数据库操作失败"));
@@ -1198,7 +1204,10 @@ async function replaceArchiveSnapshot(replacement: FaceDbArchiveReplacement) {
     const metaRequest = tx.objectStore(APP_META).getAllKeys();
     metaRequest.onsuccess = () => {
       for (const key of metaRequest.result) {
-        if (typeof key === "string" && key.startsWith("archiveUndoReceipt:")) {
+        if (
+          typeof key === "string" &&
+          (key.startsWith("archiveUndoReceipt:") || key.startsWith("archiveWriteToken:"))
+        ) {
           tx.objectStore(APP_META).delete(key);
         }
       }
@@ -1312,6 +1321,7 @@ async function applyArchiveMutationBatchInternal(
 
   return new Promise<ArchiveMutationDecisionApplyResult>((resolve, reject) => {
     const tx = db.transaction(stores, "readwrite");
+    trackArchiveWriteTokens(tx);
     let result: ArchiveMutationDecisionApplyResult = "applied";
     tx.onerror = () => reject(tx.error ?? new Error("档案变更事务失败"));
     tx.onabort = () => reject(tx.error ?? new Error("档案变更事务已中止"));
@@ -1613,6 +1623,7 @@ async function putRelationshipBatch(batch: RelationshipWriteBatch) {
   ];
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(stores, "readwrite");
+    trackArchiveWriteTokens(tx);
     tx.onerror = () => reject(tx.error ?? new Error("关系事实与投影事务失败"));
     tx.onabort = () => reject(tx.error ?? new Error("关系事实与投影事务已中止"));
     tx.oncomplete = () => resolve();
@@ -1765,7 +1776,8 @@ function deletePersonAndDetachReferences(id: string) {
           REMINDERS,
           MEETING_BRIEFS,
         ];
-        const tx = db.transaction(stores, "readwrite");
+        const tx = db.transaction([...stores, APP_META], "readwrite");
+        trackArchiveWriteTokens(tx);
         const removedRelationIds: string[] = [];
         tx.onerror = () => reject(tx.error ?? new Error("删除人物失败"));
         tx.onabort = () => reject(tx.error ?? new Error("删除人物事务已中止"));
@@ -1965,7 +1977,8 @@ async function putPersons(persons: PersonRecord[]): Promise<void> {
   if (!normalizedPersons.length) return;
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(PERSONS, "readwrite");
+    const tx = db.transaction([PERSONS, APP_META], "readwrite");
+    trackArchiveWriteTokens(tx);
     const store = tx.objectStore(PERSONS);
     tx.onerror = () => reject(tx.error ?? new Error("批量写入人物失败"));
     tx.onabort = () => reject(tx.error ?? new Error("批量写入人物已中止"));
@@ -1988,8 +2001,11 @@ async function compareAndSwapPerson(
   const normalized = normalizePersonRecord(person);
   const db = await openDb();
   return new Promise<PersonCompareAndSwapResult>((resolve, reject) => {
-    const stores = circleEdit ? [PERSONS, COLLECTIONS, COLLECTION_MEMBERSHIPS] : [PERSONS];
+    const stores = circleEdit
+      ? [PERSONS, COLLECTIONS, COLLECTION_MEMBERSHIPS, APP_META]
+      : [PERSONS, APP_META];
     const tx = db.transaction(stores, "readwrite");
+    trackArchiveWriteTokens(tx);
     const personStore = tx.objectStore(PERSONS);
     let outcome: PersonCompareAndSwapResult | undefined;
     tx.onerror = () => reject(tx.error ?? new Error("人物条件写入失败"));
@@ -2104,6 +2120,7 @@ async function compareAndSwapLifeEvent(
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction([LIFE_EVENTS, PERSONS, APP_META], "readwrite");
+    trackArchiveWriteTokens(tx);
     const store = tx.objectStore(LIFE_EVENTS);
     const meta = tx.objectStore(APP_META);
     const currentRequest = store.get(event.id);
@@ -2161,17 +2178,19 @@ async function undoArchiveMutation(receiptId: string): Promise<ArchiveUndoConfli
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction([...ARCHIVE_UNDO_STORES, APP_META], "readwrite");
+    trackArchiveWriteTokens(tx);
     const meta = tx.objectStore(APP_META);
     const receiptRequest = meta.get(archiveUndoReceiptId(receiptId));
     const revisionRequest = meta.get(ARCHIVE_MUTATION_REVISION_ID);
     let rows: ArchiveRows | undefined;
+    let tokens: Map<string, string> | undefined;
     let loaded = 0;
     let result: ArchiveUndoConflict[] = [];
     tx.oncomplete = () => resolve(result);
     tx.onerror = () => reject(tx.error ?? new Error("撤销事务失败"));
     tx.onabort = () => reject(tx.error ?? new Error("撤销事务已中止，未改动任何记录"));
     const apply = () => {
-      if (!rows || loaded !== 2) return;
+      if (!rows || !tokens || loaded !== 2) return;
       const receipt = receiptRequest.result as ArchiveUndoReceipt | undefined;
       if (!receipt || receipt.version !== 1) {
         result = [{ kind: "batch", id: receiptId, reason: "missing_receipt" }];
@@ -2181,7 +2200,7 @@ async function undoArchiveMutation(receiptId: string): Promise<ArchiveUndoConfli
         result = receipt.conflicts ?? [];
         return;
       }
-      const plan = planArchiveUndo(receipt, rows);
+      const plan = planArchiveUndo(receipt, rows, tokens);
       result = plan.conflicts;
       for (const change of plan.changes) {
         const store = tx.objectStore(change.store);
@@ -2222,6 +2241,10 @@ async function undoArchiveMutation(receiptId: string): Promise<ArchiveUndoConfli
       rows = snapshot;
       apply();
     });
+    readArchiveWriteTokens(tx, (loadedTokens) => {
+      tokens = loadedTokens;
+      apply();
+    });
     receiptRequest.onsuccess = () => {
       loaded++;
       apply();
@@ -2238,7 +2261,8 @@ async function deleteSightings(ids: string[]): Promise<void> {
   if (!uniqueIds.length) return;
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(SIGHTINGS, "readwrite");
+    const tx = db.transaction([SIGHTINGS, APP_META], "readwrite");
+    trackArchiveWriteTokens(tx);
     const store = tx.objectStore(SIGHTINGS);
     tx.onerror = () => reject(tx.error ?? new Error("批量删除到访记录失败"));
     tx.onabort = () => reject(tx.error ?? new Error("批量删除到访记录已中止"));
@@ -2303,7 +2327,8 @@ export const facesDb = {
   deleteCollection: async (id: string) => {
     const db = await openDb();
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction([COLLECTIONS, COLLECTION_MEMBERSHIPS], "readwrite");
+      const tx = db.transaction([COLLECTIONS, COLLECTION_MEMBERSHIPS, APP_META], "readwrite");
+      trackArchiveWriteTokens(tx);
       tx.onerror = () => reject(tx.error ?? new Error("删除集合失败"));
       tx.oncomplete = () => resolve();
       tx.objectStore(COLLECTIONS).delete(id);

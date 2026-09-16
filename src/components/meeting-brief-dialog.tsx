@@ -58,12 +58,14 @@ function BriefSection({
   empty,
   advice = false,
   onOpenSource,
+  isSourceAvailable,
 }: {
   title: string;
   lines: MeetingBriefLine[];
   empty: string;
   advice?: boolean;
   onOpenSource: (source: MeetingBriefSourceRef) => void;
+  isSourceAvailable?: (source: MeetingBriefSourceRef) => boolean;
 }) {
   return (
     <section className="rounded-xl border border-border bg-background/60 p-3.5">
@@ -81,18 +83,29 @@ function BriefSection({
             <li key={`${item.text}:${index}`} className="text-xs leading-relaxed">
               <p>{item.text}</p>
               <div className="mt-1 flex flex-wrap gap-1">
-                {item.sources.map((source) => (
-                  <button
-                    key={`${source.kind}:${source.id}`}
-                    type="button"
-                    title={`${SOURCE_LABEL[source.kind]} · ${source.id}`}
-                    className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[9px] text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
-                    onClick={() => onOpenSource(source)}
-                  >
-                    <Link2 className="size-2.5" aria-hidden="true" />
-                    {SOURCE_LABEL[source.kind]}
-                  </button>
-                ))}
+                {item.sources.map((source) =>
+                  isSourceAvailable && !isSourceAvailable(source) ? (
+                    <span
+                      key={`${source.kind}:${source.id}`}
+                      title="这条来源记录已被删除"
+                      className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-1.5 py-0.5 text-[9px] text-muted-foreground/70"
+                    >
+                      <Link2 className="size-2.5" aria-hidden="true" />
+                      {SOURCE_LABEL[source.kind]} · 来源已不存在
+                    </span>
+                  ) : (
+                    <button
+                      key={`${source.kind}:${source.id}`}
+                      type="button"
+                      title={`${SOURCE_LABEL[source.kind]} · ${source.id}`}
+                      className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[9px] text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
+                      onClick={() => onOpenSource(source)}
+                    >
+                      <Link2 className="size-2.5" aria-hidden="true" />
+                      {SOURCE_LABEL[source.kind]}
+                    </button>
+                  ),
+                )}
               </div>
             </li>
           ))}
@@ -330,136 +343,167 @@ export function MeetingBriefDialog({
               </section>
             )}
 
-            {selectedBrief && selectedPerson && (
-              <div className="space-y-4">
-                <section className="flex flex-col justify-between gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-start">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-base font-semibold">{selectedBrief.title}</h2>
-                      {viewingHistory ? (
-                        <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
-                          历史版本
-                        </span>
-                      ) : status?.state === "stale" ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-200">
-                          <AlertCircle className="size-3" /> 有更新
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-200">
-                          <CheckCircle2 className="size-3" /> 来源一致
-                        </span>
-                      )}
+            {selectedBrief &&
+              selectedPerson &&
+              (() => {
+                const availableIds = {
+                  person: new Set(workspace?.input.persons.map((row) => row.id) ?? []),
+                  relation_assertion: new Set(
+                    workspace?.input.relations
+                      .filter((row) => row.recordType !== "derived")
+                      .map((row) => row.id) ?? [],
+                  ),
+                  relation_projection: new Set(
+                    workspace?.input.relations
+                      .filter((row) => row.recordType === "derived")
+                      .map((row) => row.id) ?? [],
+                  ),
+                  event: new Set(workspace?.input.events.map((row) => row.id) ?? []),
+                  reminder: new Set(workspace?.input.reminders.map((row) => row.id) ?? []),
+                  task: new Set(workspace?.input.tasks.map((row) => row.id) ?? []),
+                } satisfies Record<MeetingBriefSourceRef["kind"], Set<string>>;
+                const isSourceAvailable = (source: MeetingBriefSourceRef) =>
+                  availableIds[source.kind].has(source.id);
+                return (
+                  <div className="space-y-4">
+                    <section className="flex flex-col justify-between gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-start">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h2 className="text-base font-semibold">{selectedBrief.title}</h2>
+                          {viewingHistory ? (
+                            <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
+                              历史版本
+                            </span>
+                          ) : status?.state === "stale" ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-200">
+                              <AlertCircle className="size-3" /> 有更新
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-200">
+                              <CheckCircle2 className="size-3" /> 来源一致
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          保存于 {new Date(selectedBrief.createdAt).toLocaleString()} · 引用{" "}
+                          {selectedBrief.sourceRefs.length} 条本地记录
+                          {status?.changes.length
+                            ? ` · ${status.changes.length} 条来源发生变化`
+                            : ""}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {versions.length > 1 && (
+                          <select
+                            value={selectedBrief.id}
+                            onChange={(event) => setSelectedBriefId(event.target.value)}
+                            className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+                            aria-label="选择简报版本"
+                          >
+                            {versions.map((version, index) => (
+                              <option key={version.id} value={version.id}>
+                                {index === 0 ? "最新版" : `历史版 ${versions.length - index}`} ·{" "}
+                                {new Date(version.createdAt).toLocaleString()}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        {!viewingHistory && status?.state === "stale" && (
+                          <Button size="sm" onClick={() => void saveVersion()} disabled={loading}>
+                            <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+                            生成新版
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-muted-foreground hover:text-destructive"
+                          onClick={() => void removeVersion()}
+                          aria-label="删除这一版简报"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </div>
+                    </section>
+
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <BriefSection
+                        title="人物速记"
+                        lines={selectedBrief.content.profile}
+                        empty="人物档案还没有可展示的资料。"
+                        onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
+                        isSourceAvailable={isSourceAvailable}
+                      />
+                      <BriefSection
+                        title="近期共同事件"
+                        lines={selectedBrief.content.recentEvents}
+                        empty="还没有共同事件。"
+                        onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
+                        isSourceAvailable={isSourceAvailable}
+                      />
+                      <BriefSection
+                        title="约定与未完成事项"
+                        lines={selectedBrief.content.openItems}
+                        empty="当前没有关联的提醒或任务。"
+                        onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
+                        isSourceAvailable={isSourceAvailable}
+                      />
+                      <BriefSection
+                        title="相关人物"
+                        lines={selectedBrief.content.relatedPeople}
+                        empty="还没有可用的关系记录。"
+                        onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
+                        isSourceAvailable={isSourceAvailable}
+                      />
+                      <BriefSection
+                        title="可聊话题"
+                        lines={selectedBrief.content.talkingPoints}
+                        empty="补充偏好、项目或共同事件后，会出现更具体的话题。"
+                        advice
+                        onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
+                        isSourceAvailable={isSourceAvailable}
+                      />
+                      <section className="rounded-xl border border-border bg-background/60 p-3.5">
+                        <h3 className="text-xs font-semibold">资料缺口</h3>
+                        {selectedBrief.content.gaps.length ? (
+                          <ul className="mt-2.5 space-y-1.5 text-xs text-muted-foreground">
+                            {selectedBrief.content.gaps.map((gap) => (
+                              <li key={gap}>· {gap}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-2 text-[11px] text-muted-foreground">
+                            这份简报没有明显资料缺口。
+                          </p>
+                        )}
+                        <button
+                          type="button"
+                          className="mt-3 text-[10px] text-primary hover:underline"
+                          onClick={() =>
+                            onOpenSource(
+                              selectedBrief.sourceRefs.find(
+                                (source) => source.kind === "person",
+                              ) ?? {
+                                kind: "person",
+                                id: selectedBrief.personId,
+                                revision: "",
+                              },
+                              selectedBrief.personId,
+                            )
+                          }
+                        >
+                          打开人物卡补充
+                        </button>
+                      </section>
                     </div>
-                    <p className="mt-1 text-[10px] text-muted-foreground">
-                      保存于 {new Date(selectedBrief.createdAt).toLocaleString()} · 引用{" "}
-                      {selectedBrief.sourceRefs.length} 条本地记录
-                      {status?.changes.length ? ` · ${status.changes.length} 条来源发生变化` : ""}
+
+                    <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <CalendarClock className="size-3" aria-hidden="true" />
+                      简报不会改动人物档案；建议由现有资料生成，请结合当时情境判断。
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {versions.length > 1 && (
-                      <select
-                        value={selectedBrief.id}
-                        onChange={(event) => setSelectedBriefId(event.target.value)}
-                        className="h-9 rounded-md border border-input bg-background px-2 text-xs"
-                        aria-label="选择简报版本"
-                      >
-                        {versions.map((version, index) => (
-                          <option key={version.id} value={version.id}>
-                            {index === 0 ? "最新版" : `历史版 ${versions.length - index}`} ·{" "}
-                            {new Date(version.createdAt).toLocaleString()}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    {!viewingHistory && status?.state === "stale" && (
-                      <Button size="sm" onClick={() => void saveVersion()} disabled={loading}>
-                        <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
-                        生成新版
-                      </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-muted-foreground hover:text-destructive"
-                      onClick={() => void removeVersion()}
-                      aria-label="删除这一版简报"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
-                  </div>
-                </section>
-
-                <div className="grid gap-3 lg:grid-cols-2">
-                  <BriefSection
-                    title="人物速记"
-                    lines={selectedBrief.content.profile}
-                    empty="人物档案还没有可展示的资料。"
-                    onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
-                  />
-                  <BriefSection
-                    title="近期共同事件"
-                    lines={selectedBrief.content.recentEvents}
-                    empty="还没有共同事件。"
-                    onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
-                  />
-                  <BriefSection
-                    title="约定与未完成事项"
-                    lines={selectedBrief.content.openItems}
-                    empty="当前没有关联的提醒或任务。"
-                    onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
-                  />
-                  <BriefSection
-                    title="相关人物"
-                    lines={selectedBrief.content.relatedPeople}
-                    empty="还没有可用的关系记录。"
-                    onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
-                  />
-                  <BriefSection
-                    title="可聊话题"
-                    lines={selectedBrief.content.talkingPoints}
-                    empty="补充偏好、项目或共同事件后，会出现更具体的话题。"
-                    advice
-                    onOpenSource={(source) => onOpenSource(source, selectedBrief.personId)}
-                  />
-                  <section className="rounded-xl border border-border bg-background/60 p-3.5">
-                    <h3 className="text-xs font-semibold">资料缺口</h3>
-                    {selectedBrief.content.gaps.length ? (
-                      <ul className="mt-2.5 space-y-1.5 text-xs text-muted-foreground">
-                        {selectedBrief.content.gaps.map((gap) => (
-                          <li key={gap}>· {gap}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="mt-2 text-[11px] text-muted-foreground">
-                        这份简报没有明显资料缺口。
-                      </p>
-                    )}
-                    <button
-                      type="button"
-                      className="mt-3 text-[10px] text-primary hover:underline"
-                      onClick={() =>
-                        onOpenSource(
-                          selectedBrief.sourceRefs.find((source) => source.kind === "person") ?? {
-                            kind: "person",
-                            id: selectedBrief.personId,
-                            revision: "",
-                          },
-                          selectedBrief.personId,
-                        )
-                      }
-                    >
-                      打开人物卡补充
-                    </button>
-                  </section>
-                </div>
-
-                <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                  <CalendarClock className="size-3" aria-hidden="true" />
-                  简报不会改动人物档案；建议由现有资料生成，请结合当时情境判断。
-                </p>
-              </div>
-            )}
+                );
+              })()}
           </>
         )}
       </DialogContent>

@@ -1397,8 +1397,8 @@ const EN: Record<string, string> = {
     "The event was saved, but the list could not refresh. Reopen the calendar.",
   "此旧批次没有可验证的提交快照，未撤销任何记录。请逐条检查。":
     "This old batch has no verifiable commit snapshot. Nothing was reverted. Review the records individually.",
-  "条记录因后续修改、删除或关联依赖而保留，未强行回滚":
-    "records were protected because of later changes, deletion or dependencies; no forced rollback was performed",
+  "已撤销最近一次录入批次；保留了 {count} 条后续变更，未强行回滚":
+    "Undid the latest intake batch; kept {count} later change(s) without forcing a rollback.",
   "自动撤销保留了有冲突或依赖的记录，请检查本次内容":
     "Automatic undo kept records with conflicts or dependencies. Review this batch.",
   English: "English",
@@ -1407,4 +1407,11 @@ const EN: Record<string, string> = {
 export function t(zh: string): string {
   if (current === "zh") return zh;
   return EN[zh] ?? zh;
+}
+
+/** 完整句子里的 {占位符} 用给定值替换；中文源串同样支持占位符。 */
+export function tFormat(zh: string, values: Record<string, string | number>): string {
+  return t(zh).replace(/\{(\w+)\}/g, (match, key: string) =>
+    key in values ? String(values[key]) : match,
+  );
 }

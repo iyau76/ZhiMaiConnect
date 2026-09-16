@@ -1,4 +1,4 @@
-import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
+import { IDBFactory, IDBKeyRange, IDBObjectStore } from "fake-indexeddb";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LifeEventRecord, PersonRecord, RelationAssertionRecord } from "./face-db";
 import type { IntakeUndoBatch } from "./intake-undo";
@@ -47,6 +47,11 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "indexedDB", {
     configurable: true,
     value: new IDBFactory(),
+    writable: true,
+  });
+  Object.defineProperty(globalThis, "IDBKeyRange", {
+    configurable: true,
+    value: IDBKeyRange,
     writable: true,
   });
 });

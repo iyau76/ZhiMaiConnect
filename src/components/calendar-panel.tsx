@@ -370,6 +370,12 @@ export function CalendarPanel({
       toast.error(t("标题最多 500 字，详情最多 4000 字；内容未被截断。"));
       return;
     }
+    const nextTimeText = timeText.trim() || undefined;
+    // 时间说明是独立限制；历史遗留的超长旧值未被修改时原样保留。
+    if (nextTimeText !== previous?.timeText && (nextTimeText?.length ?? 0) > 500) {
+      toast.error(t("时间说明最多 500 字；内容未被截断。"));
+      return;
+    }
     const record: LifeEventRecord = {
       ...previous,
       id: recordId,
@@ -377,7 +383,7 @@ export function CalendarPanel({
       dateEnd,
       precision: stored,
       dateText,
-      timeText: timeText.trim() || undefined,
+      timeText: nextTimeText,
       title: nextTitle,
       detail: nextDetail,
       personIds: withIds,
@@ -813,6 +819,7 @@ export function CalendarPanel({
             <Input
               value={timeText}
               onChange={(event) => setTimeText(event.target.value)}
+              maxLength={500}
               placeholder={t("例如：下午3点、午饭后")}
             />
           </label>

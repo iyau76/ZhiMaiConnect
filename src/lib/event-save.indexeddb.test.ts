@@ -1,4 +1,4 @@
-import { IDBFactory } from "fake-indexeddb";
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LifeEventRecord } from "./face-db";
 import { recordRevision } from "./record-revision";
@@ -13,6 +13,11 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "indexedDB", {
     configurable: true,
     value: new IDBFactory(),
+    writable: true,
+  });
+  Object.defineProperty(globalThis, "IDBKeyRange", {
+    configurable: true,
+    value: IDBKeyRange,
     writable: true,
   });
 });

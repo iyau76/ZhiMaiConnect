@@ -2,7 +2,7 @@
 
 import type { DatePrecision, LifeEventRecord } from "./face-db";
 import { pad } from "./personal";
-import { calendarDate, parseExplicitEventDate } from "./explicit-event-date";
+import { calendarDate, lastDayOfMonth, parseExplicitEventDate } from "./explicit-event-date";
 import solarLunar from "solarlunar";
 
 export const PRECISION_LABEL: Record<DatePrecision, string> = {
@@ -293,11 +293,22 @@ export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | nu
     const [year, month, day] = value.split("-").map(Number);
     return calendarDate(year, month, day) === value;
   };
-  const normalizeDate = (value: string) => {
-    if (/^\d{4}$/.test(value)) return `${value}-01-01`;
+  /**
+   * 左端点按开始边界补全，右端点按结束边界补全：范围本义是覆盖整段，
+   * 月/年端点补成月初/年初会悄悄截掉区间的后半段。混合精度各自处理。
+   */
+  const normalizeEndpoint = (value: string, boundary: "start" | "end") => {
+    if (/^\d{4}$/.test(value)) {
+      if (!validDate(`${value}-01-01`)) return null;
+      return boundary === "start" ? `${value}-01-01` : `${value}-12-31`;
+    }
     if (/^\d{4}-\d{2}$/.test(value)) {
       const month = Number(value.slice(5));
-      return month >= 1 && month <= 12 ? `${value}-01` : null;
+      if (month < 1 || month > 12) return null;
+      if (boundary === "start") return `${value}-01`;
+      const [year] = value.split("-").map(Number);
+      const lastDay = lastDayOfMonth(year, month);
+      return `${value}-${String(lastDay).padStart(2, "0")}`;
     }
     return validDate(value) ? value : null;
   };
@@ -307,8 +318,6 @@ export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | nu
   if (raw.dateEnd !== undefined && typeof raw.dateEnd !== "string") return null;
   if (raw.precision !== undefined && !["day", "month", "year", "range"].includes(raw.precision))
     return null;
-  const date = normalizeDate(raw.date);
-  if (!date) return null;
   const precision: DatePrecision =
     raw.precision === "day" ||
     raw.precision === "month" ||
@@ -318,10 +327,13 @@ export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | nu
       : raw.precision === undefined
         ? inferredPrecision(raw.date)
         : "year";
-  const dateEnd = raw.dateEnd ? normalizeDate(raw.dateEnd) : null;
+  const isRange = precision === "range";
+  const date = normalizeEndpoint(raw.date, "start");
+  if (!date) return null;
+  const dateEnd = raw.dateEnd ? normalizeEndpoint(raw.dateEnd, isRange ? "end" : "start") : null;
   if (raw.dateEnd && !dateEnd) return null;
   // 缺结束日期的范围拒绝返回：不悄悄降级成另一种精度，交回上层保留原文。
-  if (precision === "range" && !dateEnd) return null;
-  if (precision === "range" && dateEnd! < date) return null;
-  return { date, dateEnd: precision === "range" ? dateEnd! : undefined, precision };
+  if (isRange && !dateEnd) return null;
+  if (isRange && dateEnd! < date) return null;
+  return { date, dateEnd: isRange ? dateEnd! : undefined, precision };
 }

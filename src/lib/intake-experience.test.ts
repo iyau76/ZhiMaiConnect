@@ -1,4 +1,4 @@
-import { IDBFactory } from "fake-indexeddb";
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { describe, expect, it, vi } from "vitest";
 import { compileSemanticIntakePlan } from "./intake-semantic-compiler";
 import { decodeSemanticPersonChanges } from "./intake-draft";
@@ -114,6 +114,7 @@ describe("intake user experience regressions", () => {
   it("keeps known people and new drafts in one existing circle, and restores previous memberships on undo", async () => {
     vi.resetModules();
     Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: new IDBFactory() });
+    Object.defineProperty(globalThis, "IDBKeyRange", { configurable: true, value: IDBKeyRange });
     const { facesDb } = await import("./face-db");
     const collection = {
       id: "existing-circle",
@@ -223,6 +224,7 @@ describe("intake user experience regressions", () => {
   it("commits new people and circle members together, restores time from backup, and undoes the circle", async () => {
     vi.resetModules();
     Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: new IDBFactory() });
+    Object.defineProperty(globalThis, "IDBKeyRange", { configurable: true, value: IDBKeyRange });
     const { facesDb } = await import("./face-db");
     const { rollbackIntakeBatch } = await import("./intake-undo");
     const compiled = compileSemanticIntakePlan({

@@ -150,6 +150,43 @@ describe("parseFuzzyLocal", () => {
 });
 
 describe("AI fuzzy-date normalization", () => {
+  it("expands range endpoints to their true Gregorian boundaries", () => {
+    expect(normalizeFuzzy({ date: "2026-06", dateEnd: "2026-08", precision: "range" })).toEqual({
+      date: "2026-06-01",
+      dateEnd: "2026-08-31",
+      precision: "range",
+    });
+    expect(normalizeFuzzy({ date: "2025", dateEnd: "2026", precision: "range" })).toEqual({
+      date: "2025-01-01",
+      dateEnd: "2026-12-31",
+      precision: "range",
+    });
+    // 闰年二月末端是 29 日。
+    expect(normalizeFuzzy({ date: "2028-02", dateEnd: "2028-02", precision: "range" })).toEqual({
+      date: "2028-02-01",
+      dateEnd: "2028-02-29",
+      precision: "range",
+    });
+    // 混合精度：左端月、右端年，各自按自己的边界展开。
+    expect(normalizeFuzzy({ date: "2026-06", dateEnd: "2027", precision: "range" })).toEqual({
+      date: "2026-06-01",
+      dateEnd: "2027-12-31",
+      precision: "range",
+    });
+  });
+
+  it("keeps rejecting reversed, invalid and incomplete ranges", () => {
+    expect(normalizeFuzzy({ date: "2026-08", dateEnd: "2026-06", precision: "range" })).toBeNull();
+    expect(normalizeFuzzy({ date: "2026-13", dateEnd: "2027-01", precision: "range" })).toBeNull();
+    expect(normalizeFuzzy({ date: "2026-06", precision: "range" })).toBeNull();
+  });
+
+  it("matches the local parser for the same month range", () => {
+    const local = parseFuzzyLocal("2026-06～2026-08", new Date(2026, 7, 26));
+    const ai = normalizeFuzzy({ date: "2026-06", dateEnd: "2026-08", precision: "range" });
+    expect(ai).toEqual(local);
+  });
+
   it("normalizes supported precisions and drops dateEnd outside a range", () => {
     expect(normalizeFuzzy({ date: "2026-08", precision: "month" })).toEqual({
       date: "2026-08-01",

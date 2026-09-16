@@ -10,7 +10,7 @@ export function calendarDate(year: number, month: number, day: number): string |
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function lastDay(year: number, month: number) {
+export function lastDayOfMonth(year: number, month: number) {
   const date = new Date(0);
   date.setUTCFullYear(year, month, 0);
   return date.getUTCDate();
@@ -54,7 +54,10 @@ export function parseExplicitEventDate(text: string): {
     const parts = (token: string) => token.match(/^(\d{4})[-/.年](\d{1,2})月?$/)!;
     const a = parts(match[1]);
     const b = parts(match[2]);
-    return range(calendarDate(+a[1], +a[2], 1), calendarDate(+b[1], +b[2], lastDay(+b[1], +b[2])));
+    return range(
+      calendarDate(+a[1], +a[2], 1),
+      calendarDate(+b[1], +b[2], lastDayOfMonth(+b[1], +b[2])),
+    );
   }
   match = new RegExp(`^(${year})${separator}(${year})$`).exec(input);
   if (match)

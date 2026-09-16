@@ -53,4 +53,24 @@ describe("document language metadata", () => {
       CHINESE_DESCRIPTION,
     );
   });
+
+  it("tFormat renders one interpolated sentence in both languages", async () => {
+    const { setLang, tFormat } = await import("./i18n");
+    const sentence = "已撤销最近一次录入批次；保留了 {count} 条后续变更，未强行回滚";
+    setLang("zh");
+    expect(tFormat(sentence, { count: 0 })).toBe(
+      "已撤销最近一次录入批次；保留了 0 条后续变更，未强行回滚",
+    );
+    expect(tFormat(sentence, { count: 3 })).toBe(
+      "已撤销最近一次录入批次；保留了 3 条后续变更，未强行回滚",
+    );
+    setLang("en");
+    expect(tFormat(sentence, { count: 1 })).toBe(
+      "Undid the latest intake batch; kept 1 later change(s) without forcing a rollback.",
+    );
+    expect(tFormat(sentence, { count: 12 })).toBe(
+      "Undid the latest intake batch; kept 12 later change(s) without forcing a rollback.",
+    );
+    setLang("zh");
+  });
 });

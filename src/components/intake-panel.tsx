@@ -69,7 +69,7 @@ import {
 import type { ArchiveMutationPlan } from "@/lib/archive-mutation-plan";
 import { matchIdentity } from "@/lib/identity-match";
 import { parseFuzzyLocal } from "@/lib/fuzzy-date";
-import { getLang, t } from "@/lib/i18n";
+import { getLang, t, tFormat } from "@/lib/i18n";
 import { isSelfReference, SELF_PERSON_ID } from "@/lib/person-identity";
 import { ensureIntakeWorkspace } from "@/lib/intake-workspace";
 import {
@@ -202,6 +202,9 @@ function intakeReceiptHasChanges(batch: IntakeUndoBatch) {
     batch.previousPeople.length > 0 ||
     (batch.collectionUndo?.deleteCollectionIds?.length ?? 0) > 0 ||
     (batch.collectionUndo?.collections?.length ?? 0) > 0 ||
+    // 纯成员增删（不动集合本身）也构成实际变化：回滚守卫与撤销入口不能漏掉。
+    (batch.collectionUndo?.collectionMemberships?.length ?? 0) > 0 ||
+    (batch.collectionUndo?.deleteCollectionMembershipIds?.length ?? 0) > 0 ||
     (batch.previousEvents?.length ?? 0) > 0
   );
 }
@@ -1880,11 +1883,10 @@ export function IntakePanel({
       if (undone.conflicts.some((conflict) => conflict.reason === "missing_receipt")) {
         toast.warning(t("此旧批次没有可验证的提交快照，未撤销任何记录。请逐条检查。"));
       } else if (undone.conflicts.length) {
-        const kept = undone.conflicts.length;
         toast.warning(
-          `${t("已撤销最近一次录入批次")}；${t("另有")} ${kept} ${t(
-            "条记录因后续修改、删除或关联依赖而保留，未强行回滚",
-          )}`,
+          tFormat("已撤销最近一次录入批次；保留了 {count} 条后续变更，未强行回滚", {
+            count: undone.conflicts.length,
+          }),
         );
       } else {
         toast.success(t("已撤销最近一次录入批次"));
