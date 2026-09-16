@@ -3,7 +3,6 @@ on:
   push:
     branches: [fix/pr3-date-family-compatibility]
     paths:
-      - .github/pr3-compatibility.py
       - .github/workflows/pr3-compatibility.yml
 permissions:
   contents: read
@@ -11,76 +10,77 @@ defaults:
   run:
     shell: bash
 jobs:
-  repair-and-verify:
-    if: github.ref == 'refs/heads/fix/pr3-date-family-compatibility'
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: write
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [check, build, e2e]
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       PLAYWRIGHT_CHANNEL: chromium
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-          fetch-depth: 0
-      - name: Apply reviewed compatibility changes
-        run: |
-          python .github/pr3-compatibility.py
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('e2e/pr3-compatibility.spec.ts')
-          text = path.read_text()
-          path.write_text(text.replace('{ lifeEvents: [event] }', '{ lifeEvents: [{ ...event }] }'))
-          PY
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
       - name: Install locked dependencies
         run: npm ci
-      - name: Format only changed files
-        run: >-
-          npx prettier --write
-          .github/workflows/pr3-compatibility.yml
-          src/components/calendar-panel.tsx
-          src/components/relations-panel.tsx
-          src/lib/family-tree-layout.ts
-          src/lib/archive-mutation-plan.ts
-          src/lib/pr3-compatibility.test.ts
-          e2e/event-month-precision.spec.ts
-          e2e/pr3-compatibility.spec.ts
-      - name: Commit repair on the isolated branch
-        id: repair
+      - name: Restore omitted Linux optional bindings without changing dependency versions
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/components/calendar-panel.tsx src/components/relations-panel.tsx src/lib/family-tree-layout.ts src/lib/archive-mutation-plan.ts src/lib/pr3-compatibility.test.ts e2e/event-month-precision.spec.ts e2e/pr3-compatibility.spec.ts
-          git commit -m 'fix: preserve legacy event dates and family-tree interactions'
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import os from 'node:os';
+          import { execFileSync } from 'node:child_process';
+          const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'pr3-native-'));
+          const parents = ['rolldown', 'rollup', 'oxc-parser', 'oxc-transform', '@tailwindcss/oxide', 'lightningcss', '@swc/core'];
+          for (const parent of parents) {
+            const manifest = path.join('node_modules', parent, 'package.json');
+            if (!fs.existsSync(manifest)) continue;
+            const metadata = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+            for (const [name, version] of Object.entries(metadata.optionalDependencies ?? {})) {
+              if (!/linux-x64-gnu$/.test(name)) continue;
+              const destination = path.join('node_modules', name);
+              if (fs.existsSync(path.join(destination, 'package.json'))) continue;
+              console.log(`Restoring ${name}@${version}, required by ${parent}@${metadata.version}`);
+              const packed = JSON.parse(execFileSync('npm', ['pack', `${name}@${version}`, '--json', '--pack-destination', temporary], { encoding: 'utf8' }));
+              fs.mkdirSync(destination, { recursive: true });
+              execFileSync('tar', ['-xzf', path.join(temporary, packed[0].filename), '--strip-components=1', '-C', destination]);
+            }
+          }
+          fs.rmSync(temporary, { recursive: true, force: true });
+          JS
+          git diff --exit-code -- package.json package-lock.json
           mkdir -p test-results/compatibility
-          git rev-parse HEAD | tee test-results/compatibility/revision.txt
-          git diff adb16d44194a624654ba98f2cc751daf85137f7c HEAD -- src e2e > test-results/compatibility/repair.patch
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          git push origin HEAD:fix/pr3-date-family-compatibility
-      - name: Typecheck, lint, formatting and unit tests
-        if: ${{ always() && steps.repair.outputs.sha != '' }}
-        run: npm run check 2>&1 | tee test-results/compatibility/check.log
-      - name: Production build
-        if: ${{ always() && steps.repair.outputs.sha != '' }}
-        run: npm run build 2>&1 | tee test-results/compatibility/build.log
+          git rev-parse HEAD > test-results/compatibility/revision.txt
+          npx prettier --write .github/workflows/pr3-compatibility.yml
       - name: Install Chromium
-        if: ${{ always() && steps.repair.outputs.sha != '' }}
+        if: matrix.task == 'e2e'
         run: npx playwright install --with-deps chromium
-      - name: Browser regression suite
-        if: ${{ always() && steps.repair.outputs.sha != '' }}
-        run: npm run e2e 2>&1 | tee test-results/compatibility/e2e.log
+      - name: Focused browser regressions
+        if: matrix.task == 'e2e'
+        run: npm run e2e -- e2e/pr3-compatibility.spec.ts e2e/event-month-precision.spec.ts --reporter=list 2>&1 | tee test-results/compatibility/focused-e2e.log
+      - name: Upload focused browser results
+        if: ${{ always() && matrix.task == 'e2e' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr3-focused-browser-results
+          path: |
+            test-results/compatibility
+            test-results/playwright
+          if-no-files-found: warn
+      - name: Run complete suite
+        if: always()
+        run: npm run ${{ matrix.task }} 2>&1 | tee test-results/compatibility/${{ matrix.task }}.log
       - name: Upload verification results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pr3-compatibility-results
+          name: pr3-${{ matrix.task }}-results
           path: |
             test-results/compatibility
             test-results/playwright
