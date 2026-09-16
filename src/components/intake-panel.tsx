@@ -98,6 +98,7 @@ import {
   validateIntakeFiles,
 } from "@/lib/intake-draft";
 import {
+  attachCommittedIntakeSnapshots,
   getLatestIntakeBatch,
   rememberIntakeBatch,
   rollbackIntakeBatch,
@@ -804,6 +805,8 @@ export function IntakePanel({
         }),
       );
       if (restored?.intakeReceipt) {
+        // 跨会话恢复的批次没有“提交时快照”，无法区分录入写入与后续人工修改，
+        // 撤销退回无条件回滚的旧语义；同一会话内的撤销具备冲突保护。
         rememberIntakeBatch(restored.intakeReceipt);
         setLatestBatch(restored.intakeReceipt);
       }
@@ -1875,7 +1878,16 @@ export function IntakePanel({
       }
       await refreshArchiveSnapshot();
       setLatestBatch(null);
-      toast.success(t("已撤销最近一次录入批次"));
+      if (undone.conflicts.length) {
+        const kept = undone.conflicts.length;
+        toast.warning(
+          `${t("已撤销最近一次录入批次")}；${t("另有")} ${kept} ${t(
+            "条记录在批准后被修改过，已保留新版本未回滚",
+          )}`,
+        );
+      } else {
+        toast.success(t("已撤销最近一次录入批次"));
+      }
     } catch (error) {
       toast.error(`${t("撤销失败")}：${(error as Error).message}`);
     } finally {
@@ -2351,6 +2363,7 @@ export function IntakePanel({
     window.localStorage.removeItem(DRAFT_KEY);
     await refreshArchiveSnapshot();
     if (intakeReceiptHasChanges(intent.receipt)) {
+      await attachCommittedIntakeSnapshots(intent.receipt);
       rememberIntakeBatch(intent.receipt);
       setLatestBatch(intent.receipt);
     }
@@ -3089,6 +3102,7 @@ export function IntakePanel({
         window.localStorage.removeItem(DRAFT_KEY);
         await refreshArchiveSnapshot();
         if (intakeReceiptHasChanges(batch)) {
+          await attachCommittedIntakeSnapshots(batch);
           rememberIntakeBatch(batch);
           setLatestBatch(batch);
         }
@@ -3123,6 +3137,7 @@ export function IntakePanel({
           toast.error(`${(error as Error).message} · ${t("本批次已自动回滚，未留下部分数据")}`);
         } catch {
           batch.committedAt = Date.now();
+          await attachCommittedIntakeSnapshots(batch).catch(() => undefined);
           rememberIntakeBatch(batch);
           setLatestBatch(batch);
           toast.error(`${(error as Error).message} · ${t("自动回滚失败，可用下方按钮撤销")}`);
