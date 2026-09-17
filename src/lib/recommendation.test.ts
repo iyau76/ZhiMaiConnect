@@ -119,6 +119,36 @@ describe("rankCandidates", () => {
     expect(candidate?.reasons.join("；")).toContain("模型语义召回");
   });
 
+  it("admits a candidate whose ability is only recorded in the free-text note", () => {
+    const jiaxin = person("jiaxin", {
+      name: "佳欣",
+      note: "我的写沟同学；做过十几场访谈，田野也跑过好几回。",
+    });
+    const slot = {
+      id: "capability-research",
+      label: "用户调研",
+      deliverable: "完成用户访谈与需求整理",
+      searchTerms: ["智理杯", "参赛", "组队"],
+    };
+
+    expect(rankCapabilityCandidates(slot, [jiaxin], [], NOW)).toEqual([]);
+    const [candidate] = rankCapabilityCandidates(slot, [jiaxin], [], NOW, [
+      {
+        personId: jiaxin.id,
+        evidenceFields: ["note"],
+        reason: "备注写明做过十几场访谈",
+      },
+    ]);
+
+    expect(candidate?.person.id).toBe("jiaxin");
+    expect(candidate?.capabilityMatches?.[0]).toMatchObject({
+      discovery: "semantic",
+      matchedTerms: [],
+    });
+    expect(candidate?.capabilityMatches?.[0].evidence[0]).toContain("note：");
+    expect(candidate?.capabilityMatches?.[0].evidence[0]).toContain("十几场访谈");
+  });
+
   it("rejects a semantic nomination whose selected ledger field is empty", () => {
     const creator = person("creator", { profile: { title: "行政助理" } });
     const rows = rankCapabilityCandidates(

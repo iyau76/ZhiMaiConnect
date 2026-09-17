@@ -45,6 +45,7 @@ export const RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS = [
   "department",
   "tags",
   "projects",
+  "note",
 ] as const;
 
 export type RecommendationCapabilityEvidenceField =
@@ -265,11 +266,14 @@ function verifiedSemanticEvidence(
     department: [profile.department],
     tags: profile.tags ?? [],
     projects: profile.projects ?? [],
+    note: [person.note, person.rawProfileText],
   };
   const verified = candidate.evidenceFields.flatMap((field) => {
     return values[field].flatMap((value) => {
       const fact = value?.trim();
-      return fact ? [`${field}：${fact}`] : [];
+      if (!fact) return [];
+      const clippedFact = fact.length > 200 ? `${fact.slice(0, 200)}…` : fact;
+      return [`${field}：${clippedFact}`];
     });
   });
   return [...new Set(verified)].slice(0, 3);

@@ -302,7 +302,7 @@ function auditModelRelations(
 
 const SEMANTIC_EXTRACTION_PRINCIPLES = `请把材料理解成语义任务，遵守以下边界：
 - 只声明材料明确表达的事实；不要把亲属或社交推导写成直接关系。
-- 人物自身属性写入 person；人与人之间的联系单独写 relation，并保留最短可核对依据。
+- 人物自身属性写入 person；人与人之间的联系单独写 relation，并保留最短可核对依据。材料里明确写出某人擅长、做过、负责或会某类工作（如访谈、田野、联调、海报、宣传片）时，要把这类能力写成该人物的 profile.tags：每个标签 2–8 个字、最多 6 个，不要只留在概要或备注里；原话依据仍保留在 note 或 evidence。
 - 本次材料中新介绍的每个人都单独声明 person/create，即使只知道姓名；关系、事件、提醒和圈层中的引用依赖这份人物声明。后续补充时一并完成之前缺少人物而未形成的条目。
 - 已发生或计划发生、适合时间线/日历的内容写 event；仍需用户采取行动的内容写 reminder。同一内容只有同时具备两种含义时才写两项。
 - 时间原句可写 timeText；只有月份时 date 用 YYYY-MM-01 且 precision=month，只有年份时 date 用 YYYY-01-01 且 precision=year，不能为了补齐格式而虚构具体日期。

@@ -441,7 +441,7 @@ function recommendationPlanningPrompt(
 - 确实无法判断多个已提及人物中谁是目标：mode="ambiguous"，用 candidates 列出语义人物引用并给出一句具体问题。不要因为出现多个人名就自动判歧义。
 - 没有提及档案人物时只能是 open。
 
-开放任务要拆成可由不同人承担的能力槽，每个槽必须对应一个独立交付物。简单任务只建一个槽；复合任务保留全部不可缺少的分工。searchTerms 填写 3 到 10 个可能真实出现在人物职位、标签、项目或备注中的检索表达。若索引中有人在语义上适合，即使措辞与任务不同，也把他放进该槽的 candidates；personRef 必须逐字复制索引值，evidenceFields 从 relation/title/org/department/tags/projects 中选择，本地会读取这些字段的真实值。不要把关系亲疏或有联系方式当作能力证据。索引不完整时不得假装看过未展示的人物，本地仍会用 searchTerms 检索全库。
+开放任务要拆成可由不同人承担的能力槽，每个槽必须对应一个独立交付物。简单任务只建一个槽；复合任务保留全部不可缺少的分工。遇到组队、找搭子、"谁能一起做""还缺什么人"这类需求时，不要只建一个泛化的"参赛队友"槽；按任务真正需要的交付物拆开，例如用户调研与需求、Agent 搭建、编程实现、视觉与宣传，各自一个槽。searchTerms 填写 3 到 10 个可能真实出现在人物职位、标签、项目或备注中的检索表达，既写任务词，也写能力词（如"访谈""田野""联调""海报""宣传片"）。若索引中有人在语义上适合，即使措辞与任务不同，也把他放进该槽的 candidates；personRef 必须逐字复制索引值，evidenceFields 从 relation/title/org/department/tags/projects/note 中选择，本地会读取这些字段的真实值，备注里明确写过的能力同样可以作为证据。不要把关系亲疏或有联系方式当作能力证据。索引不完整时不得假装看过未展示的人物；如果某人的能力写在未展示的备注里，先用 get_profiles 读取详情再提名，本地仍会用 searchTerms 检索全库。
 
 只输出一个 JSON 对象，不要 Markdown：
 目标：{"type":"recommendation_plan","mode":"target","target":{"kind":"person","name":"贾母"}}
