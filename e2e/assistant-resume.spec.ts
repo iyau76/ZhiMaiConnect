@@ -256,6 +256,8 @@ test("关闭浏览器后从同一档案恢复暂停中的运行", async () => {
       );
       localStorage.setItem("openglass.welcomeSeen", "1");
       localStorage.setItem("openglass.lang", "zh");
+      // 免费体验档默认使用中；本用例模拟自配接口，固定回 builtin-openai。
+      localStorage.setItem("openglass.active", "builtin-openai");
     });
 
   let activeContext: BrowserContext | undefined;

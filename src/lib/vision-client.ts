@@ -1,14 +1,15 @@
-import { assertVision, type ChatTurn, type ProviderPreset } from "./vision-providers";
+import {
+  assertVision,
+  isFreeTierPreset,
+  isLocalEndpoint,
+  type ChatTurn,
+  type ProviderPreset,
+} from "./vision-providers";
 import { confirmCloudTransfer, type CloudDataType } from "./cloud-consent";
 import { fetchWithApiSession } from "./api-session";
 import { assertVisionPromptFits, fitVisionHistory } from "./ai-request-contract";
 import { ModelTransportError } from "./model-transport-resilience";
 import { platformFetch } from "./native-runtime";
-
-function stripDataUrl(dataUrl: string) {
-  const idx = dataUrl.indexOf(",");
-  return idx === -1 ? dataUrl : dataUrl.slice(idx + 1);
-}
 
 export interface ModelRequestOptions {
   maxOutputTokens?: number;
@@ -17,18 +18,50 @@ export interface ModelRequestOptions {
   responseMode?: "stream" | "structured";
 }
 
-function ollamaMessages(prompt: string, image: string | null, history: ChatTurn[]) {
+/** 本机 OpenAI 兼容服务（Ollama、LM Studio 等）直连时的请求头；未填密钥则不携带。 */
+function localHeaders(preset: ProviderPreset) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (preset.apiKey.trim()) headers.Authorization = `Bearer ${preset.apiKey}`;
+  return headers;
+}
+
+function localChatMessages(prompt: string, image: string | null, history: ChatTurn[]) {
   return [
-    ...history.slice(-8).map((turn) => ({ role: turn.role, content: turn.text })),
-    {
-      role: "user" as const,
-      content: prompt,
-      ...(image ? { images: [stripDataUrl(image)] } : {}),
-    },
+    ...history.map((turn) => ({ role: turn.role, content: turn.text })),
+    image
+      ? {
+          role: "user" as const,
+          content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: image } },
+          ],
+        }
+      : { role: "user" as const, content: prompt },
   ];
 }
 
-async function streamOllama(
+async function localChatCompletion(
+  preset: ProviderPreset,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+) {
+  const base = preset.baseUrl.replace(/\/+$/, "");
+  const response = await platformFetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: localHeaders(preset),
+    body: JSON.stringify({ model: preset.model, ...body }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new ModelTransportError(
+      `本机接口返回 ${response.status}：${(await response.text()).slice(0, 300)}`,
+      response.status,
+    );
+  }
+  return response;
+}
+
+async function streamLocal(
   preset: ProviderPreset,
   prompt: string,
   image: string | null,
@@ -38,59 +71,21 @@ async function streamOllama(
   maxOutputTokens?: number,
   temperature?: number,
 ) {
-  const base = preset.baseUrl.replace(/\/+$/, "");
-  const messages = ollamaMessages(prompt, image, history);
-
-  const response = await platformFetch(`${base}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: preset.model,
-      messages,
+  const response = await localChatCompletion(
+    preset,
+    {
+      messages: localChatMessages(prompt, image, history),
       stream: true,
-      ...(maxOutputTokens || temperature !== undefined
-        ? {
-            options: {
-              ...(maxOutputTokens ? { num_predict: maxOutputTokens } : {}),
-              ...(temperature !== undefined ? { temperature } : {}),
-            },
-          }
-        : {}),
-    }),
+      ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+    },
     signal,
-  });
-
-  if (!response.ok) {
-    throw new ModelTransportError(
-      `Ollama 返回 ${response.status}：${(await response.text()).slice(0, 300)}`,
-      response.status,
-    );
-  }
-  if (!response.body) throw new Error("Ollama 没有返回内容");
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const json = JSON.parse(line);
-        const delta = json?.message?.content;
-        if (typeof delta === "string" && delta) onChunk(delta);
-      } catch {
-        /* 跳过不完整的行 */
-      }
-    }
-  }
+  );
+  if (!response.body) throw new Error("本机接口没有返回内容");
+  await consumeChatStream(response, onChunk, signal);
 }
 
-async function completeOllama(
+async function completeLocal(
   preset: ProviderPreset,
   prompt: string,
   image: string | null,
@@ -99,43 +94,28 @@ async function completeOllama(
   maxOutputTokens?: number,
   temperature?: number,
 ) {
-  const base = preset.baseUrl.replace(/\/+$/, "");
-  const response = await platformFetch(`${base}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: preset.model,
-      messages: ollamaMessages(prompt, image, history),
+  const response = await localChatCompletion(
+    preset,
+    {
+      messages: localChatMessages(prompt, image, history),
       stream: false,
-      format: "json",
-      ...(maxOutputTokens || temperature !== undefined
-        ? {
-            options: {
-              ...(maxOutputTokens ? { num_predict: maxOutputTokens } : {}),
-              ...(temperature !== undefined ? { temperature } : {}),
-            },
-          }
-        : {}),
-    }),
+      response_format: { type: "json_object" },
+      ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+    },
     signal,
-  });
-
-  if (!response.ok) {
-    throw new ModelTransportError(
-      `Ollama 返回 ${response.status}：${(await response.text()).slice(0, 300)}`,
-      response.status,
-    );
-  }
-
+  );
   try {
-    const json = (await response.json()) as { message?: { content?: unknown } };
-    const reply = json.message?.content;
+    const json = (await response.json()) as {
+      choices?: Array<{ message?: { content?: unknown } }>;
+    };
+    const reply = json.choices?.[0]?.message?.content;
     if (typeof reply === "string" && reply.trim()) return reply;
   } catch {
     // 统一在下方报告协议错误，不泄露上游正文。
   }
   throw new ModelTransportError(
-    "Ollama 没有返回可用的结构化正文",
+    "本机接口没有返回可用的结构化正文",
     502,
     "UPSTREAM_INVALID_RESPONSE",
   );
@@ -186,6 +166,29 @@ async function serverResponseError(response: Response, clientRequestId: string) 
   });
 }
 
+/**
+ * 免费档走我们自己的中转：跨域直连，请求里不带任何密钥，用哪个上游模型由中转决定。
+ * 其它档位仍然走同源 /api/vision，由服务端把用户自己的密钥透传给上游。
+ */
+async function postVision(
+  preset: ProviderPreset,
+  body: Record<string, unknown>,
+  headers: Record<string, string>,
+  signal?: AbortSignal,
+) {
+  const init = {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    signal,
+    body: JSON.stringify(body),
+  };
+  if (isFreeTierPreset(preset)) {
+    const endpoint = `${preset.baseUrl.replace(/\/+$/, "")}/api/vision`;
+    return platformFetch(endpoint, init);
+  }
+  return fetchWithApiSession("/api/vision", init);
+}
+
 async function requestServer(
   action: "chat" | "agent",
   preset: ProviderPreset,
@@ -197,14 +200,9 @@ async function requestServer(
   temperature?: number,
 ) {
   const clientRequestId = crypto.randomUUID();
-  const response = await fetchWithApiSession("/api/vision", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Zhimai-Client-Request": clientRequestId,
-    },
-    signal,
-    body: JSON.stringify({
+  const response = await postVision(
+    preset,
+    {
       action,
       kind: preset.kind,
       baseUrl: preset.baseUrl,
@@ -215,32 +213,20 @@ async function requestServer(
       history,
       maxOutputTokens,
       temperature,
-    }),
-  });
+    },
+    { "X-Zhimai-Client-Request": clientRequestId },
+    signal,
+  );
   if (!response.ok) throw await serverResponseError(response, clientRequestId);
   return response;
 }
 
-async function streamServer(
-  preset: ProviderPreset,
-  prompt: string,
-  image: string | null,
-  history: ChatTurn[],
+/** 读取 OpenAI 兼容的流式回复：SSE 按 data: 行解析，非 SSE 按原文直传。 */
+async function consumeChatStream(
+  response: Response,
   onChunk: (text: string) => void,
   signal: AbortSignal,
-  maxOutputTokens?: number,
-  temperature?: number,
 ) {
-  const response = await requestServer(
-    "chat",
-    preset,
-    prompt,
-    image,
-    history,
-    signal,
-    maxOutputTokens,
-    temperature,
-  );
   if (!response.body) throw new Error("接口没有返回内容");
 
   const reader = response.body.getReader();
@@ -309,6 +295,29 @@ async function streamServer(
   }
 }
 
+async function streamServer(
+  preset: ProviderPreset,
+  prompt: string,
+  image: string | null,
+  history: ChatTurn[],
+  onChunk: (text: string) => void,
+  signal: AbortSignal,
+  maxOutputTokens?: number,
+  temperature?: number,
+) {
+  const response = await requestServer(
+    "chat",
+    preset,
+    prompt,
+    image,
+    history,
+    signal,
+    maxOutputTokens,
+    temperature,
+  );
+  await consumeChatStream(response, onChunk, signal);
+}
+
 async function completeServer(
   preset: ProviderPreset,
   prompt: string,
@@ -342,13 +351,13 @@ async function completeServer(
   );
 }
 
-/** 云端兼容接口必须填地址和 Key，否则请求没有明确的接收方。 */
+/** 云端接口必须填地址和 Key；本机直连的推理服务与免费体验档都不需要密钥。 */
 function assertConfigured(preset: ProviderPreset) {
-  if (preset.kind === "ollama") return;
   if (!preset.baseUrl.trim()) {
     throw new Error(`「${preset.name}」还没填接口地址，请到「模型」里补上。`);
   }
-  if (!preset.apiKey.trim()) {
+  if (isFreeTierPreset(preset)) return;
+  if (!isLocalEndpoint(preset) && !preset.apiKey.trim()) {
     throw new Error(`「${preset.name}」还没填 API Key。请到「模型配置」中填写后再试。`);
   }
 }
@@ -371,9 +380,9 @@ export async function askModel(
   const boundedHistory = fittedHistory.turns;
   // 有图就必须是验证过的多模态模型，避免拿纯文本模型瞎分析
   if (image || boundedHistory.some((turn) => turn.image)) assertVision(preset);
-  if (preset.kind === "ollama") {
+  if (isLocalEndpoint(preset)) {
     if (options.responseMode === "structured") {
-      const reply = await completeOllama(
+      const reply = await completeLocal(
         preset,
         effectivePrompt,
         image,
@@ -385,7 +394,7 @@ export async function askModel(
       onChunk(reply);
       return;
     }
-    return streamOllama(
+    return streamLocal(
       preset,
       effectivePrompt,
       image,
@@ -427,29 +436,29 @@ export async function askModel(
 
 export async function testConnection(preset: ProviderPreset) {
   assertConfigured(preset);
-  if (preset.kind === "ollama") {
+  if (isLocalEndpoint(preset)) {
     const base = preset.baseUrl.replace(/\/+$/, "");
-    const response = await platformFetch(`${base}/api/tags`);
-    if (!response.ok) throw new Error(`Ollama 返回 ${response.status}`);
-    const json = (await response.json()) as { models?: Array<{ name: string }> };
-    const names = (json.models ?? []).map((m) => m.name);
-    if (names.length && !names.some((n) => n.split(":")[0] === preset.model.split(":")[0])) {
+    const response = await platformFetch(`${base}/models`, { headers: localHeaders(preset) });
+    if (!response.ok) throw new Error(`本机接口返回 ${response.status}`);
+    const json = (await response.json()) as { data?: Array<{ id: string }> };
+    const names = (json.data ?? []).map((item) => item.id);
+    if (names.length && !names.some((name) => name.split(":")[0] === preset.model.split(":")[0])) {
       throw new Error(`连上了，但没找到模型「${preset.model}」。已安装：${names.join("、")}`);
     }
     return "连接正常";
   }
 
-  const response = await fetchWithApiSession("/api/vision", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const response = await postVision(
+    preset,
+    {
       action: "test",
       kind: preset.kind,
       baseUrl: preset.baseUrl,
       apiKey: preset.apiKey,
       model: preset.model,
-    }),
-  });
+    },
+    {},
+  );
   const json = (await response.json()) as { error?: string; reply?: string };
   if (!response.ok) throw new Error(json.error ?? `请求失败（${response.status}）`);
   return `连接正常：${(json.reply ?? "").trim().slice(0, 40)}`;
@@ -479,26 +488,19 @@ function makeProbeImage(css: string) {
 
 async function askOnce(preset: ProviderPreset, prompt: string, image: string) {
   assertConfigured(preset);
-  if (preset.kind === "ollama") {
-    const base = preset.baseUrl.replace(/\/+$/, "");
-    const response = await platformFetch(`${base}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: preset.model,
-        stream: false,
-        messages: [{ role: "user", content: prompt, images: [stripDataUrl(image)] }],
-      }),
-    });
-    if (!response.ok) throw new Error(`Ollama 返回 ${response.status}`);
-    const json = (await response.json()) as { message?: { content?: string } };
-    return json.message?.content ?? "";
+  if (isLocalEndpoint(preset)) {
+    const response = await localChatCompletion(
+      preset,
+      { messages: localChatMessages(prompt, image, []), stream: false },
+      new AbortController().signal,
+    );
+    const json = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    return json.choices?.[0]?.message?.content ?? "";
   }
 
-  const response = await fetchWithApiSession("/api/vision", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const response = await postVision(
+    preset,
+    {
       action: "audit",
       kind: preset.kind,
       baseUrl: preset.baseUrl,
@@ -506,8 +508,9 @@ async function askOnce(preset: ProviderPreset, prompt: string, image: string) {
       model: preset.model,
       prompt,
       image,
-    }),
-  });
+    },
+    {},
+  );
   const json = (await response.json()) as { error?: string; reply?: string };
   if (!response.ok) throw new Error(json.error ?? `请求失败（${response.status}）`);
   return json.reply ?? "";

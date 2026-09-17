@@ -266,6 +266,8 @@ test("事件草稿按月或年录入时不要求选择具体日期，并能解�
 test("人物改名会传播到 Fact、关系、事件和提醒的持久化引用", async ({ page }) => {
   await openApp(page);
   await page.getByRole("button", { name: "离线演示草稿" }).click();
+  await page.waitForSelector('[data-draft-kind="person"]', { state: "attached" });
+  await expandReviewFolds(page);
   const personDrafts = page.locator('[data-draft-kind="person"]');
   await personDrafts.nth(1).getByPlaceholder("汇报对象").fill("唐悦");
   await personDrafts.first().getByPlaceholder("姓名").fill("唐悦（摄影社）");
@@ -482,9 +484,13 @@ test("模型配置名称不重复，并可由用户显式保存到当前浏览�
   await page.evaluate(() => sessionStorage.removeItem("openglass.session-api-keys"));
   await openApp(page);
   await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  await expect(
-    page.getByTestId("model-config-panel").locator('input[type="password"]'),
-  ).toHaveValue("playwright-test-key");
+  // 「知脉免费体验」现在排在第一位并默认使用中，要看自己的密钥得先点回那套配置。
+  const reopened = page.getByTestId("model-config-panel");
+  await clickVisible(
+    page,
+    reopened.locator('[data-provider-preset-id="builtin-openai"] button').first(),
+  );
+  await expect(reopened.locator('input[type="password"]')).toHaveValue("playwright-test-key");
 });
 
 test("关系网单击只淡化无关节点，双击开人物卡，并可在图上新建自定义关系", async ({ page }) => {
@@ -1156,4 +1162,50 @@ test("资料不足时祝福与礼物建议明确提示缺口且保持可编辑",
   await expect(editable).toContainText("资料不足");
   await editable.fill("资料不足：先询问对方近期需要，再决定礼物。");
   await expect(editable).toHaveValue("资料不足：先询问对方近期需要，再决定礼物。");
+});
+
+test("人物卡可换头像并恢复默认", async ({ page }) => {
+  await openApp(page);
+  await seedIndexedDb(page, {
+    persons: [
+      {
+        id: "person-avatar",
+        name: "头像测试人物",
+        note: "",
+        descriptors: [],
+        thumb: "",
+        createdAt: NOW,
+      },
+    ],
+  });
+
+  await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
+  const card = page.locator('[data-draft-kind="person"]');
+  void card;
+  const row = page.getByText("头像测试人物", { exact: true }).first();
+  await row.scrollIntoViewIfNeeded();
+  await page.getByRole("button", { name: "编辑", exact: true }).last().click();
+  await expect(page.getByRole("heading", { name: "编辑人员资料" })).toBeVisible();
+
+  await page.getByTestId("person-avatar-input").setInputFiles({
+    name: "avatar.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR4nGP8z8DwnwEPYMInOXwUAADtmwTj0Lj0pwAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("资料已保存").first()).toBeVisible();
+
+  const stored = await readIndexedDbStore<{ id: string; thumb: string }>(page, "persons");
+  expect(stored[0]?.thumb).toContain("data:image/jpeg");
+
+  await page.getByText("头像测试人物", { exact: true }).first().click();
+  await page.getByRole("button", { name: "编辑", exact: true }).last().click();
+  await page.getByRole("button", { name: "恢复默认头像" }).click();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("资料已保存").first()).toBeVisible();
+  const cleared = await readIndexedDbStore<{ id: string; thumb: string }>(page, "persons");
+  expect(cleared[0]?.thumb).toBe("");
 });

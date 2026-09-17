@@ -59,6 +59,10 @@ describe("semantic intake compiler", () => {
     expect(compilation.issues).toEqual([
       expect.objectContaining({ taskId: "ambiguous-zhang", code: "ambiguous" }),
     ]);
+    expect(compilation.issues[0]?.candidates?.map((candidate) => candidate.label)).toEqual([
+      "张伟（设计院）",
+      "张伟（学校）",
+    ]);
     expect(compilation.state.tasks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

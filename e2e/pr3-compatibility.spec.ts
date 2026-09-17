@@ -107,10 +107,27 @@ test("同一次双击保存只产生一条记录", async ({ page }) => {
   const editor = page.locator("[data-event-editor]");
   await editor.locator("textarea").first().fill("双击保存的合成事件");
   await editor.getByRole("button", { name: "记下来" }).click({ clickCount: 2 });
-  await expect(editor.getByRole("button", { name: /^保存/ })).toBeHidden();
+  await expect(editor.getByRole("button", { name: "保存修改", exact: true })).toBeHidden();
   const stored = await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents");
   expect(stored).toHaveLength(1);
   expect(stored[0].title).toBe("双击保存的合成事件");
+});
+
+test("保存并继续保留日期只清空标题便于连续记录", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: /^日历/ }).click();
+  const editor = page.locator("[data-event-editor]");
+  await editor.locator("textarea").first().fill("连续记录的第一条");
+  await editor.getByRole("button", { name: "保存并继续" }).click();
+  await expect(editor.locator("textarea").first()).toHaveValue("");
+  await expect(editor.getByRole("button", { name: "保存并继续" })).toBeVisible();
+  await editor.locator("textarea").first().fill("连续记录的第二条");
+  await editor.getByRole("button", { name: "记下来" }).click();
+  const stored = await readIndexedDbStore<LifeEventRecord>(page, "lifeEvents");
+  expect(stored.map((event) => event.title).sort()).toEqual([
+    "连续记录的第一条",
+    "连续记录的第二条",
+  ]);
 });
 
 test("保存前发现其他窗口已修改时不覆盖", async ({ page }) => {

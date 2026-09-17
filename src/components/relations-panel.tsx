@@ -21,7 +21,6 @@ import { toast } from "sonner";
 import peopleEmptyArt from "@/assets/art/web/people-empty.webp";
 
 import { ExportMenu } from "@/components/export-menu";
-import { PageGuide } from "@/components/page-guide";
 import { PersonProfileDialog } from "@/components/person-profile-dialog";
 import { SourceBadge } from "@/components/source-badge";
 import { TagGroupDialog } from "@/components/tag-group-dialog";
@@ -80,6 +79,7 @@ import {
   type ReminderRecord,
 } from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
+import { PersonAvatar } from "@/components/person-avatar";
 import { cn } from "@/lib/utils";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
@@ -187,10 +187,26 @@ export function RelationsPanel({
   const [drill, setDrill] = useState<GraphDrill>({ mode: "blocks" });
   /** 画布缩放 / 平移 */
   const [viewport, setViewport] = useState({ scale: 1, tx: 0, ty: 0 });
+  const [labelScale, setLabelScale] = useState(() => {
+    try {
+      const stored = Number(window.localStorage.getItem("zhimai:graph-label-scale"));
+      return Number.isFinite(stored) ? Math.min(1.6, Math.max(0.8, stored)) : 1;
+    } catch {
+      return 1;
+    }
+  });
   const [graphFullscreen, setGraphFullscreen] = useState(false);
   const graphFrameRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const wheelListenerRef = useRef<((event: WheelEvent) => void) | null>(null);
+  const pinchRef = useRef<{
+    pointers: Map<number, { x: number; y: number }>;
+    startDistance: number;
+    startScale: number;
+    startTx: number;
+    startTy: number;
+  } | null>(null);
+  const lastPrimaryPointerRef = useRef<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{
     id: string;
     x: number;
@@ -1198,6 +1214,17 @@ export function RelationsPanel({
 
   const resetView = () => setViewport({ scale: 1, tx: 0, ty: 0 });
 
+  const changeLabelScale = (factor: number) =>
+    setLabelScale((prev) => {
+      const next = Math.min(1.6, Math.max(0.8, Math.round(prev * factor * 20) / 20));
+      try {
+        window.localStorage.setItem("zhimai:graph-label-scale", String(next));
+      } catch {
+        // 无痕模式等场景下保存失败不影响本次会话。
+      }
+      return next;
+    });
+
   /**
    * React 在根节点注册的 wheel 监听器可能是 passive，单靠 onWheel.preventDefault()
    * 无法稳定阻止页面滚动。这里直接给实际 SVG 绑定 non-passive 监听器，确保图内滚轮
@@ -1299,12 +1326,34 @@ export function RelationsPanel({
   };
 
   const onPanPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
+    // 第二根手指落下即进入双指缩放，单指平移立即让位。
+    const pinch = pinchRef.current;
+    if (pinch) {
+      pinch.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      panRef.current = null;
+      return;
+    }
+    if (event.isPrimary === false) {
+      const pointers = new Map<number, { x: number; y: number }>();
+      if (lastPrimaryPointerRef.current) pointers.set(-1, lastPrimaryPointerRef.current);
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      pinchRef.current = {
+        pointers,
+        startDistance: 0,
+        startScale: viewport.scale,
+        startTx: viewport.tx,
+        startTy: viewport.ty,
+      };
+      panRef.current = null;
+      return;
+    }
     // 只有真正的画布空白启动平移。节点和关系边拥有自己的选择语义，不能在
     // pointerup 时被误判为“点击空白”。圈层底色禁用了 pointer events，仍算空白。
     const target = event.target as Element;
     const isBackground =
       target === event.currentTarget || target.getAttribute("data-graph-background") === "true";
     if (dragRef.current || !isBackground) return;
+    lastPrimaryPointerRef.current = { x: event.clientX, y: event.clientY };
     panRef.current = {
       x: event.clientX,
       y: event.clientY,
@@ -1314,6 +1363,31 @@ export function RelationsPanel({
     };
   };
   const onPanPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (event.isPrimary) lastPrimaryPointerRef.current = { x: event.clientX, y: event.clientY };
+    const pinch = pinchRef.current;
+    if (pinch?.pointers.has(event.pointerId)) {
+      pinch.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const [first, second] = [...pinch.pointers.values()];
+      if (!second) return;
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (!rect?.width) return;
+      const ratio = viewSize / rect.width;
+      const distance = Math.hypot(second.x - first.x, second.y - first.y);
+      if (!pinch.startDistance) {
+        pinch.startDistance = distance || 1;
+        return;
+      }
+      const scale = Math.min(4, Math.max(0.4, (pinch.startScale * distance) / pinch.startDistance));
+      // 以双指中点为锚缩放：先换算成画布坐标，再按新比例放回。
+      const midX = ((first.x + second.x) / 2 - rect.left) * ratio;
+      const midY = ((first.y + second.y) / 2 - rect.top) * ratio;
+      setViewport({
+        scale,
+        tx: midX - ((midX - pinch.startTx) / pinch.startScale) * scale,
+        ty: midY - ((midY - pinch.startTy) / pinch.startScale) * scale,
+      });
+      return;
+    }
     const pan = panRef.current;
     if (!pan || dragRef.current) return;
     const rect = svgRef.current?.getBoundingClientRect();
@@ -1325,7 +1399,14 @@ export function RelationsPanel({
       ty: pan.ty + (event.clientY - pan.y) * ratio,
     }));
   };
-  const onPanPointerUp = () => {
+  const onPanPointerUp = (event?: React.PointerEvent<SVGSVGElement>) => {
+    const pinch = pinchRef.current;
+    if (pinch && event) {
+      pinch.pointers.delete(event.pointerId);
+      if (pinch.pointers.size < 2) pinchRef.current = null;
+      return;
+    }
+    pinchRef.current = null;
     const pan = panRef.current;
     panRef.current = null;
     if (!pan || pan.moved >= 4 || relationComposerOpen) return;
@@ -1427,15 +1508,6 @@ export function RelationsPanel({
         </TabsList>
 
         <TabsContent value="roster" className="space-y-4 pt-4">
-          <PageGuide
-            id="relations-roster"
-            title={t("档案页")}
-            points={[
-              t("填名字就能建人，先建人再连关系。"),
-              t("点一行可以打开人物卡补职位、部门等资料。"),
-            ]}
-          />
-
           <div className="space-y-2 rounded-xl border border-border p-3">
             <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
               {t("不用人脸也能建档")}
@@ -1629,17 +1701,12 @@ export function RelationsPanel({
                     aria-label={person.name}
                     className="mt-1"
                   />
-                  {person.thumb ? (
-                    <img
-                      src={person.thumb}
-                      alt={person.name}
-                      className="size-12 rounded-lg object-cover"
-                    />
-                  ) : (
-                    <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">
-                      {person.name.slice(0, 1)}
-                    </div>
-                  )}
+                  <PersonAvatar
+                    name={person.name}
+                    id={person.id}
+                    thumb={person.thumb}
+                    className="size-12"
+                  />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{person.name}</p>
                     <p className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
@@ -2195,6 +2262,24 @@ export function RelationsPanel({
               >
                 {t("适应")}
               </button>
+              <span className="ml-1 flex items-center gap-1" aria-label={t("标签字号")}>
+                <button
+                  type="button"
+                  className="rounded-full border border-border px-2 py-0.5 text-[11px] hover:bg-accent"
+                  onClick={() => changeLabelScale(1 / 1.15)}
+                  aria-label={t("减小标签字号")}
+                >
+                  A−
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-border px-2 py-0.5 hover:bg-accent"
+                  onClick={() => changeLabelScale(1.15)}
+                  aria-label={t("增大标签字号")}
+                >
+                  A+
+                </button>
+              </span>
             </span>
             {Object.keys(positions).length > 0 && (
               <button
@@ -2526,6 +2611,7 @@ export function RelationsPanel({
               onPointerDown={onPanPointerDown}
               onPointerMove={onPanPointerMove}
               onPointerUp={onPanPointerUp}
+              onPointerCancel={onPanPointerUp}
               onPointerLeave={onPanPointerUp}
             >
               <defs>
@@ -2642,7 +2728,8 @@ export function RelationsPanel({
                         x={node.x}
                         y={node.y + node.r + 22}
                         textAnchor="middle"
-                        className="fill-foreground text-[12px]"
+                        style={{ fontSize: `${12 * labelScale}px` }}
+                        className="fill-foreground"
                       >
                         {node.label}
                       </text>
@@ -2814,7 +2901,8 @@ export function RelationsPanel({
                               x={edge.lx}
                               y={edge.ly + 3}
                               textAnchor="middle"
-                              className="fill-muted-foreground text-[11px]"
+                              style={{ fontSize: `${11 * labelScale}px` }}
+                              className="fill-muted-foreground"
                             >
                               {edge.label}
                             </text>
@@ -2897,7 +2985,8 @@ export function RelationsPanel({
                           x={node.x}
                           y={node.y + 34}
                           textAnchor="middle"
-                          className="fill-foreground text-[12px]"
+                          style={{ fontSize: `${12 * labelScale}px` }}
+                          className="fill-foreground"
                         >
                           {node.name}
                         </text>
@@ -2983,7 +3072,14 @@ export function RelationsPanel({
                               confirmationStatus: "confirmed",
                               updatedAt: Date.now(),
                             });
-                            await refresh();
+                            // 就地更新这一行，列表滚动位置不动；其余数据等下次进入页面再同步。
+                            setRelations((rows) =>
+                              rows.map((row) =>
+                                row.id === relation.id
+                                  ? { ...row, confirmationStatus: "confirmed" }
+                                  : row,
+                              ),
+                            );
                           }}
                         >
                           {t("确认")}

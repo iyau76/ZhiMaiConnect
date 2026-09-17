@@ -10,6 +10,7 @@ export const PRECISION_LABEL: Record<DatePrecision, string> = {
   month: "只记得某月",
   year: "只记得某年",
   range: "一段时间",
+  unknown: "时间待定",
 };
 
 export function precisionOf(event: LifeEventRecord): DatePrecision {
@@ -19,6 +20,7 @@ export function precisionOf(event: LifeEventRecord): DatePrecision {
 /** 事件覆盖的起止（含端点），用于判断是否落在某月/某天 */
 export function eventSpan(event: LifeEventRecord) {
   const p = precisionOf(event);
+  if (p === "unknown" || !event.date) return { start: "", end: "" };
   const [y, m] = event.date.split("-").map(Number);
   if (p === "day") return { start: event.date, end: event.date };
   if (p === "month") {
@@ -32,6 +34,7 @@ export function eventSpan(event: LifeEventRecord) {
 /** 人话时间标签 */
 export function formatFuzzy(event: LifeEventRecord) {
   const p = precisionOf(event);
+  if (p === "unknown") return event.dateText?.trim() || PRECISION_LABEL.unknown;
   if (p !== "day" && event.dateText?.trim()) return event.dateText.trim();
   const [y, m, d] = event.date.split("-").map(Number);
   if (p === "day") return `${y} 年 ${m} 月 ${d} 日`;
@@ -67,8 +70,12 @@ export function yearOf(event: LifeEventRecord) {
   return event.date.slice(0, 4);
 }
 
-/** 一条模糊时间的解析结果 */
-export type FuzzyParse = { date: string; dateEnd?: string; precision: DatePrecision };
+/** 一条模糊时间的解析结果；解析器只产出已知精度，“时间待定”只由人工在日历里选择 */
+export type FuzzyParse = {
+  date: string;
+  dateEnd?: string;
+  precision: Exclude<DatePrecision, "unknown">;
+};
 
 const CN_NUM: Record<string, number> = {
   一: 1,
@@ -312,13 +319,13 @@ export function normalizeFuzzy(raw: Partial<FuzzyParse> | null): FuzzyParse | nu
     }
     return validDate(value) ? value : null;
   };
-  const inferredPrecision = (value: string): DatePrecision =>
+  const inferredPrecision = (value: string): FuzzyParse["precision"] =>
     /^\d{4}$/.test(value) ? "year" : /^\d{4}-\d{2}$/.test(value) ? "month" : "day";
   if (!raw || typeof raw.date !== "string" || !raw.date) return null;
   if (raw.dateEnd !== undefined && typeof raw.dateEnd !== "string") return null;
   if (raw.precision !== undefined && !["day", "month", "year", "range"].includes(raw.precision))
     return null;
-  const precision: DatePrecision =
+  const precision: FuzzyParse["precision"] =
     raw.precision === "day" ||
     raw.precision === "month" ||
     raw.precision === "year" ||

@@ -1,8 +1,9 @@
 import { expect, openApp, test } from "./fixtures";
 
-test("复杂关系测试集可以填入录入框", async ({ page }) => {
+test("测试材料折叠区可以填入录入框", async ({ page }) => {
   await openApp(page, { initialView: "intake" });
 
+  await page.getByText("还没想好录入什么？试试这些").click();
   const picker = page.getByLabel("选择测试材料");
   await expect(picker.locator("option")).toHaveCount(10);
   await picker.selectOption("harry-potter");

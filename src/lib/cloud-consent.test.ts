@@ -35,12 +35,15 @@ afterEach(() => {
 });
 
 describe("confirmCloudTransfer", () => {
-  it("does not ask for consent when all processing stays in local Ollama", async () => {
+  it("does not ask for consent when all processing stays on a local endpoint", async () => {
     vi.stubGlobal("window", undefined);
     vi.stubGlobal("sessionStorage", undefined);
 
     await expect(
-      confirmCloudTransfer(preset({ kind: "ollama" }), ["文字内容", "人物关系上下文"]),
+      confirmCloudTransfer(preset({ baseUrl: "http://localhost:11434/v1" }), [
+        "文字内容",
+        "人物关系上下文",
+      ]),
     ).resolves.toBeUndefined();
   });
 

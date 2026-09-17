@@ -73,6 +73,10 @@ const EN: Record<string, string> = {
   提醒草稿: "Draft reminders",
   来源材料: "Source materials",
   详细字段: "Detailed fields",
+  可选档案: "Candidate profiles",
+  去模型配置: "Open model settings",
+  "AI 整理需要先完成模型配置；你的材料仍保留在本页，配好后回来点同一个按钮即可。":
+    "AI intake needs a model set up first. Your material stays on this page; come back and press the same button once it is configured.",
   查看逐项解析过程: "Per-item parsing trace",
   展开或收起: "Expand or collapse",
   "与人物一起确认入库；圈层成员会跟随你选择的具体档案。":
@@ -1392,6 +1396,44 @@ const EN: Record<string, string> = {
   "条亲属关系，隐藏": "kinship relations; hidden",
   条非亲属关系: "non-kinship relations",
   只记得某月: "Only remember the month",
+  格式化档案: "Format archive",
+  "格式化档案，清空全部数据？": "Format the archive and erase everything?",
+  "将删除所有人物、关系、事件、提醒、计划、圈层、证据、录入草稿与 AI 运行记录，回到初次打开的样子。模型配置与密钥、语言、外观偏好会保留。此操作不可撤销。":
+    "This deletes every person, relation, event, reminder, plan, circle, evidence item, intake draft and agent run, returning the app to its first-run state. Model settings and keys, language and appearance preferences are kept. This cannot be undone.",
+  确认格式化: "Format everything",
+  "格式化中…": "Formatting…",
+  试试这些测试材料: "Try one of these test materials",
+  "还没想好录入什么？试试这些": "Not sure what to write? Try one of these",
+  "试完想从头再来？可在": "Want a clean slate afterwards? Use",
+  "中格式化档案，清空全部数据回到初始状态。":
+    "in Settings to format the archive and reset everything.",
+  "第一次配模型？三步搞定": "First time setting up a model? Three steps",
+  "点右上方「＋」加一套接口，常用开发平台任选一家：":
+    "Use the “+” above to add a provider; pick one of the common platforms:",
+  " —— 到平台申请 API Key，粘贴到下方「API Key」输入框。":
+    " — request an API key there and paste it into the “API Key” field below.",
+  试试这些: "try one of these",
+  "点「测试连接」，通过后再点「保存模型配置」。密钥只保存在这台设备的浏览器里。":
+    "Press “Test connection”; once it passes, press “Save model settings”. Keys are stored only in this device's browser.",
+  "「一键接受」不会自动接受这条；点「确认入库」会一并保存并保留待核验标记，不会丢。":
+    "One-click accept skips this row. Pressing “Confirm and save” still stores it with an unverified mark — nothing is dropped.",
+  "条证据未对齐关系仍待确认，可逐条查看或接受；确认入库时会一并保存并保留待核验标记":
+    "relation(s) with unaligned evidence stay pending; review or accept them one by one. Confirm-and-save stores them with an unverified mark",
+  "条事件没有有效日期，已记为「时间待定」入库，可稍后在日历补时间":
+    "event(s) lack a valid date; saved as date-to-be-decided. You can add a date later in the calendar",
+  "时间待定；入库后可在日历补时间，原话保留在时间表述里。":
+    "Date to be decided. After saving you can add a date in the calendar; your wording is kept.",
+  保存并继续: "Save and continue",
+  "保存这条，保留人物和日期，继续记下一条":
+    "Save this entry, keep people and date, and continue with the next one",
+  标签字号: "Label font size",
+  减小标签字号: "Decrease label font size",
+  增大标签字号: "Increase label font size",
+  具体某天: "A specific day",
+  一段时间: "A time span",
+  时间待定: "Date to be decided",
+  "时间没看懂，已记为「时间待定」，原话保留；之后可再补时间。":
+    "Could not parse that time; saved as date-to-be-decided with your wording kept. You can add a date later.",
   只记得某年: "Only remember the year",
   "日期或区间无效，请检查月份、日数和先后顺序。":
     "Invalid date or range. Check the month, day and endpoint order.",

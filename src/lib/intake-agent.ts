@@ -116,6 +116,17 @@ const EXPLICIT_RELATION_CUES: Partial<Record<RelationPredicate, RegExp>> = {
   uncle_aunt_of: /(叔|伯|姑|舅|姨|侄|甥|uncle|aunt|nephew|niece)/i,
   cousin_of: /(堂|表亲|姑表|舅表|姨表|cousin)/i,
   in_law_of: /(翁媳|婆媳|岳父|岳母|公公|婆婆|叔嫂|姑嫂|姻亲|in.?law)/i,
+  // 非亲属谓词的关键词与 relation-ontology 的标签判定保持同一套规则，
+  // 避免只凭“同一句提到两个名字”就把指令句当成关系断言。
+  clan_of: /(同宗|宗亲|族亲|族兄|族弟|clan)/i,
+  reports_to: /(汇报|直属上级|reports?to)/i,
+  manages: /(管理|领导|下属|上司|主管|manager|supervisor)/i,
+  roommate_of: /(室友|roommate)/i,
+  classmate_of: /(同学|校友|同班|classmate|schoolmate|alumni)/i,
+  colleague_of: /(前同事|同事|同僚|colleague|coworker)/i,
+  collaborates_with: /(合作|搭档|合伙|collaborat|partner)/i,
+  friend_of: /(朋友|好友|闺蜜|发小|friend)/i,
+  knows: /(熟人|认识|acquaintance|knows)/i,
 };
 
 function claimBodyWithoutEntityNames(basis: string, personNames: string[]) {
@@ -236,8 +247,14 @@ function auditModelRelations(
       .trim();
     const compactBasis = compactClaimText(basisBody);
     const basisNamesBothEndpoints = relationTextSupportsEndpoints(basisBody, relation, personNames);
+    // 依据是同义转述不算问题：只要原材料本身有同 clause 直接断言两端点关系，
+    // 就不因依据措辞与原文不完全一致而要求人工复核。
+    const materialDirectlySupports =
+      Boolean(context.sourceMaterial?.trim()) &&
+      relationTextSupportsEndpoints(context.sourceMaterial!, relation, personNames);
     if (
       context.sourceMaterial?.trim() &&
+      !materialDirectlySupports &&
       (!compactClaimText(context.sourceMaterial).includes(compactBasis) || !basisNamesBothEndpoints)
     ) {
       addIssue(relation, "所附依据含转述或指代，请结合原材料核对；原依据已保留");
@@ -245,7 +262,7 @@ function auditModelRelations(
     const predicate = inferRelationSemantics(relation.label).predicate;
     const cue = EXPLICIT_RELATION_CUES[predicate];
     const semanticBody = claimBodyWithoutEntityNames(basis, personNames);
-    if (cue && !cue.test(semanticBody)) {
+    if (cue && !materialDirectlySupports && !cue.test(semanticBody)) {
       addIssue(relation, "关系标签与所附原文不一致，可能把经第三人关联误写成直接关系");
     }
     if (

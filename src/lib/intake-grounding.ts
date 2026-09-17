@@ -530,7 +530,11 @@ function eventGrounded(event: IngestEvent, material: string) {
     if (!compact(clause).includes(normalizedTitle) || CLAUSE_NEGATION.test(clause)) return false;
     if (!supportPositiveText(clause, event.title ?? "").supported) return false;
     if (event.detail && !supportPositiveText(clause, event.detail).supported) return false;
-    if (event.date && !supportDateAnywhere(clause, event.date, event.precision ?? "day").supported)
+    if (
+      event.date &&
+      event.precision !== "unknown" &&
+      !supportDateAnywhere(clause, event.date, event.precision ?? "day").supported
+    )
       return false;
     if (event.dateEnd && !supportDateAnywhere(clause, event.dateEnd).supported) return false;
     if (event.place && !supportPositiveText(clause, event.place).supported) return false;

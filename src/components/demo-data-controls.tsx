@@ -4,12 +4,33 @@ import { toast } from "sonner";
 
 import { DemoScenarioPicker } from "@/components/demo-scenario-picker";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { facesDb } from "@/lib/face-db";
 import { clearDemoData, getDemoDataStatus } from "@/lib/demo-data";
 import { t } from "@/lib/i18n";
+
+/** 格式化后要一并清掉的本地状态；模型配置、语言与外观偏好保留。 */
+const RESET_LOCAL_KEYS = [
+  "zhimai.intake.draft.v1",
+  "zhimai.agent-runs.v1",
+  "openglass.welcomeSeen",
+  "openglass.officer",
+];
 
 export function DemoDataControls() {
   const [status, setStatus] = useState({ people: 0, relations: 0 });
   const [busy, setBusy] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
 
   const refresh = useCallback(async () => setStatus(await getDemoDataStatus()), []);
 
@@ -30,6 +51,19 @@ export function DemoDataControls() {
       toast.error(error instanceof Error ? error.message : "清除演示数据失败");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const formatArchive = async () => {
+    setResetBusy(true);
+    try {
+      await facesDb.wipeDatabase();
+      for (const key of RESET_LOCAL_KEYS) window.localStorage.removeItem(key);
+      window.sessionStorage.clear();
+      window.location.replace("/");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "格式化档案失败");
+      setResetBusy(false);
     }
   };
 
@@ -61,7 +95,36 @@ export function DemoDataControls() {
             {t("只清除合成数据")}
           </Button>
         )}
+        <Button variant="outline" onClick={() => setResetOpen(true)} disabled={resetBusy}>
+          <Trash2 className="size-4" aria-hidden="true" />
+          {t("格式化档案")}
+        </Button>
       </div>
+
+      <AlertDialog open={resetOpen} onOpenChange={setResetOpen}>
+        <AlertDialogContent data-testid="format-archive-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("格式化档案，清空全部数据？")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                "将删除所有人物、关系、事件、提醒、计划、圈层、证据、录入草稿与 AI 运行记录，回到初次打开的样子。模型配置与密钥、语言、外观偏好会保留。此操作不可撤销。",
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resetBusy}>{t("取消")}</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={resetBusy}
+              onClick={(event) => {
+                event.preventDefault();
+                void formatArchive();
+              }}
+            >
+              {resetBusy ? t("格式化中…") : t("确认格式化")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

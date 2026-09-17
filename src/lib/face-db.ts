@@ -359,13 +359,13 @@ export interface ProjectRecord {
   source?: Provenance;
 }
 
-/** 时间精度：确定到某天 / 只记得某月 / 只记得某年 / 一段时间 */
-export type DatePrecision = "day" | "month" | "year" | "range";
+/** 时间精度：确定到某天 / 只记得某月 / 只记得某年 / 一段时间 / 时间待定 */
+export type DatePrecision = "day" | "month" | "year" | "range" | "unknown";
 
 /** 个人版：日历事件（和谁、做了什么 / 要做什么） */
 export interface LifeEventRecord {
   id: string;
-  /** 起始日 yyyy-mm-dd（月精度补 -01，年精度补 -01-01），排序与定位用 */
+  /** 起始日 yyyy-mm-dd（月精度补 -01，年精度补 -01-01），排序与定位用；precision 为 unknown 时为空串 */
   date: string;
   /** 结束日 yyyy-mm-dd，仅 range 用 */
   dateEnd?: string;
@@ -2474,4 +2474,21 @@ export const facesDb = {
   putMeetingBrief: (record: MeetingBriefRecord) =>
     run<void>(MEETING_BRIEFS, "readwrite", (s) => s.put(record)),
   deleteMeetingBrief: (id: string) => run<void>(MEETING_BRIEFS, "readwrite", (s) => s.delete(id)),
+  /**
+   * 格式化档案：删除整个本地数据库（含人物、关系、事件、提醒、计划、圈层、
+   * 证据、Agent 运行记录与撤销凭据），下次打开时按当前版本重建空库。
+   * 模型配置与界面偏好存放在 localStorage，不受影响。
+   */
+  wipeDatabase: async () => {
+    const db = await openDb();
+    db.close();
+    dbPromise = null;
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(DB_NAME);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error ?? new Error("无法删除本地数据库"));
+      // 其他标签页占用连接时也会走到 blocked；继续重载即可，旧连接随标签页失效。
+      request.onblocked = () => resolve();
+    });
+  },
 };

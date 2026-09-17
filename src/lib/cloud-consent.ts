@@ -1,8 +1,12 @@
-import type { ProviderPreset } from "./vision-providers";
+import { isFreeTierPreset, isCloudProvider, type ProviderPreset } from "./vision-providers";
 
 export type CloudDataType = "文字内容" | "人物关系上下文" | "图片" | "音频";
 
 const CONSENT_KEY = "openglass.cloud-transfer-consents";
+
+const FREE_TIER_RECIPIENT = "知脉免费体验（经我们的中转服务器转给免费模型）";
+const FREE_TIER_NOTE =
+  "这是官方提供的免费额度：请求会先经过知脉的体验服务器，再由它转发给模型服务商。服务器只转发，不保存内容。额度有限、可能排队，需要更稳定的服务可以换成自己的模型。";
 
 function consentId(providerId: string, dataTypes: CloudDataType[]) {
   return `${providerId}:${[...new Set(dataTypes)].sort().join("|")}`;
@@ -21,15 +25,22 @@ function readConsents(): Set<string> {
 }
 
 function providerName(preset: ProviderPreset) {
+  if (isFreeTierPreset(preset)) return FREE_TIER_RECIPIENT;
   return preset.name || "云模型";
 }
 
-function showCloudTransferConsent(provider: string, dataTypes: CloudDataType[]) {
+function showCloudTransferConsent(provider: string, dataTypes: CloudDataType[], freeTier: boolean) {
   if (typeof document === "undefined" || !document.body) {
     if (typeof window !== "undefined" && typeof window.confirm === "function") {
-      return Promise.resolve(
-        window.confirm(`接收方：${provider}\n\n本次发送：${dataTypes.join("、")}\n\n是否继续？`),
-      );
+      const lines = [
+        `接收方：${provider}`,
+        "",
+        `本次发送：${dataTypes.join("、")}`,
+        ...(freeTier ? ["", FREE_TIER_NOTE] : []),
+        "",
+        "是否继续？",
+      ];
+      return Promise.resolve(window.confirm(lines.join("\n")));
     }
     throw new Error("云模型调用只能在浏览器中经用户确认后进行");
   }
@@ -66,7 +77,17 @@ function showCloudTransferConsent(provider: string, dataTypes: CloudDataType[]) 
           <dd class="font-medium" data-cloud-consent-types></dd>
         </div>
       </dl>
-      <div class="mt-5 flex justify-end gap-2">
+      ${
+        freeTier
+          ? `<p data-cloud-consent-note class="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 text-xs leading-relaxed text-muted-foreground">${FREE_TIER_NOTE}</p>`
+          : ""
+      }
+      <div class="mt-5 flex flex-wrap justify-end gap-2">
+        ${
+          freeTier
+            ? `<button type="button" data-cloud-consent-configure class="mr-auto rounded-lg border border-primary/50 px-4 py-2 text-sm text-primary hover:bg-primary/10">去配置自己的模型</button>`
+            : ""
+        }
         <button type="button" data-cloud-consent-cancel class="rounded-lg border border-border px-4 py-2 text-sm hover:bg-accent">取消</button>
         <button type="button" data-cloud-consent-continue class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">继续</button>
       </div>
@@ -94,6 +115,11 @@ function showCloudTransferConsent(provider: string, dataTypes: CloudDataType[]) 
       finish(false);
     };
     document.addEventListener("keydown", onKeyDown);
+    const configure = card.querySelector<HTMLButtonElement>("[data-cloud-consent-configure]");
+    configure?.addEventListener("click", () => {
+      finish(false);
+      window.location.assign("?view=models");
+    });
     cancel.addEventListener("click", () => finish(false));
     proceed.addEventListener("click", () => finish(true));
     overlay.addEventListener("click", (event) => {
@@ -105,17 +131,21 @@ function showCloudTransferConsent(provider: string, dataTypes: CloudDataType[]) 
 
 /**
  * 云模型在当前会话第一次接收某类数据前，明确告知服务商和数据类型。
- * 本地 Ollama 不经过此确认；新增数据类型时会再次确认。
+ * 本机直连的推理服务不经过此确认；新增数据类型时会再次确认。
  */
 export async function confirmCloudTransfer(preset: ProviderPreset, dataTypes: CloudDataType[]) {
-  if (preset.kind === "ollama") return;
+  if (!isCloudProvider(preset)) return;
 
   const types = [...new Set(dataTypes)];
   const id = consentId(preset.id, types);
   const accepted = readConsents();
   if (accepted.has(id)) return;
 
-  const confirmed = await showCloudTransferConsent(providerName(preset), types);
+  const confirmed = await showCloudTransferConsent(
+    providerName(preset),
+    types,
+    isFreeTierPreset(preset),
+  );
   if (!confirmed) throw new Error("已取消向云模型发送数据");
 
   accepted.add(id);

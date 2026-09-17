@@ -48,8 +48,9 @@ import { cn } from "@/lib/utils";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 const WEEK = ["一", "二", "三", "四", "五", "六", "日"];
-const PRECISIONS: DatePrecision[] = ["day", "month", "year", "range"];
+const PRECISIONS: DatePrecision[] = ["day", "month", "year", "range", "unknown"];
 const PRECISION_TABS: Record<DatePrecision, string> = {
+  unknown: "时间待定",
   day: "记得具体哪天",
   month: "只记得某月",
   year: "只记得某年",
@@ -174,7 +175,9 @@ export function CalendarPanel({
       | { kind: "event"; date: string; record: LifeEventRecord }
       | { kind: "reminder"; date: string; record: ReminderRecord };
     const sorted: TimelineItem[] = [
-      ...events.map((record): TimelineItem => ({ kind: "event", date: record.date, record })),
+      ...events.flatMap((record): TimelineItem[] =>
+        record.date ? [{ kind: "event", date: record.date, record }] : [],
+      ),
       ...reminders.flatMap((record): TimelineItem[] =>
         record.due ? [{ kind: "reminder", date: record.due, record }] : [],
       ),
@@ -186,7 +189,14 @@ export function CalendarPanel({
       arr.push(item);
       groups.set(key, arr);
     }
-    return [...groups.entries()];
+    const undated = events.filter((record) => !record.date);
+    const entries = [...groups.entries()];
+    if (undated.length)
+      entries.unshift([
+        t("时间待定"),
+        undated.map((record) => ({ kind: "event" as const, date: "", record })),
+      ]);
+    return entries;
   }, [events, reminders]);
 
   const marksFor = (date: string) => {
@@ -204,6 +214,7 @@ export function CalendarPanel({
 
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const titleRef = useRef<HTMLTextAreaElement | null>(null);
   const editingSnapshot = useRef<LifeEventRecord | null>(null);
   const newRecord = useRef<{ id: string; createdAt: number } | null>(null);
   const saveIntent = useRef<{
@@ -235,11 +246,13 @@ export function CalendarPanel({
     newRecord.current = null;
     setEditingId(event.id);
     setPrecision(precisionOf(event));
-    setSelected(event.date);
-    setYear(Number(event.date.slice(0, 4)));
-    setMonth(Number(event.date.slice(5, 7)) - 1);
+    if (event.date) {
+      setSelected(event.date);
+      setYear(Number(event.date.slice(0, 4)));
+      setMonth(Number(event.date.slice(5, 7)) - 1);
+      setMonthValue(event.date.slice(0, 7));
+    }
     setFuzzyText(precisionOf(event) === "day" ? "" : formatFuzzy(event));
-    setMonthValue(event.date.slice(0, 7));
     setTimeText(event.timeText ?? "");
     setFuzzyHint("");
     setTitle([event.title, event.detail].filter(Boolean).join("\n"));
@@ -261,12 +274,12 @@ export function CalendarPanel({
     );
   }, [edit, events, focusEventId, focusNonce]);
 
-  const add = async () => {
+  const add = async (keepContext = false) => {
     if (!title.trim() || savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
     try {
-      await addGuarded();
+      await addGuarded(keepContext);
     } catch (error) {
       toast.error(`${t("保存失败，内容已保留，请重试")}：${(error as Error).message}`);
     } finally {
@@ -275,12 +288,12 @@ export function CalendarPanel({
     }
   };
 
-  const addGuarded = async () => {
+  const addGuarded = async (keepContext = false) => {
     // The editor's baseline does not move when a list refreshes after a conflict.
     const previous = editingSnapshot.current ?? undefined;
     newRecord.current ??= { id: crypto.randomUUID(), createdAt: Date.now() };
     const recordId = previous?.id ?? newRecord.current.id;
-    let date = selected;
+    let date = precision === "unknown" ? "" : selected;
     let dateEnd: string | undefined;
     let stored: DatePrecision | undefined = precision;
     let dateText: string | undefined;
@@ -291,7 +304,9 @@ export function CalendarPanel({
         ? selected === previous.date
         : precision === "month"
           ? monthValue === previous.date.slice(0, 7)
-          : fuzzyText.trim() === formatFuzzy(previous));
+          : precision === "unknown"
+            ? previous.precision === "unknown"
+            : fuzzyText.trim() === formatFuzzy(previous));
 
     // Editing a title, participants or time must not reinterpret an old date.
     // Preserve even an implicit precision and the original relative description.
@@ -307,19 +322,19 @@ export function CalendarPanel({
       }
       date = `${monthValue}-01`;
       stored = "month";
+    } else if (precision === "unknown") {
+      // 时间待定是一等精度：先记下事件本身，日期留空，原话保存在时间说明里。
+      stored = "unknown";
+      dateText = fuzzyText.trim() || undefined;
     } else if (precision !== "day") {
       const text = fuzzyText.trim();
-      if (!text) {
-        setFuzzyHint("先写一句大概的时间，比如「去年夏天」。");
-        return;
-      }
       const explicit = parseExplicitEventDate(text);
-      if (explicit.matched && !explicit.value) {
+      if (text && explicit.matched && !explicit.value) {
         setFuzzyHint("日期或区间无效，请检查月份、日数和先后顺序。");
         return;
       }
-      let parsed = parseFuzzyLocal(text);
-      if (!parsed && preset) {
+      let parsed = text ? parseFuzzyLocal(text) : null;
+      if (!parsed && text && preset) {
         try {
           setFuzzyHint("正在整理时间…");
           parsed = normalizeFuzzy(
@@ -330,28 +345,33 @@ export function CalendarPanel({
         }
       }
       if (!parsed) {
-        setFuzzyHint("这个时间没看懂，换个说法试试，比如「2019 年秋天」。");
+        // 没写时间或没看懂时不再拦截保存：按“时间待定”入库，原话保留。
+        stored = "unknown";
+        dateText = text || undefined;
+        toast.info(t("时间没看懂，已记为「时间待定」，原话保留；之后可再补时间。"));
+      } else {
+        date = parsed.date;
+        dateEnd = parsed.dateEnd;
+        stored = parsed.precision;
+        dateText = text;
+      }
+    }
+    if (stored !== "unknown" && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      toast.error(t("请先选择有效日期"));
+      return;
+    }
+    if (stored !== "unknown") {
+      const [dateYear, dateMonth, dateDay] = date.split("-").map(Number);
+      const dateProbe = new Date(dateYear, dateMonth - 1, dateDay);
+      if (
+        dateYear < 1900 ||
+        dateProbe.getFullYear() !== dateYear ||
+        dateProbe.getMonth() !== dateMonth - 1 ||
+        dateProbe.getDate() !== dateDay
+      ) {
+        toast.error(t("请先选择有效日期"));
         return;
       }
-      date = parsed.date;
-      dateEnd = parsed.dateEnd;
-      stored = parsed.precision;
-      dateText = text;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      toast.error(t("请先选择有效日期"));
-      return;
-    }
-    const [dateYear, dateMonth, dateDay] = date.split("-").map(Number);
-    const dateProbe = new Date(dateYear, dateMonth - 1, dateDay);
-    if (
-      dateYear < 1900 ||
-      dateProbe.getFullYear() !== dateYear ||
-      dateProbe.getMonth() !== dateMonth - 1 ||
-      dateProbe.getDate() !== dateDay
-    ) {
-      toast.error(t("请先选择有效日期"));
-      return;
     }
 
     // First line is the title; the detail has its own independent limit.
@@ -415,7 +435,20 @@ export function CalendarPanel({
       await load();
       return;
     }
-    resetForm();
+    if (keepContext) {
+      // 连续记录：保留人物、日期精度与选中的日期，只清空标题、详情与时间说明。
+      editingSnapshot.current = null;
+      newRecord.current = null;
+      saveIntent.current = null;
+      setEditingId(null);
+      setTitle("");
+      setTimeText("");
+      setFuzzyText("");
+      setFuzzyHint("");
+      titleRef.current?.focus();
+    } else {
+      resetForm();
+    }
     try {
       await load();
     } catch {
@@ -863,6 +896,7 @@ export function CalendarPanel({
 
           <div className="mt-4 space-y-2 border-t border-border pt-4">
             <Textarea
+              ref={titleRef}
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               rows={3}
@@ -918,7 +952,17 @@ export function CalendarPanel({
                 </div>
               </div>
             )}
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
+              {!editingId && (
+                <Button
+                  variant="outline"
+                  onClick={() => void add(true)}
+                  disabled={!title.trim() || saving}
+                  title={t("保存这条，保留人物和日期，继续记下一条")}
+                >
+                  {saving ? t("整理中…") : t("保存并继续")}
+                </Button>
+              )}
               <Button onClick={() => void add()} disabled={!title.trim() || saving}>
                 <Plus className="size-4" aria-hidden="true" />
                 {saving ? t("整理中…") : editingId ? t("保存修改") : t("记下来")}

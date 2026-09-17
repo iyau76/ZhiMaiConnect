@@ -476,6 +476,9 @@ export const test = base.extend<{ mockNetwork: MockNetworkState }>({
           );
           localStorage.setItem("openglass.welcomeSeen", "1");
           localStorage.setItem("openglass.lang", "zh");
+          // 「知脉免费体验」默认排在第一位；这些用例模拟的是用户自己配置的接口，
+          // 所以把使用中的配置固定回 builtin-openai，请求才会走被 mock 的 /api/vision。
+          localStorage.setItem("openglass.active", "builtin-openai");
         }
       });
       page.on("dialog", (dialog) => dialog.accept());

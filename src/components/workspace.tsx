@@ -41,7 +41,7 @@ import {
 import { initTheme } from "@/lib/theme";
 import type { TodayTarget } from "@/lib/today-projection";
 import { cn } from "@/lib/utils";
-import { DEFAULT_PRESETS, type ProviderPreset } from "@/lib/vision-providers";
+import { DEFAULT_PRESETS, FREE_TIER_PRESET_ID, type ProviderPreset } from "@/lib/vision-providers";
 
 type View =
   "today" | "intake" | "people" | "reminders" | "calendar" | "plan" | "models" | "settings";
@@ -117,6 +117,7 @@ const HEADINGS: Record<
     b: "关系",
     guide: "这一页：看关系、补资料",
     points: [
+      "填名字就能建人，先建人再连关系；点一行打开人物卡补职位、部门等资料。",
       "点圆点改人物卡：生日、圈子、亲密度、喜好、送过什么礼。",
       "双箭头 ⇄ 对等关系（朋友、夫妻），单箭头 → 有方向（父母、师徒）。",
     ],
@@ -294,6 +295,9 @@ export function Workspace() {
         <div className="min-w-0 space-y-5">
           <IntakePanel
             preset={activePreset}
+            onOpenModels={() => openView("models")}
+            onOpenSettings={() => openView("settings")}
+            onUseFreeTier={() => setActiveId(FREE_TIER_PRESET_ID)}
             focusRunId={workspaceFocus?.view === "intake" ? workspaceFocus.runId : undefined}
             focusProposalId={
               workspaceFocus?.view === "intake" && workspaceFocus.recordType === "proposal"

@@ -67,6 +67,8 @@ import { auditVision, testConnection } from "@/lib/vision-client";
 import {
   KIND_LABEL,
   createPreset,
+  isFreeTierPreset,
+  isLocalEndpoint,
   supportsAudio,
   supportsVision,
   type ChatTurn,
@@ -1123,7 +1125,7 @@ export function ModelsPanel({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm font-medium">{t("模型配置")}</span>
           <div className="flex flex-wrap gap-1.5">
-            {(["openai", "gemini", "ollama"] as ProviderKind[]).map((kind) => (
+            {(["openai", "gemini"] as ProviderKind[]).map((kind) => (
               <Button key={kind} size="sm" variant="outline" onClick={() => addPreset(kind)}>
                 <Plus className="size-3.5" aria-hidden="true" />
                 {KIND_LABEL[kind].split("（")[0]}
@@ -1131,6 +1133,57 @@ export function ModelsPanel({
             ))}
           </div>
         </div>
+
+        <details className="rounded-xl border border-dashed border-border px-3 py-2 text-[11px] text-muted-foreground">
+          <summary className="cursor-pointer select-none font-medium text-foreground">
+            {t("第一次配模型？三步搞定")}
+          </summary>
+          <ol className="mt-1.5 list-inside list-decimal space-y-1 leading-relaxed">
+            <li>{t("点右上方「＋」加一套接口，常用开发平台任选一家：")}</li>
+            <li className="pl-4">
+              <a
+                href="https://open.bigmodel.cn/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline underline-offset-2"
+              >
+                智谱 https://open.bigmodel.cn/
+              </a>
+              <span className="ml-1">{t("（注册即送免费额度，手机号即可）")}</span>
+              {" · "}
+              <a
+                href="https://platform.deepseek.com/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline underline-offset-2"
+              >
+                DeepSeek https://platform.deepseek.com/
+              </a>
+              {" · "}
+              <a
+                href="https://platform.moonshot.cn/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline underline-offset-2"
+              >
+                Moonshot https://platform.moonshot.cn/
+              </a>
+              {" · "}
+              <a
+                href="https://aistudio.google.com/apikey"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline underline-offset-2"
+              >
+                Gemini https://aistudio.google.com/apikey
+              </a>
+              {t(" —— 到平台申请 API Key，粘贴到下方「API Key」输入框。")}
+            </li>
+            <li>
+              {t("点「测试连接」，通过后再点「保存模型配置」。密钥只保存在这台设备的浏览器里。")}
+            </li>
+          </ol>
+        </details>
 
         {/* 配置列表：点一下切换编辑并设为使用中，右侧可直接删除 */}
         <div className="mt-3 space-y-1.5">
@@ -1154,13 +1207,19 @@ export function ModelsPanel({
                 }}
               >
                 <span className="truncate font-medium">{item.name || t("未命名")}</span>
-                {(item.name.trim() !== KIND_LABEL[item.kind].split("（")[0] || item.model) && (
+                {isFreeTierPreset(item) ? (
                   <span className="ml-1.5 text-[11px] text-muted-foreground">
-                    {item.name.trim() !== KIND_LABEL[item.kind].split("（")[0]
-                      ? KIND_LABEL[item.kind].split("（")[0]
-                      : ""}
-                    {item.model ? ` · ${item.model}` : ""}
+                    {t("免密钥 · 官方免费额度")}
                   </span>
+                ) : (
+                  (item.name.trim() !== KIND_LABEL[item.kind].split("（")[0] || item.model) && (
+                    <span className="ml-1.5 text-[11px] text-muted-foreground">
+                      {item.name.trim() !== KIND_LABEL[item.kind].split("（")[0]
+                        ? KIND_LABEL[item.kind].split("（")[0]
+                        : ""}
+                      {item.model ? ` · ${item.model}` : ""}
+                    </span>
+                  )
                 )}
               </button>
               {item.id === activeId && (
@@ -1168,65 +1227,85 @@ export function ModelsPanel({
                   {t("使用中")}
                 </span>
               )}
-              <Button
-                size="icon"
-                variant="ghost"
-                className="size-7 shrink-0"
-                aria-label={t("删除")}
-                onClick={() => {
-                  if (presets.length <= 1) {
-                    toast.error(t("至少保留一套配置"));
-                    return;
-                  }
-                  const rest = presets.filter((preset) => preset.id !== item.id);
-                  onPresetsChange(rest);
-                  if (editing.id === item.id) setEditId(rest[0].id);
-                  if (activeId === item.id) onActiveIdChange(rest[0].id);
-                }}
-              >
-                <Trash2 className="size-3.5" aria-hidden="true" />
-              </Button>
+              {!isFreeTierPreset(item) && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-7 shrink-0"
+                  aria-label={t("删除")}
+                  onClick={() => {
+                    if (presets.length <= 1) {
+                      toast.error(t("至少保留一套配置"));
+                      return;
+                    }
+                    const rest = presets.filter((preset) => preset.id !== item.id);
+                    onPresetsChange(rest);
+                    if (editing.id === item.id) setEditId(rest[0].id);
+                    if (activeId === item.id) onActiveIdChange(rest[0].id);
+                  }}
+                >
+                  <Trash2 className="size-3.5" aria-hidden="true" />
+                </Button>
+              )}
             </div>
           ))}
         </div>
 
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs">{t("名称")}</Label>
-            <Input value={editing.name} onChange={(e) => patch({ name: e.target.value })} />
+        {isFreeTierPreset(editing) ? (
+          <div
+            data-testid="free-tier-note"
+            className="mt-3 space-y-1.5 rounded-xl border border-primary/30 bg-primary/5 p-3 text-[11px] leading-relaxed text-muted-foreground"
+          >
+            <p className="text-xs font-medium text-foreground">{t("免费体验不需要填密钥")}</p>
+            <p>
+              {t(
+                "请求会经知脉的体验服务器转给免费模型，服务器只转发、不保存内容。额度有限，忙的时候可能要排队。",
+              )}
+            </p>
+            <p>
+              {t("需要更稳定的服务，点右上方「＋」加一套自己的模型接口。免费体验不包含语音转写。")}
+            </p>
           </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">{t("模型")}</Label>
-            <Input
-              value={editing.model}
-              placeholder={
-                editing.kind === "ollama"
-                  ? "llava / qwen2.5vl"
-                  : editing.kind === "gemini"
+        ) : (
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t("名称")}</Label>
+              <Input value={editing.name} onChange={(e) => patch({ name: e.target.value })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t("模型")}</Label>
+              <Input
+                value={editing.model}
+                placeholder={
+                  editing.kind === "gemini"
                     ? "gemini-3.7-flash"
-                    : "gpt-4o-mini / deepseek-v4-flash"
-              }
-              onChange={(e) => patch({ model: e.target.value, visionVerified: false })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">{t("接口地址")}</Label>
-            <Input
-              value={editing.baseUrl}
-              placeholder={
-                editing.kind === "gemini"
-                  ? "https://generativelanguage.googleapis.com/v1beta/openai"
-                  : editing.kind === "ollama"
-                    ? "http://localhost:11434"
-                    : "https://api.deepseek.com/v1"
-              }
-              onChange={(e) => patch({ baseUrl: e.target.value, visionVerified: false })}
-            />
-          </div>
-          {editing.kind !== "ollama" && (
+                    : "gpt-4o-mini / deepseek-v4-flash / llava"
+                }
+                onChange={(e) => patch({ model: e.target.value, visionVerified: false })}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t("接口地址")}</Label>
+              <Input
+                value={editing.baseUrl}
+                placeholder={
+                  editing.kind === "gemini"
+                    ? "https://generativelanguage.googleapis.com/v1beta/openai"
+                    : "https://api.deepseek.com/v1 或本机 http://localhost:11434/v1"
+                }
+                onChange={(e) => patch({ baseUrl: e.target.value, visionVerified: false })}
+              />
+            </div>
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-2">
-                <Label className="text-xs">{t("API Key")}</Label>
+                <Label className="text-xs">
+                  {t("API Key")}
+                  {isLocalEndpoint(editing) && (
+                    <span className="ml-1.5 font-normal text-muted-foreground">
+                      {t("本机接口可不填")}
+                    </span>
+                  )}
+                </Label>
                 {editing.apiKey && (
                   <button
                     type="button"
@@ -1248,8 +1327,8 @@ export function ModelsPanel({
                 {t("未保存的密钥只在当前会话使用；点击“保存模型配置”后会保存在这个浏览器。")}
               </p>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button size="sm" onClick={handleSavePresets}>
@@ -1272,7 +1351,7 @@ export function ModelsPanel({
             )}
             {t("审查看图能力")}
           </Button>
-          {editing.kind === "openai" && (
+          {editing.kind === "openai" && !isFreeTierPreset(editing) && (
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <input
                 type="checkbox"

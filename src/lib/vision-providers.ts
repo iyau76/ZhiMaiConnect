@@ -1,10 +1,10 @@
-export type ProviderKind = "openai" | "gemini" | "ollama";
+export type ProviderKind = "openai" | "gemini";
 
 export interface ProviderPreset {
   id: string;
   name: string;
   kind: ProviderKind;
-  /** Ollama 或 OpenAI 兼容接口的 API 基址。 */
+  /** OpenAI 兼容接口的 API 基址；本机地址会直连、不经过云端。 */
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -38,11 +38,61 @@ export const DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash";
 export const KIND_LABEL: Record<ProviderKind, string> = {
   openai: "OpenAI 兼容接口",
   gemini: "Gemini 兼容接口",
-  ollama: "Ollama（本地）",
 };
 
+/** 本机或局域网内的推理服务（Ollama、LM Studio 等）由设备直连，数据不出本机。 */
+export function isLocalEndpoint(preset: Pick<ProviderPreset, "baseUrl">) {
+  let hostname: string;
+  try {
+    hostname = new URL(preset.baseUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return true;
+  return (
+    /^10\.\d+\.\d+\.\d+$/.test(hostname) ||
+    /^192\.168\.\d+\.\d+$/.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(hostname)
+  );
+}
+
 export function isCloudProvider(preset: ProviderPreset) {
-  return preset.kind === "openai" || preset.kind === "gemini";
+  return !isLocalEndpoint(preset);
+}
+
+/**
+ * 免费体验档的服务地址。客户端不持有任何模型密钥，请求打到这台中转，
+ * 由中转用服务端凭据调用免费模型。换机器时改这一行即可。
+ */
+export const FREE_TIER_RELAY_URL = "https://u714136-b2a6-8e038495.westc.seetacloud.com:8443";
+export const FREE_TIER_PRESET_ID = "zhimai-free-tier";
+
+/**
+ * 免费档在界面上是一套配置，但它不写密钥也不让改地址：用哪个模型由服务端按
+ * 有没有图片自己挑。`visionVerified` 直接置真，因为中转一定会把带图的请求
+ * 送去多模态模型，不需要用户再点一次「审查看图能力」。
+ */
+export const FREE_TIER_PRESET: ProviderPreset = {
+  id: FREE_TIER_PRESET_ID,
+  name: "知脉免费体验",
+  kind: "openai",
+  baseUrl: FREE_TIER_RELAY_URL,
+  model: "服务端自动选择",
+  apiKey: "",
+  visionVerified: true,
+};
+
+export function isFreeTierPreset(preset: Pick<ProviderPreset, "id">) {
+  return preset.id === FREE_TIER_PRESET_ID;
+}
+
+/**
+ * 免费档固定排在第一位，并且每次加载都换成上面那份权威定义，
+ * 免得用户本地残留的旧地址或旧名字把一个内置档位改坏。
+ */
+export function withFreeTierPreset(presets: ProviderPreset[]): ProviderPreset[] {
+  const rest = presets.filter((preset) => !isFreeTierPreset(preset));
+  return [FREE_TIER_PRESET, ...rest];
 }
 
 function isOfficialGeminiPreset(preset: ProviderPreset) {
@@ -74,6 +124,11 @@ export function assertVision(preset: ProviderPreset) {
 
 export function assertAudio(preset: ProviderPreset) {
   if (supportsAudio(preset)) return;
+  if (isFreeTierPreset(preset)) {
+    throw new Error(
+      "免费体验不包含语音转写。录音仍然留在本页，配置一套自己的模型之后回来就能转写。",
+    );
+  }
   throw new Error(
     `模型配置“${preset.name}”未启用 OpenAI 兼容语音转写。请换用支持 /audio/transcriptions 的接口并启用语音转写。`,
   );
@@ -104,14 +159,6 @@ export function createPreset(kind: ProviderKind): ProviderPreset {
       model: GEMINI_DEFAULT_MODEL,
     };
   }
-  if (kind === "ollama") {
-    return {
-      ...base,
-      name: "本地 Ollama",
-      baseUrl: "http://localhost:11434",
-      model: "llava",
-    };
-  }
   return {
     ...base,
     baseUrl: DEEPSEEK_OPENAI_BASE_URL,
@@ -136,14 +183,6 @@ export const DEFAULT_PRESETS: ProviderPreset[] = [
     model: GEMINI_DEFAULT_MODEL,
     apiKey: "",
   },
-  {
-    id: "builtin-ollama",
-    name: "本地 Ollama · llava",
-    kind: "ollama",
-    baseUrl: "http://localhost:11434",
-    model: "llava",
-    apiKey: "",
-  },
 ];
 
 function cloneDefault(kind: ProviderKind): ProviderPreset {
@@ -165,6 +204,15 @@ export function migrateLegacyProviderPresets(value: unknown): ProviderPreset[] {
       return kind === "openai" || kind === "gemini" || kind === "ollama";
     })
     .map((preset) => {
+      // 旧版 Ollama 专用配置转为 OpenAI 兼容接口：本机直连 /v1，能力与密钥标记原样保留。
+      if ((preset as { kind?: string }).kind === "ollama") {
+        const base = preset.baseUrl.replace(/\/+$/, "");
+        return {
+          ...preset,
+          kind: "openai" as const,
+          baseUrl: /\/v\d+$/.test(base) ? base : `${base}/v1`,
+        };
+      }
       const name = preset.name.trim();
       let model = preset.model;
       try {
@@ -189,11 +237,9 @@ export function migrateLegacyProviderPresets(value: unknown): ProviderPreset[] {
 
   const openai = retained.filter((item) => item.kind === "openai");
   const gemini = retained.filter((item) => item.kind === "gemini");
-  const ollama = retained.filter((item) => item.kind === "ollama");
   return [
     ...(openai.length ? openai : [cloneDefault("openai")]),
     ...(gemini.length ? gemini : [cloneDefault("gemini")]),
-    ...ollama,
   ];
 }
 

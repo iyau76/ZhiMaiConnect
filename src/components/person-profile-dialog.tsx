@@ -1,4 +1,4 @@
-import { Loader2, Plus, Sparkles, X } from "lucide-react";
+import { ImagePlus, Loader2, Plus, RotateCcw, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -21,6 +21,7 @@ import {
   type CustomField,
 } from "@/lib/card-template";
 import { PhotoNotes } from "@/components/photo-notes";
+import { PersonAvatar } from "@/components/person-avatar";
 import { SourceBadge } from "@/components/source-badge";
 import {
   facesDb,
@@ -81,6 +82,7 @@ export function PersonProfileDialog({
   const [template, setTemplate] = useState<CustomField[]>([]);
   const [newField, setNewField] = useState("");
   const [photos, setPhotos] = useState<PhotoNote[]>([]);
+  const [thumb, setThumb] = useState("");
   const [selectedCircleIds, setSelectedCircleIds] = useState<string[]>([]);
   const [newCircleName, setNewCircleName] = useState("");
   const [pendingCircleNames, setPendingCircleNames] = useState<string[]>([]);
@@ -96,6 +98,7 @@ export function PersonProfileDialog({
     setProfile(person.profile ?? {});
     setNote(person.note ?? "");
     setName(person.name);
+    setThumb(person.thumb ?? "");
     setPhotos(person.photos ?? []);
     setTemplate(loadTemplate());
     const circleIds = new Set(relationshipCircles.map((collection) => collection.id));
@@ -169,6 +172,41 @@ export function PersonProfileDialog({
     }
   };
 
+  /** 选图后居中裁成正方形、压到 256px 存为头像，避免档案里塞进大图。 */
+  const pickAvatar = (file: File | undefined) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const side = Math.min(image.width, image.height);
+        const canvas = document.createElement("canvas");
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          toast.error(t("浏览器不支持处理图片"));
+          return;
+        }
+        ctx.drawImage(
+          image,
+          (image.width - side) / 2,
+          (image.height - side) / 2,
+          side,
+          side,
+          0,
+          0,
+          256,
+          256,
+        );
+        setThumb(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      image.onerror = () => toast.error(t("这张图片读不出来，换一张试试"));
+      image.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const save = async () => {
     if (!person) return;
     setSaving(true);
@@ -188,6 +226,7 @@ export function PersonProfileDialog({
             ...base,
             name: name.trim() || base.name,
             note,
+            thumb,
             profile: { ...profile, closeness: normalizeCloseness(profile.closeness) },
             rawProfileText: raw,
             photos,
@@ -333,6 +372,43 @@ export function PersonProfileDialog({
         </DialogHeader>
 
         <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <PersonAvatar
+              name={name || person?.name || ""}
+              id={person?.id ?? ""}
+              thumb={thumb || undefined}
+              className="size-16 text-xl"
+            />
+            <div className="flex flex-wrap gap-2">
+              <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent">
+                <ImagePlus className="size-3.5" aria-hidden="true" />
+                {t("换头像")}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  data-testid="person-avatar-input"
+                  onChange={(event) => {
+                    pickAvatar(event.target.files?.[0]);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+              {thumb && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setThumb("")}
+                >
+                  <RotateCcw className="size-3.5" aria-hidden="true" />
+                  {t("恢复默认头像")}
+                </Button>
+              )}
+            </div>
+          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="person-profile-name" className="text-xs text-muted-foreground">
               {t("姓名")}

@@ -203,6 +203,18 @@ function upsert<T>(rows: T[], item: T, key: (value: T) => string) {
   else rows.push(item);
 }
 
+function candidateDisambiguation(candidate: ResolvedRecordCandidate): string {
+  if (candidate.domain !== "person") return "";
+  if (candidate.source === "workspace") return "本次录入";
+  const record = candidate.record as PersonRecord | undefined;
+  return (
+    record?.profile?.contact ||
+    record?.profile?.org ||
+    record?.profile?.title ||
+    candidate.id.slice(0, 8)
+  );
+}
+
 function issueFromResolution(
   taskId: string,
   path: string,
@@ -217,10 +229,10 @@ function issueFromResolution(
     code: resolution.status === "ambiguous" ? "ambiguous" : "missing",
     message: resolution.reason,
     path,
-    candidates: resolution.candidates.map((candidate) => ({
-      id: candidate.id,
-      label: candidate.label,
-    })),
+    candidates: resolution.candidates.map((candidate) => {
+      const hint = candidateDisambiguation(candidate);
+      return { id: candidate.id, label: hint ? `${candidate.label}（${hint}）` : candidate.label };
+    }),
   };
 }
 

@@ -168,7 +168,7 @@ export interface IngestEvent extends IngestAuditFields {
   /** Exact temporal phrase copied from the source for deterministic local normalization. */
   timeText?: string;
   dateEnd?: string;
-  precision?: "day" | "month" | "year" | "range";
+  precision?: "day" | "month" | "year" | "range" | "unknown";
   place?: string;
   people?: string[];
   peopleDraftIds?: Array<string | undefined>;
@@ -368,7 +368,7 @@ export const ingestEventSchema = z
     date: shortText,
     timeText: shortText,
     dateEnd: shortText,
-    precision: z.enum(["day", "month", "year", "range"]).optional(),
+    precision: z.enum(["day", "month", "year", "range", "unknown"]).optional(),
     place: shortText,
     people: stringList,
     kind: shortText,

@@ -24,6 +24,17 @@ function event(overrides: Partial<LifeEventRecord> = {}): LifeEventRecord {
   };
 }
 
+describe("unknown-date events", () => {
+  it("keeps the original wording and stays off every date projection", () => {
+    const undated = event({ date: "", precision: "unknown", dateText: "时间还没定下来" });
+    expect(formatFuzzy(undated)).toBe("时间还没定下来");
+    expect(formatFuzzy(event({ date: "", precision: "unknown" }))).toBe("时间待定");
+    expect(eventSpan(undated)).toEqual({ start: "", end: "" });
+    expect(touchesMonth(undated, "2026-09")).toBe(false);
+    expect(isExact(undated)).toBe(false);
+  });
+});
+
 describe("fuzzy event spans", () => {
   it("treats legacy events without precision as exact days", () => {
     const row = event();

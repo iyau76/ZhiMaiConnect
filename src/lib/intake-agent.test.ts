@@ -122,6 +122,52 @@ describe("intake agent semantic path", () => {
     expect(askModelMock).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts a paraphrased quote when the material itself states the relation directly", async () => {
+    askModelMock.mockImplementationOnce(
+      answer({
+        version: 1,
+        type: "semantic_plan",
+        tasks: [
+          ...["詹姆", "莉莉"].map((name) => ({
+            id: name,
+            domain: "person",
+            intent: "create",
+            target: { kind: "person", name },
+            changes: {},
+          })),
+          {
+            id: "classmates",
+            domain: "relation",
+            intent: "create",
+            target: {
+              kind: "relation",
+              from: { kind: "person", name: "詹姆" },
+              to: { kind: "person", name: "莉莉" },
+            },
+            changes: {
+              label: "大学同学",
+              basis: "原文：詹姆和莉莉在大学时是同班同学",
+            },
+          },
+        ],
+      }),
+    );
+    const sourceMaterial = "詹姆与莉莉在大学期间是同班同学。周末两人一起泡实验室。";
+    const result = await runIntakeAgent({
+      preset,
+      extractionPrompt: sourceMaterial,
+      sourceMaterial,
+      persons: [],
+      relations: [],
+      events: [],
+      includeArchive: true,
+    });
+
+    expect(result.relations?.[0]._relationChecked).toBe(true);
+    expect(result.relations?.[0]._relationReason).toContain("已与本次材料对齐");
+    expect(askModelMock).toHaveBeenCalledTimes(1);
+  });
+
   it("asks for one semantic plan without exposing archive IDs or tool-writing instructions", async () => {
     askModelMock.mockImplementationOnce(async (...args: unknown[]) => {
       const prompt = String(args[1]);

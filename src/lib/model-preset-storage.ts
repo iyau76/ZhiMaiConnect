@@ -1,6 +1,7 @@
 import {
   DEFAULT_PRESETS,
   migrateLegacyProviderPresets,
+  withFreeTierPreset,
   type ProviderPreset,
 } from "./vision-providers";
 
@@ -41,7 +42,7 @@ export function loadSavedModelPresets(storage: ReadableStorage): ProviderPreset[
   } catch {
     parsed = DEFAULT_PRESETS;
   }
-  const configured = migrateLegacyProviderPresets(parsed);
+  const configured = withFreeTierPreset(migrateLegacyProviderPresets(parsed));
   const savedKeys = readKeyMap(storage, SAVED_API_KEYS_KEY);
   return configured.map((preset) => ({
     ...preset,

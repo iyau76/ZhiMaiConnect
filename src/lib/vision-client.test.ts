@@ -108,31 +108,33 @@ describe("browser-side vision SSE decoding", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("uses Ollama JSON mode without streaming for structured model rounds", async () => {
-    const ollamaPreset: ProviderPreset = {
-      id: "ollama-test",
-      name: "Ollama test",
-      kind: "ollama",
-      baseUrl: "http://localhost:11434",
+  it("calls local OpenAI-compatible endpoints directly without cloud consent", async () => {
+    const localPreset: ProviderPreset = {
+      id: "local-test",
+      name: "本机推理",
+      kind: "openai",
+      baseUrl: "http://localhost:11434/v1",
       apiKey: "",
       model: "qwen3",
     };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      expect(String(input)).toBe("http://localhost:11434/api/chat");
+      expect(String(input)).toBe("http://localhost:11434/v1/chat/completions");
       const payload = JSON.parse(String(init?.body)) as {
         stream?: unknown;
-        format?: unknown;
-        options?: Record<string, unknown>;
+        response_format?: unknown;
+        max_tokens?: unknown;
+        temperature?: unknown;
       };
       expect(payload.stream).toBe(false);
-      expect(payload.format).toBe("json");
-      expect(payload.options).toEqual({ num_predict: 1_500, temperature: 0 });
-      return Response.json({ message: { content: '{"type":"final"}' } });
+      expect(payload.response_format).toEqual({ type: "json_object" });
+      expect(payload.max_tokens).toBe(1_500);
+      expect(payload.temperature).toBe(0);
+      return Response.json({ choices: [{ message: { content: '{"type":"final"}' } }] });
     });
     const chunks: string[] = [];
 
     await askModel(
-      ollamaPreset,
+      localPreset,
       "返回协议对象",
       null,
       [],
@@ -143,6 +145,7 @@ describe("browser-side vision SSE decoding", () => {
 
     expect(chunks).toEqual(['{"type":"final"}']);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-testid="cloud-transfer-consent"]')).toBeNull();
   });
 
   it("rejects an empty structured response with a stable transport code", async () => {

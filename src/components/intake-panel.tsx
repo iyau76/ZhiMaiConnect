@@ -152,8 +152,11 @@ import { resolveSavedAgentBudget } from "@/lib/agent-observability";
 import { LocalAgentSettingsStore } from "@/lib/agent-settings";
 import { MutationCommitCoordinator } from "@/lib/mutation-commit-coordinator";
 import { projectAgentRun, type AgentRun } from "@/lib/agent-run-log";
-import { providerPresetFingerprint, type ProviderPreset } from "@/lib/vision-providers";
-
+import {
+  isFreeTierPreset,
+  providerPresetFingerprint,
+  type ProviderPreset,
+} from "@/lib/vision-providers";
 /** 一个人物档案里希望齐全的字段 */
 const REQUIRED: Array<{ key: keyof DraftPerson; zh: string; en: string }> = [
   { key: "relation", zh: "和我的关系", en: "relationship to me" },
@@ -626,11 +629,18 @@ export function IntakePanel({
   focusRunId,
   focusProposalId,
   focusNonce,
+  onOpenModels,
+  onOpenSettings,
+  onUseFreeTier,
 }: {
   preset: ProviderPreset;
   focusRunId?: string;
   focusProposalId?: string;
   focusNonce?: number;
+  onOpenModels?: () => void;
+  onOpenSettings?: () => void;
+  /** 切到「知脉免费体验」档，由上层改当前使用中的配置 */
+  onUseFreeTier?: () => void;
 }) {
   // Keep the first client render identical to SSR; restore browser-only draft
   // state after hydration to avoid rendering localStorage data on one side only.
@@ -639,6 +649,14 @@ export function IntakePanel({
   const [draft, setDraft] = useState<Draft | null>(null);
   const job = useSyncExternalStore(subscribeIntakeJob, getIntakeJob, getIntakeJob);
   const busy = job.busy;
+  const [configIssue, setConfigIssue] = useState<string | null>(null);
+  const [proposalHighlightNonce, setProposalHighlightNonce] = useState(0);
+
+  useEffect(() => {
+    if (!proposalHighlightNonce) return;
+    const timer = window.setTimeout(() => setProposalHighlightNonce(0), 1800);
+    return () => window.clearTimeout(timer);
+  }, [proposalHighlightNonce]);
   const [saving, setSaving] = useState(false);
   const [undoing, setUndoing] = useState(false);
   const [latestBatch, setLatestBatch] = useState<IntakeUndoBatch | null>(() =>
@@ -1215,6 +1233,7 @@ export function IntakePanel({
   /** 交给模块层跑：切到别的页签也继续整理，回来自动显示结果 */
   const organize = async (extra?: string, resumeState?: IntakeSessionState) => {
     hydrationGeneration.current += 1;
+    setConfigIssue(null);
     const effectiveExtra = resumeState?.extra ?? extra ?? null;
     const fullText = effectiveExtra ? `${raw}\n\n${effectiveExtra}` : raw;
     if (!fullText.trim()) {
@@ -1580,6 +1599,10 @@ export function IntakePanel({
     } else if (job.error) {
       const message = job.error;
       claimIntakeJob();
+      if (message.includes("还没填 API Key") || message.includes("还没填接口地址")) {
+        setConfigIssue(message);
+        return;
+      }
       toast.error(message);
     }
   }, [existingEvents, existingPeople, job, peopleLoaded, proposalArtifactsLoaded]);
@@ -2348,7 +2371,7 @@ export function IntakePanel({
     );
     toast.success(
       unresolvedRelationCount > 0
-        ? `${t("已接受来源对齐的待确认条目")}；${unresolvedRelationCount} ${t("条证据未对齐关系仍待确认，可逐条查看或接受")}`
+        ? `${t("已接受来源对齐的待确认条目")}；${unresolvedRelationCount} ${t("条证据未对齐关系仍待确认，可逐条查看或接受；确认入库时会一并保存并保留待核验标记")}`
         : t("已接受全部来源对齐的待确认条目"),
     );
     setAcceptAllOpen(false);
@@ -2427,6 +2450,8 @@ export function IntakePanel({
     }
     if (proposalEntryId) {
       toast.info(t("请先批准或放弃圈层变更，再保存人物与事件草稿"));
+      proposalRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setProposalHighlightNonce((nonce) => nonce + 1);
       return;
     }
     const commitDraft = structuredClone(draft);
@@ -2452,16 +2477,23 @@ export function IntakePanel({
         }`,
       );
     }
-    const invalidEvent = (commitDraft.events ?? []).find(
+    // 事件没有有效日期不阻塞入库：降级为「时间待定」，原话留在时间表述里，稍后可在日历补。
+    const undatedEvents = (commitDraft.events ?? []).filter(
       (item) =>
         item.title?.trim() &&
         (!isValidIsoDate(item.date) ||
           (item.precision === "range" &&
             (!isValidIsoDate(item.dateEnd) || (item.dateEnd ?? "") < (item.date ?? "")))),
     );
-    if (invalidEvent) {
-      toast.error(`${t("请为事件填写有效日期")}：${invalidEvent.title}`);
-      return;
+    for (const item of undatedEvents) {
+      item.date = "";
+      item.dateEnd = undefined;
+      item.precision = "unknown";
+    }
+    if (undatedEvents.length) {
+      toast.info(
+        `${undatedEvents.length} ${t("条事件没有有效日期，已记为「时间待定」入库，可稍后在日历补时间")}`,
+      );
     }
     const invalidReminder = (commitDraft.reminders ?? []).find(
       (item) => item.title?.trim() && item.due && !isValidIsoDate(item.due),
@@ -2931,8 +2963,8 @@ export function IntakePanel({
       for (const item of commitDraft.events ?? []) {
         const title = (item.title ?? "").trim();
         const date = (item.date ?? "").trim();
-        if (!title || !date) continue;
-        const precision = (["day", "month", "year", "range"] as const).includes(
+        if (!title || (!date && item.precision !== "unknown")) continue;
+        const precision = (["day", "month", "year", "range", "unknown"] as const).includes(
           item.precision as "day",
         )
           ? item.precision
@@ -3194,6 +3226,37 @@ export function IntakePanel({
     (person) => person.name?.trim() && !person.targetPersonId,
   );
 
+  /**
+   * 「用免费体验试试」：先把档位切过去，等它真的生效了再自动重跑一次整理，
+   * 用户不用回头再点一遍主按钮。如果已经在免费档上，直接重跑。
+   */
+  const pendingFreeTierRun = useRef(false);
+  /** organize 每次渲染都会重建，用 ref 接住它，避免把它塞进依赖数组引发重复触发。 */
+  const organizeRef = useRef(organize);
+  useEffect(() => {
+    organizeRef.current = organize;
+  });
+
+  useEffect(() => {
+    if (!pendingFreeTierRun.current || !isFreeTierPreset(preset)) return;
+    pendingFreeTierRun.current = false;
+    void organizeRef.current();
+  }, [preset]);
+
+  const retryWithFreeTier = () => {
+    setConfigIssue(null);
+    if (isFreeTierPreset(preset)) {
+      void organize();
+      return;
+    }
+    if (!onUseFreeTier) {
+      toast.error(t("请到「AI 助理」页把「知脉免费体验」设为使用中的配置"));
+      return;
+    }
+    pendingFreeTierRun.current = true;
+    onUseFreeTier();
+  };
+
   return (
     <section
       className="flex min-w-0 flex-col gap-5"
@@ -3215,6 +3278,100 @@ export function IntakePanel({
               onClick={confirmAcceptAllPendingItems}
             >
               {t("确认接受")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={Boolean(configIssue)}
+        onOpenChange={(open) => {
+          if (!open) setConfigIssue(null);
+        }}
+      >
+        <AlertDialogContent data-testid="intake-config-dialog" className="max-w-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("先选一个模型，AI 才能开始整理")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("你写的内容还留在原处，配好之后回来点同一个按钮就行。")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
+              <p className="text-sm font-medium">{t("知脉免费体验")}</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                {t(
+                  "不用注册、不用填密钥，现在就能用。请求会经知脉的体验服务器转给免费模型，服务器只转发、不保存内容；额度有限，忙的时候可能要排队。",
+                )}
+              </p>
+              <Button
+                size="sm"
+                className="mt-2.5 rounded-full"
+                data-testid="intake-use-free-tier"
+                onClick={retryWithFreeTier}
+              >
+                <Sparkles className="size-3.5" aria-hidden="true" />
+                {t("用免费体验试试")}
+              </Button>
+            </div>
+
+            <details
+              className="rounded-xl border border-border p-3 text-[11px]"
+              data-testid="intake-config-help"
+            >
+              <summary className="cursor-pointer select-none font-medium">
+                {t("不想用免费额度？自己配一个，大概三分钟")}
+              </summary>
+              <ol className="mt-2 list-inside list-decimal space-y-1 leading-relaxed text-muted-foreground">
+                <li>{t("挑一家平台注册，拿到 API Key：")}</li>
+                <li className="pl-4">
+                  <a
+                    href="https://open.bigmodel.cn/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary underline underline-offset-2"
+                  >
+                    智谱 https://open.bigmodel.cn/
+                  </a>
+                  <span className="ml-1">{t("（注册即送免费额度）")}</span>
+                  {" · "}
+                  <a
+                    href="https://platform.deepseek.com/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary underline underline-offset-2"
+                  >
+                    DeepSeek https://platform.deepseek.com/
+                  </a>
+                  {" · "}
+                  <a
+                    href="https://platform.moonshot.cn/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary underline underline-offset-2"
+                  >
+                    Moonshot https://platform.moonshot.cn/
+                  </a>
+                </li>
+                <li>
+                  {t(
+                    "回到「AI 助理」页，把 Key 粘进「API Key」，点「测试连接」，通过后保存。密钥只存在这台设备上。",
+                  )}
+                </li>
+              </ol>
+            </details>
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("先不整理")}</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="intake-open-models"
+              onClick={() => {
+                if (onOpenModels) onOpenModels();
+                else window.location.assign("?view=models");
+              }}
+            >
+              {t("去配置自己的模型")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3245,12 +3402,6 @@ export function IntakePanel({
             "不用一格一格填表。把你知道的人和事一口气写下来，人物、关系、待办会自动拆好，缺的内容会提醒你补。",
           )}
         </p>
-        <ul className="mt-2 hidden min-h-16 list-inside list-disc space-y-1 pr-32 text-[11px] text-muted-foreground md:block">
-          <li>
-            {t("写人：小雨，大学室友，3 月 12 日生日，爱喝手冲咖啡、不吃香菜，现在在杭州做产品。")}
-          </li>
-          <li>{t("写待办：下周去看外婆，顺便帮她换手机卡，5 月 30 日前。")}</li>
-        </ul>
 
         <Textarea
           aria-label={t("录入材料")}
@@ -3264,6 +3415,7 @@ export function IntakePanel({
 
         <RelationshipSamplePicker
           className="mt-3 hidden md:block"
+          onOpenSettings={onOpenSettings}
           disabled={
             busy ||
             !!reading ||
@@ -3615,7 +3767,11 @@ export function IntakePanel({
         <section
           ref={proposalRef}
           data-proposal-id={proposalEntryId ?? undefined}
-          className="space-y-3 rounded-2xl border border-primary/40 bg-primary/5 p-4"
+          className={cn(
+            "space-y-3 rounded-2xl border border-primary/40 bg-primary/5 p-4 transition-shadow",
+            proposalHighlightNonce > 0 &&
+              "ring-2 ring-primary ring-offset-2 ring-offset-background",
+          )}
           data-testid="intake-formal-proposal"
         >
           <div>
@@ -3957,15 +4113,12 @@ export function IntakePanel({
                   ))}
                 </div>
                 {(() => {
-                  const unresolvedIdentity = !person.targetPersonId;
-                  const unverifiedGrounding = Object.values(person._fieldGrounding ?? {}).some(
-                    (detail) => detail?.status === "unverified",
-                  );
+                  const missingCount = missingOf(person).length;
                   return (
                     <ReviewFold
                       title={t("详细字段")}
                       stateKey={`person-detail:${person._draftId ?? index}`}
-                      defaultOpen={unresolvedIdentity || unverifiedGrounding}
+                      count={missingCount || undefined}
                     >
                       <div className="mt-2 grid gap-2 sm:grid-cols-2">
                         {(
@@ -4409,6 +4562,8 @@ export function IntakePanel({
                       {relation._relationChecked === false && relation._relationReason && (
                         <p className="text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
                           {relation._relationReason}
+                          {relation._audit?.confirmationStatus !== "accepted" &&
+                            ` ${t("「一键接受」不会自动接受这条；点「确认入库」会一并保存并保留待核验标记，不会丢。")}`}
                         </p>
                       )}
                       <Input
@@ -4505,7 +4660,11 @@ export function IntakePanel({
                     </button>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    {item.precision === "year" ? (
+                    {item.precision === "unknown" ? (
+                      <p className="self-center text-[11px] text-muted-foreground">
+                        {t("时间待定；入库后可在日历补时间，原话保留在时间表述里。")}
+                      </p>
+                    ) : item.precision === "year" ? (
                       <Input
                         type="number"
                         min={1900}
@@ -4550,11 +4709,13 @@ export function IntakePanel({
                         patchEvent(index, {
                           precision,
                           date:
-                            precision === "year" && current
-                              ? `${current.slice(0, 4)}-01-01`
-                              : precision === "month" && current
-                                ? `${current.slice(0, 7)}-01`
-                                : current,
+                            precision === "unknown"
+                              ? ""
+                              : precision === "year" && current
+                                ? `${current.slice(0, 4)}-01-01`
+                                : precision === "month" && current
+                                  ? `${current.slice(0, 7)}-01`
+                                  : current,
                           dateEnd: precision === "range" ? item.dateEnd : undefined,
                         });
                       }}
@@ -4565,6 +4726,7 @@ export function IntakePanel({
                       <option value="month">{t("只确定到月")}</option>
                       <option value="year">{t("只确定到年")}</option>
                       <option value="range">{t("时间范围")}</option>
+                      <option value="unknown">{t("时间待定")}</option>
                     </select>
                     {item.precision === "range" && (
                       <Input

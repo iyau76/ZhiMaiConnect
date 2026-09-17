@@ -7,7 +7,7 @@ import { facesDb } from "@/lib/face-db";
 import { getLang, t } from "@/lib/i18n";
 import { hasSavedApiKey } from "@/lib/model-preset-storage";
 import { cn } from "@/lib/utils";
-import type { ProviderPreset } from "@/lib/vision-providers";
+import { isLocalEndpoint, type ProviderPreset } from "@/lib/vision-providers";
 
 interface CheckResult {
   name: string;
@@ -65,7 +65,8 @@ export function PreflightPanel({ preset }: { preset: ProviderPreset }) {
 
     const modelReady =
       Boolean(preset.model.trim()) &&
-      (preset.kind === "ollama" || Boolean(preset.baseUrl.trim() && preset.apiKey.trim()));
+      Boolean(preset.baseUrl.trim()) &&
+      (isLocalEndpoint(preset) || Boolean(preset.apiKey.trim()));
     next.push({
       name: en ? "Current model setup" : "当前模型配置",
       ok: modelReady,

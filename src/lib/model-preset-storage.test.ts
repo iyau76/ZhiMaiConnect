@@ -10,7 +10,7 @@ import {
   saveModelPresets,
   saveSessionApiKeys,
 } from "./model-preset-storage";
-import { DEFAULT_PRESETS } from "./vision-providers";
+import { DEFAULT_PRESETS, FREE_TIER_PRESET_ID } from "./vision-providers";
 
 function memoryStorage() {
   const values = new Map<string, string>();
@@ -21,6 +21,15 @@ function memoryStorage() {
 }
 
 describe("model preset storage", () => {
+  it("offers the official free tier first even for browsers that never saved a preset", () => {
+    const presets = loadSavedModelPresets(memoryStorage());
+
+    expect(presets[0]!.id).toBe(FREE_TIER_PRESET_ID);
+    // 免费档不需要密钥，所以它不能出现在任何密钥表里。
+    expect(presets[0]!.apiKey).toBe("");
+    expect(presets.map((preset) => preset.id)).toContain("builtin-openai");
+  });
+
   it("keeps edited keys in the current session until the user explicitly saves", () => {
     const local = memoryStorage();
     const session = memoryStorage();
