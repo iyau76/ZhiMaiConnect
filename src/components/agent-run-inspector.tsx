@@ -36,11 +36,13 @@ import {
   type AgentStepStatus,
 } from "@/lib/agent-run-log";
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 
 export interface AgentRunInspectorLabels {
   details: string;
   copyRun: string;
   copied: string;
+  copyFailed: string;
   copyStep: string;
   close: string;
   round: (round: number) => string;
@@ -63,6 +65,7 @@ const DEFAULT_LABELS: AgentRunInspectorLabels = {
   details: "运行详情",
   copyRun: "复制运行 JSON",
   copied: "已复制",
+  copyFailed: "复制失败",
   copyStep: "复制本轮 JSON",
   close: "关闭运行详情",
   round: (round) => `第 ${round} 轮`,
@@ -196,21 +199,6 @@ function compactDuration(value: number) {
   return `${minutes}m ${seconds}s`;
 }
 
-async function copyText(value: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  textarea.remove();
-}
-
 function StepStatusIcon({ status }: { status: AgentStepStatus }) {
   if (status === "failed") return <XCircle className="size-3.5 text-destructive" aria-hidden />;
   if (status === "completed") {
@@ -232,7 +220,7 @@ function AgentStepRow({
   labels: AgentRunInspectorLabels;
   redactKeys: readonly string[];
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const kind = STEP_KIND[step.kind];
   const Icon = kind.icon;
   const status = step.status ?? "completed";
@@ -244,9 +232,9 @@ function AgentStepRow({
       : undefined);
 
   const handleCopy = async () => {
-    await copyText(jsonText(step, redactKeys));
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1_500);
+    const ok = await copyText(jsonText(step, redactKeys));
+    setCopyState(ok ? "copied" : "failed");
+    window.setTimeout(() => setCopyState("idle"), 1_500);
   };
 
   return (
@@ -315,12 +303,18 @@ function AgentStepRow({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-[10px] text-muted-foreground">{labels.redactionNote}</p>
               <Button type="button" size="sm" variant="outline" onClick={() => void handleCopy()}>
-                {copied ? (
+                {copyState === "copied" ? (
                   <Check className="size-3.5" aria-hidden />
+                ) : copyState === "failed" ? (
+                  <XCircle className="size-3.5" aria-hidden />
                 ) : (
                   <Clipboard className="size-3.5" aria-hidden />
                 )}
-                {copied ? labels.copied : labels.copyStep}
+                {copyState === "copied"
+                  ? labels.copied
+                  : copyState === "failed"
+                    ? labels.copyFailed
+                    : labels.copyStep}
               </Button>
             </div>
           </div>
@@ -336,7 +330,7 @@ export function AgentRunInspector({
   labels: labelsOverride,
   redactKeys = [],
 }: AgentRunInspectorProps) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const labels = useMemo(() => ({ ...DEFAULT_LABELS, ...labelsOverride }), [labelsOverride]);
   const status = RUN_STATUS[run.status];
   const rounds = roundCount(run);
@@ -358,9 +352,9 @@ export function AgentRunInspector({
   }, [run.steps]);
 
   const handleCopy = async () => {
-    await copyText(jsonText(run, redactKeys));
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1_500);
+    const ok = await copyText(jsonText(run, redactKeys));
+    setCopyState(ok ? "copied" : "failed");
+    window.setTimeout(() => setCopyState("idle"), 1_500);
   };
 
   return (
@@ -449,16 +443,26 @@ export function AgentRunInspector({
 
         <DialogFooter className="shrink-0 flex-row items-center justify-between gap-2 border-t border-border px-4 py-3 sm:px-5">
           <span className="min-w-0 text-[10px] text-muted-foreground" aria-live="polite">
-            {copied ? labels.copied : labels.redactionNote}
+            {copyState === "copied"
+              ? labels.copied
+              : copyState === "failed"
+                ? labels.copyFailed
+                : labels.redactionNote}
           </span>
           <div className="flex shrink-0 items-center gap-2">
             <Button type="button" size="sm" variant="outline" onClick={() => void handleCopy()}>
-              {copied ? (
+              {copyState === "copied" ? (
                 <Check className="size-3.5" aria-hidden />
+              ) : copyState === "failed" ? (
+                <XCircle className="size-3.5" aria-hidden />
               ) : (
                 <Clipboard className="size-3.5" aria-hidden />
               )}
-              {copied ? labels.copied : labels.copyRun}
+              {copyState === "copied"
+                ? labels.copied
+                : copyState === "failed"
+                  ? labels.copyFailed
+                  : labels.copyRun}
             </Button>
             <DialogClose asChild>
               <Button type="button" size="sm">

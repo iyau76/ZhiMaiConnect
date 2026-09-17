@@ -1111,6 +1111,7 @@ const EN: Record<string, string> = {
   "依据本地节日表生成；发送前请自行确认语气与对象":
     "Based on the local festival calendar; review tone and recipient before sending.",
   "已复制；系统不会自动发送": "Copied; the system will not send it automatically",
+  "复制失败，请手动选择文本": "Copy failed; select the text manually",
   复制: "Copy",
   长期未联系: "Out of touch",
   "暂无超过 90 天未互动的人物；这里只依据本地共同事件记录计算。":

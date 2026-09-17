@@ -155,7 +155,10 @@ app.whenReady().then(() => {
     }
   });
   window.webContents.session.setPermissionRequestHandler((contents, permission, callback) => {
-    callback(trusted(contents.getURL()) && ["media", "fullscreen"].includes(permission));
+    callback(
+      trusted(contents.getURL()) &&
+        ["media", "fullscreen", "clipboard-sanitized-write"].includes(permission),
+    );
   });
   window.webContents.on("destroyed", () => {
     for (const controller of requests.values()) controller.abort();

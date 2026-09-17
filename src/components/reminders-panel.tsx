@@ -50,6 +50,7 @@ import {
 import { getLang, t } from "@/lib/i18n";
 import { buildReminderOutcome } from "@/lib/reminder-outcome";
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import { blessingPrompt, upcoming, todayStr, type UpcomingItem } from "@/lib/personal";
 import {
   rankCandidates,
@@ -806,8 +807,10 @@ export function RemindersPanel({
                           size="sm"
                           variant="ghost"
                           onClick={() => {
-                            void navigator.clipboard.writeText(answer.text);
-                            toast.success(t("已复制；系统不会自动发送"));
+                            void copyText(answer.text).then((copied) => {
+                              if (copied) toast.success(t("已复制；系统不会自动发送"));
+                              else toast.error(t("复制失败，请手动选择文本"));
+                            });
                           }}
                         >
                           <Clipboard className="size-3.5" aria-hidden="true" />
@@ -1236,8 +1239,10 @@ export function RemindersPanel({
                 size="sm"
                 variant="ghost"
                 onClick={() => {
-                  void navigator.clipboard.writeText(askAnswer);
-                  toast.success(t("已复制，可继续编辑后自行发送"));
+                  void copyText(askAnswer).then((copied) => {
+                    if (copied) toast.success(t("已复制，可继续编辑后自行发送"));
+                    else toast.error(t("复制失败，请手动选择文本"));
+                  });
                 }}
               >
                 <Clipboard className="size-3.5" aria-hidden="true" />
