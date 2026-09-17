@@ -44,6 +44,8 @@ function event(
 describe("rankCandidates", () => {
   it("clamps the recommendation candidate limit to the supported range", () => {
     expect(normalizeRecommendationCandidateLimit(undefined)).toBe(3);
+    expect(normalizeRecommendationCandidateLimit(null)).toBe(3);
+    expect(normalizeRecommendationCandidateLimit("")).toBe(3);
     expect(normalizeRecommendationCandidateLimit("5")).toBe(5);
     expect(normalizeRecommendationCandidateLimit(0)).toBe(1);
     expect(normalizeRecommendationCandidateLimit(99)).toBe(10);

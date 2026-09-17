@@ -56,6 +56,9 @@ export const DEFAULT_RECOMMENDATION_CANDIDATE_LIMIT = 3;
 
 /** Clamp a user-selected candidate limit to the range the local ranker supports. */
 export function normalizeRecommendationCandidateLimit(value: unknown): number {
+  if (value === null || value === undefined || value === "") {
+    return DEFAULT_RECOMMENDATION_CANDIDATE_LIMIT;
+  }
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_RECOMMENDATION_CANDIDATE_LIMIT;
   return Math.min(10, Math.max(1, Math.round(parsed)));
