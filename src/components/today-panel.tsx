@@ -20,7 +20,7 @@ import {
   indexedDbMutationArtifactRepository,
 } from "@/lib/agent-run-ledger";
 import { facesDb } from "@/lib/face-db";
-import { t } from "@/lib/i18n";
+import { t, useLang } from "@/lib/i18n";
 import { todayStr } from "@/lib/personal";
 import {
   projectToday,
@@ -197,7 +197,9 @@ export function TodayPanel({ onOpenIntake, onOpenTarget, onPrepareMeeting }: Tod
       projection.recent.length,
     [projection],
   );
-  const today = new Intl.DateTimeFormat(undefined, {
+  // 用应用自己的语言排版日期；跟着浏览器 locale 走会在英文界面里冒出「9月18日星期五」。
+  const lang = useLang();
+  const today = new Intl.DateTimeFormat(lang === "en" ? "en-US" : "zh-CN", {
     month: "long",
     day: "numeric",
     weekday: "long",
@@ -211,13 +213,13 @@ export function TodayPanel({ onOpenIntake, onOpenTarget, onPrepareMeeting }: Tod
             <p className="text-[11px] text-muted-foreground">{today}</p>
             <h2 className="mt-1 font-display text-2xl tracking-tight">
               {projection.urgent.length > 0
-                ? `${projection.urgent.length} 件事值得先看`
-                : "今天可以从一条记录开始"}
+                ? `${projection.urgent.length} ${t("件事值得先看")}`
+                : t("今天可以从一条记录开始")}
             </h2>
             <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
               {total > 0
-                ? `这里汇总了 ${total} 条来自人物、事件、提醒、计划和 Agent 运行的记录。点开就回到原处。`
-                : "记下刚发生的事、今天要联系的人，或者载入演示资料看看完整流程。"}
+                ? `${t("这里汇总了")} ${total} ${t("条来自人物、事件、提醒、计划和 Agent 运行的记录。点开就回到原处。")}`
+                : t("记下刚发生的事、今天要联系的人，或者载入演示资料看看完整流程。")}
             </p>
           </div>
           <Button onClick={onOpenIntake} className="shrink-0 rounded-full px-5">
@@ -234,9 +236,9 @@ export function TodayPanel({ onOpenIntake, onOpenTarget, onPrepareMeeting }: Tod
               <FileClock className="size-4" aria-hidden="true" />
             </span>
             <div>
-              <h2 className="text-sm font-semibold">见面前，先把这个人想起来</h2>
+              <h2 className="text-sm font-semibold">{t("见面前，先把这个人想起来")}</h2>
               <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                输入一句“明天要见唐悦”，生成可保存、能追溯来源的见面简报。
+                {t("输入一句“明天要见唐悦”，生成可保存、能追溯来源的见面简报。")}
               </p>
             </div>
           </div>
@@ -247,15 +249,15 @@ export function TodayPanel({ onOpenIntake, onOpenTarget, onPrepareMeeting }: Tod
               onKeyDown={(event) => {
                 if (event.key === "Enter") onPrepareMeeting(meetingQuery);
               }}
-              placeholder="明天要见唐悦"
-              aria-label="输入要见的人"
+              placeholder={t("明天要见唐悦")}
+              aria-label={t("输入要见的人")}
             />
             <Button
               variant="outline"
               className="shrink-0"
               onClick={() => onPrepareMeeting(meetingQuery)}
             >
-              准备简报
+              {t("准备简报")}
             </Button>
           </div>
         </div>

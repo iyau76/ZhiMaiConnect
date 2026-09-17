@@ -1452,6 +1452,305 @@ const EN: Record<string, string> = {
     "Undid the latest intake batch; kept {count} later change(s) without forcing a rollback.",
   "自动撤销保留了有冲突或依赖的记录，请检查本次内容":
     "Automatic undo kept records with conflicts or dependencies. Review this batch.",
+  // ---- shell / today ----
+  现在值得处理的人和事: "What needs attention today",
+  // 页面大标题与逐页提示由 HEADINGS 以变量传进 t()，静态扫描看不到，必须单列。
+  "今天先看，": "Today, start with ",
+  这些人和事: "these people and things",
+  "这一页：从今天开始，把关系真正用起来":
+    "On this page: start from today and actually put your relationships to work",
+  "到期提醒、近期事件和未完成任务会从原记录自动汇总。":
+    "Due reminders, upcoming events and open tasks are gathered automatically from their source records.",
+  "点任意一项，就能回到对应的人物卡、事件、提醒或计划。":
+    "Open any item to jump back to its person card, event, reminder or plan.",
+  "想起新情况时，随手写一句就能继续补充。":
+    "When something new comes to mind, one quick line tops it up.",
+  "填名字就能建人，先建人再连关系；点一行打开人物卡补职位、部门等资料。":
+    "Type a name to create a person, then link relations. Click a row to open the profile and fill in title, department and more.",
+  已有的人: "Existing people",
+  同学: "Classmate",
+  件事值得先看: "things to look at first",
+  今天可以从一条记录开始: "Start with a single note today",
+  这里汇总了: "Gathered here:",
+  "条来自人物、事件、提醒、计划和 Agent 运行的记录。点开就回到原处。":
+    "records pulled from people, events, reminders, plans and agent runs. Open one to jump back to its source.",
+  "记下刚发生的事、今天要联系的人，或者载入演示资料看看完整流程。":
+    "Write down what just happened or who you should reach out to today, or load the demo data to see the whole flow.",
+  随手记一条: "Quick note",
+  "见面前，先把这个人想起来": "Before you meet, bring this person back to mind",
+  "输入一句“明天要见唐悦”，生成可保存、能追溯来源的见面简报。":
+    "Type something like “meeting Tang Yue tomorrow” to generate a savable, source-traceable meeting brief.",
+  明天要见唐悦: "Meeting Tang Yue tomorrow",
+  输入要见的人: "Person you are meeting",
+  准备简报: "Prepare brief",
+  今天还没有待处理事项: "Nothing needs attention today",
+  "人物生日、带日期的事件和提醒、行动计划与未完成的 Agent 任务会自动出现在这里。":
+    "Birthdays, dated events and reminders, action plans and unfinished agent runs all show up here automatically.",
+  "今天页只读取现有记录；修改仍在对应的人物、日历、提醒或计划中完成。":
+    "This page only reads existing records; edit them under People, Calendar, Reminders or Plan.",
+  "正在整理今天…": "Organising today…",
+  重新读取: "Reload",
+  先处理: "Handle first",
+  "到期、今天发生、等待批准": "Overdue, happening today, waiting for approval",
+  接下来两周: "Next two weeks",
+  "生日、事件、提醒与截止任务": "Birthdays, events, reminders and due tasks",
+  还在手上: "Still open",
+  未排日期的行动与可继续任务: "Undated actions and resumable tasks",
+  最近发生: "Recently happened",
+  过去七天的事件: "Events from the past seven days",
+  已到期: "Overdue",
+  近期: "Soon",
+  最近: "Recent",
+  待安排: "Unscheduled",
+
+  // ---- models panel ----
+  知脉免费体验: "Zhimai free trial",
+  "免密钥 · 官方免费额度": "No key needed · official free quota",
+  免费体验不需要填密钥: "The free trial needs no key",
+  "请求会经知脉的体验服务器转给免费模型，服务器只转发、不保存内容。额度有限，忙的时候可能要排队。":
+    "Requests go through a Zhimai trial server to a free model. The server only forwards and does not store the content. The quota is shared, so busy periods may queue.",
+  "需要更稳定的服务，点右上方「＋」加一套自己的模型接口。免费体验不包含语音转写。":
+    "For a steadier setup, use ＋ above to add your own endpoint. Speech-to-text is not part of the free trial.",
+  智谱: "Zhipu",
+  "（注册即送免费额度，手机号即可）": "(free quota on sign-up, phone number is enough)",
+  "（注册即送免费额度）": "(free quota on sign-up)",
+  "OpenAI 兼容接口": "OpenAI-compatible endpoint",
+  "Gemini 兼容接口": "Gemini-compatible endpoint",
+  本机接口可不填: "Optional for local endpoints",
+  请求失败: "Request failed",
+  变更前: "Before",
+  变更后: "After",
+  拒绝: "Reject",
+  待批准的批量档案修改: "Batch profile changes awaiting approval",
+  待签字的档案提案队列: "Proposal queue awaiting approval",
+  "正在生成可核对的变更差异…": "Generating a verifiable change diff…",
+  尚未写入: "Not written yet",
+  "批准前不会写入本机档案；数据若已被其他操作修改，本提案会自动失效。":
+    "Nothing is written to your local archive before approval. If the underlying data changed elsewhere, this proposal expires automatically.",
+  "本机执行记录（最近 50 次）": "Local run history (last 50)",
+  "工具结果会作为断点记忆留在本机；启用后，运行详情还会展示已脱敏的提示词与工具输入输出。":
+    "Tool results stay on this device as checkpoint memory. When enabled, run details also show redacted prompts and tool input/output.",
+  "API Key": "API key",
+
+  // ---- calendar ----
+  编辑事件: "Edit event",
+  加一条事件: "Add an event",
+  "时间说明最多 500 字；内容未被截断。":
+    "Time notes allow up to 500 characters; your text has not been truncated.",
+
+  // ---- reminders ----
+  备选: "Alternatives",
+  首选: "Preferred",
+  "目标侧潜在入口 · 尚未验证你能联系到此人":
+    "Potential route on the target side · no verified path from you to this person yet",
+  "未找到本人到目标的已验证路径；AI 已核对档案，当前候选仅是目标侧潜在线索。":
+    "No verified path from you to the target was found. The AI checked your archive; these candidates are only leads on the target side.",
+  "AI 已理解问题，请选择目标人物后继续":
+    "The AI understood the question — pick the target person to continue",
+
+  // ---- task editor / plan board ----
+  "保存失败，请重试": "Save failed, please retry",
+  "保存中…": "Saving…",
+  紧急: "Urgent",
+  一般: "Normal",
+  可延后: "Can wait",
+  任务已删除: "Task deleted",
+  放弃行动草案失败: "Could not discard the action drafts",
+  行动草案恢复失败: "Could not restore the action drafts",
+
+  // ---- export / profile / capture ----
+  从完整备份恢复: "Restore from a full backup",
+  恢复失败: "Restore failed",
+  恢复完成: "Restore complete",
+  换头像: "Change avatar",
+  恢复默认头像: "Reset avatar",
+  浏览器不支持处理图片: "This browser cannot process images",
+  "这张图片读不出来，换一张试试": "That image could not be read — try another",
+  "这份人物档案已被删除，无法保存": "This profile was deleted and cannot be saved",
+  "这份档案已在其他窗口更新。仍要用当前编辑内容覆盖吗？":
+    "This profile was updated in another window. Overwrite it with your current edits?",
+  "这里只使用你确认过的标签；AI 整理出的标签会在保存前供你检查。":
+    "Only the tags you confirm are used here; AI-generated tags are shown for review before saving.",
+  正在读取: "Loading",
+
+  // ---- intake / review ----
+  打开: "Open",
+  "先选一个模型，AI 才能开始整理": "Pick a model first so the AI can start",
+  "你写的内容还留在原处，配好之后回来点同一个按钮就行。":
+    "Your writing stays where it is — come back and press the same button once it is set up.",
+  用免费体验试试: "Try the free trial",
+  "不想用免费额度？自己配一个，大概三分钟":
+    "Prefer not to use the free quota? Set up your own — about three minutes",
+  "挑一家平台注册，拿到 API Key：": "Sign up on one platform and grab an API key:",
+  去配置自己的模型: "Set up my own model",
+  先不整理: "Not now",
+  "请到「AI 助理」页把「知脉免费体验」设为使用中的配置":
+    "Open the AI assistant page and set “Zhimai free trial” as the active configuration",
+  本次理解与解析: "How this was interpreted",
+  补充说明: "Additional notes",
+  材料明确支持的值: "Values the material clearly supports",
+  "固定字段放不下、但材料明确提到的事实会在这里等待确认。":
+    "Facts that do not fit the fixed fields but are clearly stated in the material wait here for confirmation.",
+  草稿关系图中手动添加: "Added manually in the draft graph",
+  草稿中手动添加: "Added manually in the draft",
+  撤销最近一次录入: "Undo the latest intake",
+  没有可撤销的录入批次: "There is no intake batch to undo",
+  已撤销最近一次录入批次: "Undid the latest intake batch",
+  "自动回滚失败，可用下方按钮撤销": "Automatic rollback failed — use the button below to undo",
+  从断点继续: "Resume from checkpoint",
+  "上次整理停在安全断点，已经完成的模型步骤与圈层批次不会重跑。":
+    "The last run stopped at a safe checkpoint; finished model steps and circle batches will not run again.",
+  正在从上次安全断点继续: "Resuming from the last safe checkpoint",
+  恢复整理结果: "Restore the intake result",
+  无法恢复上次的录入任务: "Could not restore the previous intake task",
+  替换录入任务失败: "Could not replace the intake task",
+  清除录入任务失败: "Could not clear the intake task",
+  无法结束上一次录入任务: "Could not finish the previous intake task",
+  "档案已经保存，页面刷新未完成": "The profile was saved, but the page did not finish refreshing",
+  "档案已经保存，执行记录等待恢复":
+    "The profile was saved; the run record is waiting to be restored",
+  "圈层已经写入，执行记录等待恢复":
+    "The circle was written; the run record is waiting to be restored",
+  丢弃草稿失败: "Could not discard the draft",
+  "发送给 AI 的材料本次保留": "Material sent to the AI this time:",
+  个字符: "characters",
+  "个字符；超出部分未发送，原文仍保留在输入框中。":
+    "characters; the rest was not sent and stays in the input box.",
+  "仅保留前 800 字摘要": "Kept only the first 800 characters as a summary",
+  来自录音转写: "From audio transcript",
+  "录音已结束，正在转写": "Recording finished, transcribing",
+  "转写完成，请先检查文字再交给 AI 整理":
+    "Transcription done — check the text before handing it to the AI",
+  "材料里没读到待办。可手动添加需要联系、祝福、送礼或跟进的行动。":
+    "No to-dos found in the material. Add anything you need to follow up, send wishes for, gift or chase.",
+  "材料里没读到明确事件。可手动补充往事、见面、通话或已经约定的日历事项。":
+    "No clear events found in the material. Add past moments, meetings, calls or agreed calendar items yourself.",
+  加一条事实: "Add a fact",
+  加一条提醒: "Add a reminder",
+  新事实: "New fact",
+  新提醒: "New reminder",
+  新人物: "New person",
+  新事件: "New event",
+  新关系: "New relation",
+  新增事件: "Add event",
+  更新事件: "Update event",
+  更新已有: "Update existing",
+  新建独立人物档案: "Create a separate profile",
+  选择新建人物或更新已有档案: "Choose whether to create a person or update an existing profile",
+  请先确认人物是新建还是更新已有档案:
+    "Confirm for each person whether it is new or updates an existing profile",
+  请选择同名人物: "Pick the matching person with the same name",
+  请选择身份处理方式: "Choose how to handle this identity",
+  "所选已有档案不存在，请重新选择": "That profile no longer exists — pick another",
+  事实关联人物无法唯一确定: "The fact cannot be tied to exactly one person",
+  "可能同名/同人冲突": "Possible same-name or same-person conflict",
+  "以下条目需要补充或消歧；其它条目仍可继续核对和批准。":
+    "These items need more detail or disambiguation; the rest can still be reviewed and approved.",
+  项已形成待确认结果: "items produced results awaiting confirmation",
+  "项圈层与成员变更已由本地档案解析；批准后才会写入。":
+    "circle and member changes were resolved locally; nothing is written until you approve.",
+  批准圈层变更: "Approve circle changes",
+  放弃圈层变更: "Discard circle changes",
+  圈层变更已批准并写入: "Circle changes approved and written",
+  圈层变更写入失败: "Could not write the circle changes",
+  无法记录批准动作: "Could not record the approval",
+  无法恢复尚未批准的圈层提案: "Could not restore the unapproved circle proposal",
+  无法替换尚未批准的圈层提案: "Could not replace the unapproved circle proposal",
+  替换圈层提案失败: "Could not replace the circle proposal",
+  清除圈层提案失败: "Could not clear the circle proposal",
+  "请先批准或放弃圈层变更，再保存人物与事件草稿":
+    "Approve or discard the circle changes before saving people and events",
+  "入库前变更预览（Diff）": "Change preview before saving (diff)",
+  事实字段: "Fact fields",
+  事实生效日期: "Fact valid from",
+  事实失效日期: "Fact valid until",
+  手动输入: "Manual entry",
+  生效日期: "Valid from",
+  失效日期: "Valid until",
+  日期精度: "Date precision",
+  时间范围: "Date range",
+  确定到日: "Exact day",
+  只确定到月: "Month only",
+  只确定到年: "Year only",
+  事件名称: "Event name",
+  事件日期: "Event date",
+  事件结束日期: "Event end date",
+  事件细节: "Event details",
+  事件写入方式: "How the event is written",
+  删除事件草稿: "Delete event draft",
+  删除事实草稿: "Delete fact draft",
+  删除提醒草稿: "Delete reminder draft",
+  提醒类型: "Reminder type",
+  提醒日期: "Reminder date",
+  提醒说明: "Reminder details",
+  请为提醒填写有效日期: "Give the reminder a valid date",
+  普通待办: "Regular to-do",
+  送礼: "Gift",
+  "类型，如聚会 / 通话 / 帮忙": "Type, e.g. gathering / call / favour",
+  要做什么: "What to do",
+  "相关人物（顿号分隔）": "Related people (separate with 、)",
+  亲密度: "Closeness",
+  圈层名称: "Circle name",
+  已有同名圈层: "A circle with that name already exists",
+  身份处理: "Identity handling",
+  当时昵称: "Alias at the time",
+  删除平台身份: "Delete platform identity",
+  平台: "Platform",
+  账号: "Account",
+  "平台账号与历史昵称（仅保留材料明确写出的内容）":
+    "Platform accounts and past aliases (only what the material states)",
+  文件: "Files",
+  "已载入离线演示预置草稿（合成数据）": "Loaded the offline demo draft (synthetic data)",
+  "这会替换当前未提交内容。确定载入合成的离线演示草稿吗？":
+    "This replaces your uncommitted content. Load the synthetic offline demo draft?",
+  正在比对本地档案: "Comparing against your local archive",
+  "AI 自评": "AI self-assessment",
+  "AI 自评未提供": "No AI self-assessment provided",
+
+  // ---- relations panel ----
+  "标准：事实与有效推导": "Standard: facts and valid inferences",
+  查看关系详情: "View relation details",
+  关系详情: "Relation details",
+  关闭详情: "Close details",
+  关系标签: "Relation label",
+  详情: "Details",
+  隐藏: "Hide",
+  来源: "Source",
+  社区: "Community",
+  聚焦范围: "Focus range",
+  确认状态: "Confirmation status",
+  方向语义: "Direction semantics",
+  证据引用: "Evidence references",
+  承诺与约定: "Commitments and agreements",
+  相关提醒: "Related reminders",
+  完整关系列表: "Full relation list",
+  未连接人物: "Unconnected people",
+  未关联单独证据记录: "No standalone evidence record linked",
+  条内部关系: "internal relations",
+  条跨社区关系: "cross-community relations",
+  点击展开: "Click to expand",
+  点击展开社区人物: "Click to expand community members",
+  "点击查看来源、时间与确认状态": "Click to see source, time and confirmation status",
+  "大图概览已合并为拓扑社区；点击社区即可查看其中人物":
+    "The overview now merges into topology communities; click one to see who is inside",
+  "方向由关系本体决定；修改关系语义会生成新的事实版本":
+    "Direction comes from the relation itself; changing its meaning creates a new fact revision",
+  "推导关系不能删除；可隐藏投影或修改支持事实":
+    "Inferred relations cannot be deleted; hide the projection or edit the supporting facts",
+  "只能确认事实关系；推导关系由规则自动重算":
+    "Only explicit relations can be confirmed; inferred ones are recomputed by rules",
+  先单击一个人物节点: "Click a person node first",
+  删除事实关系: "Delete explicit relation",
+  "删除这条事实关系后，相关推导关系会自动重算。继续吗？":
+    "Deleting this explicit relation recalculates inferred relations. Continue?",
+  要更新的关系已不存在: "The relation you were updating no longer exists",
+  要更新的事件已不存在: "The event you were updating no longer exists",
+  批量删除失败: "Bulk delete failed",
+  删除失败: "Delete failed",
+
+  放弃圈层提案失败: "Could not discard the circle proposal",
+  "还没想好录入什么？": "Not sure what to write?",
+
   English: "English",
 };
 

@@ -28,8 +28,12 @@ coverage/
 playwright-report/
 test-results/
 
-# Generated release bundles stay local.
-release/
+# Generated release bundles stay local, but the release tooling and its notes
+# are source: keep them tracked so a fresh clone can cut the next release.
+release/**
+!release/*.md
+!release/*.mjs
+!release/SHA256SUMS.txt
 
 # Keep full-resolution art masters locally; ship optimized assets from art/web.
 /src/assets/art/*.png

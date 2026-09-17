@@ -3414,7 +3414,7 @@ export function IntakePanel({
         />
 
         <RelationshipSamplePicker
-          className="mt-3 hidden md:block"
+          className="mt-3"
           onOpenSettings={onOpenSettings}
           disabled={
             busy ||

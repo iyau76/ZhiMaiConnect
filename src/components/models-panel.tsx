@@ -1128,7 +1128,7 @@ export function ModelsPanel({
             {(["openai", "gemini"] as ProviderKind[]).map((kind) => (
               <Button key={kind} size="sm" variant="outline" onClick={() => addPreset(kind)}>
                 <Plus className="size-3.5" aria-hidden="true" />
-                {KIND_LABEL[kind].split("（")[0]}
+                {t(KIND_LABEL[kind].split("（")[0])}
               </Button>
             ))}
           </div>
@@ -1147,7 +1147,7 @@ export function ModelsPanel({
                 rel="noreferrer"
                 className="text-primary underline underline-offset-2"
               >
-                智谱 https://open.bigmodel.cn/
+                {t("智谱")} https://open.bigmodel.cn/
               </a>
               <span className="ml-1">{t("（注册即送免费额度，手机号即可）")}</span>
               {" · "}
@@ -1206,7 +1206,8 @@ export function ModelsPanel({
                   onActiveIdChange(item.id);
                 }}
               >
-                <span className="truncate font-medium">{item.name || t("未命名")}</span>
+                {/* 内置档位名要走字典；用户自己起的名字不在表里，t() 会原样返回。 */}
+                <span className="truncate font-medium">{t(item.name) || t("未命名")}</span>
                 {isFreeTierPreset(item) ? (
                   <span className="ml-1.5 text-[11px] text-muted-foreground">
                     {t("免密钥 · 官方免费额度")}
@@ -1215,7 +1216,7 @@ export function ModelsPanel({
                   (item.name.trim() !== KIND_LABEL[item.kind].split("（")[0] || item.model) && (
                     <span className="ml-1.5 text-[11px] text-muted-foreground">
                       {item.name.trim() !== KIND_LABEL[item.kind].split("（")[0]
-                        ? KIND_LABEL[item.kind].split("（")[0]
+                        ? t(KIND_LABEL[item.kind].split("（")[0])
                         : ""}
                       {item.model ? ` · ${item.model}` : ""}
                     </span>

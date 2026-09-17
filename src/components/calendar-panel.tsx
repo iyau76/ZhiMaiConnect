@@ -685,7 +685,8 @@ export function CalendarPanel({
               const hasDoneReminder = dateReminders.length > 0 && !hasOpenReminder;
               const inSpan = spanDays.has(date);
               const isToday = date === todayStr();
-              const lunar = lunarByDate.get(date);
+              // 农历没有合适的英文短标签，英文界面直接不显示，而不是在格子里丢一串「廿一」。
+              const lunar = getLang() === "zh" ? lunarByDate.get(date) : undefined;
               const reminderLabel = dateReminders.length
                 ? `${dateReminders.length} ${t("个待办")}${hasOpenReminder ? "" : t("，均已完成")}`
                 : "";
