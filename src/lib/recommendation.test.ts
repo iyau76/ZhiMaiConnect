@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { LifeEventRecord, PersonRecord } from "./face-db";
 import {
   matchCapabilityEvidence,
+  normalizeRecommendationCandidateLimit,
   rankCandidates,
   rankCapabilityCandidates,
   recommendationPrompt,
@@ -41,6 +42,13 @@ function event(
 }
 
 describe("rankCandidates", () => {
+  it("clamps the recommendation candidate limit to the supported range", () => {
+    expect(normalizeRecommendationCandidateLimit(undefined)).toBe(3);
+    expect(normalizeRecommendationCandidateLimit("5")).toBe(5);
+    expect(normalizeRecommendationCandidateLimit(0)).toBe(1);
+    expect(normalizeRecommendationCandidateLimit(99)).toBe(10);
+  });
+
   it("verifies model-authored capability terms only against stored profile facts", () => {
     const venue = person("venue", {
       name: "刘畅",

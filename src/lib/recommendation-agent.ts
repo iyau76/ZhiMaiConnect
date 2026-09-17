@@ -31,6 +31,7 @@ import { renderGroundedRecommendation } from "./agent-output-grounding";
 import type { LifeEventRecord, PersonRecord, RelationRecord } from "./face-db";
 import {
   RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS,
+  normalizeRecommendationCandidateLimit,
   taskSafetyNotice,
   type CandidateRecommendation,
   type RecommendationCapabilityEvidenceField,
@@ -162,6 +163,7 @@ export interface RecommendationAgentCheckpoint {
   task: string;
   archiveVersion: string;
   includeInferredPaths: boolean;
+  candidateLimit: number;
   requestedTargetPersonId?: string;
   phase: "planning" | "analysis";
   nextRound: number;
@@ -191,6 +193,7 @@ export function createInitialRecommendationCheckpoint(input: {
   task: string;
   archiveVersion: string;
   includeInferredPaths: boolean;
+  candidateLimit: number;
   targetPersonId?: string;
   maxRounds: number;
 }): RecommendationAgentCheckpoint {
@@ -200,6 +203,7 @@ export function createInitialRecommendationCheckpoint(input: {
     task: input.task,
     archiveVersion: input.archiveVersion,
     includeInferredPaths: input.includeInferredPaths,
+    candidateLimit: input.candidateLimit,
     requestedTargetPersonId: input.targetPersonId,
     phase: "planning",
     nextRound: 1,
@@ -798,6 +802,7 @@ export async function runRecommendationAgent(options: {
   events: LifeEventRecord[];
   targetPersonId?: string;
   includeInferredPaths?: boolean;
+  candidateLimit?: number;
   signal?: AbortSignal;
   onTrace?: (event: AgentTraceEvent) => void;
   budget?: AgentBudgetPreset | AgentBudget;
@@ -817,11 +822,17 @@ export async function runRecommendationAgent(options: {
   const requestedBudget = options.budget ?? resolveSavedAgentBudget("standard");
   const fullBudget = resolveAgentBudget(requestedBudget);
   const archiveVersion = options.archiveVersion ?? "recommendation-archive";
+  const candidateLimit = normalizeRecommendationCandidateLimit(
+    options.candidateLimit ?? resume?.candidateLimit,
+  );
   if (resume) {
     if (resume.task !== options.task) throw new Error("恢复的推荐任务与当前输入不一致");
     if (resume.archiveVersion !== archiveVersion) throw new Error("人物档案已经变化，请重新分析");
     if (resume.includeInferredPaths !== (options.includeInferredPaths === true)) {
       throw new Error("推导关系设置已经变化，请重新分析");
+    }
+    if (resume.candidateLimit !== candidateLimit) {
+      throw new Error("推荐人数上限已经变化，请重新分析");
     }
   }
   const traceEvents = [...(resume?.trace ?? [])];
@@ -882,6 +893,7 @@ export async function runRecommendationAgent(options: {
       task: options.task,
       archiveVersion,
       includeInferredPaths: options.includeInferredPaths === true,
+      candidateLimit,
       targetPersonId: options.targetPersonId,
       maxRounds: fullBudget.maxRounds,
     });
@@ -1002,7 +1014,7 @@ export async function runRecommendationAgent(options: {
         targetPersonRef: personRefFor(referenceSession, detectedTarget),
         task: options.task,
         maxHops,
-        limit: 3,
+        limit: candidateLimit,
         includeInferred: options.includeInferredPaths === true,
       };
       const rankingDecision = await runtime.executeTool("find_connection_paths", rankingArgs);
@@ -1032,7 +1044,7 @@ export async function runRecommendationAgent(options: {
         const targetSideDecision = await runtime.executeTool("rank_target_side_entries", {
           targetPersonRef: personRefFor(referenceSession, detectedTarget),
           task: options.task,
-          limit: 3,
+          limit: candidateLimit,
           includeInferred: options.includeInferredPaths === true,
         });
         if (targetSideDecision.status === "finalize") {
@@ -1096,7 +1108,7 @@ export async function runRecommendationAgent(options: {
             const match = row.capabilityMatches?.find((item) => item.slotId === slot.id);
             return match ? [{ row, person, match }] : [];
           })
-          .slice(0, 3)
+          .slice(0, candidateLimit)
           .map((candidate, index) => ({
             ...candidate,
             match: { ...candidate.match, localRank: index + 1 },
@@ -1156,11 +1168,14 @@ export async function runRecommendationAgent(options: {
           });
         }
       }
+      const maxAlternatives = Math.max(0, candidateLimit - assignments.length);
       const orderedPersonIds = [
         ...assignments.map((assignment) => assignment.personId),
-        ...rankedBySlot.flatMap(({ candidates: slotCandidates }) =>
-          slotCandidates.slice(1).map((candidate) => candidate.person.id),
-        ),
+        ...rankedBySlot
+          .flatMap(({ candidates: slotCandidates }) =>
+            slotCandidates.slice(1).map((candidate) => candidate.person.id),
+          )
+          .slice(0, maxAlternatives),
       ];
       lockedCandidates = [...new Set(orderedPersonIds)].flatMap((personId) => {
         const candidate = selectedByPerson.get(personId);
@@ -1244,6 +1259,7 @@ export async function runRecommendationAgent(options: {
       task: options.task,
       archiveVersion,
       includeInferredPaths: options.includeInferredPaths === true,
+      candidateLimit,
       requestedTargetPersonId: options.targetPersonId,
       phase: "analysis",
       nextRound,

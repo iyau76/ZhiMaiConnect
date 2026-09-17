@@ -51,6 +51,16 @@ export const RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS = [
 export type RecommendationCapabilityEvidenceField =
   (typeof RECOMMENDATION_CAPABILITY_EVIDENCE_FIELDS)[number];
 
+export const RECOMMENDATION_CANDIDATE_LIMIT_OPTIONS = [3, 5, 8] as const;
+export const DEFAULT_RECOMMENDATION_CANDIDATE_LIMIT = 3;
+
+/** Clamp a user-selected candidate limit to the range the local ranker supports. */
+export function normalizeRecommendationCandidateLimit(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_RECOMMENDATION_CANDIDATE_LIMIT;
+  return Math.min(10, Math.max(1, Math.round(parsed)));
+}
+
 export interface CandidateRecommendation {
   person: PersonRecord;
   score: number;

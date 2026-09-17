@@ -54,6 +54,7 @@ describe("recommendation session state", () => {
           task: "校园活动找谁拍照",
           archiveVersion: "1:test",
           includeInferredPaths: false,
+          candidateLimit: 3,
           phase: "analysis",
           nextRound: 2,
           maxRounds: 7,

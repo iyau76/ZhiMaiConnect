@@ -53,6 +53,9 @@ import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
 import { blessingPrompt, upcoming, todayStr, type UpcomingItem } from "@/lib/personal";
 import {
+  DEFAULT_RECOMMENDATION_CANDIDATE_LIMIT,
+  RECOMMENDATION_CANDIDATE_LIMIT_OPTIONS,
+  normalizeRecommendationCandidateLimit,
   rankCandidates,
   recommendationPrompt,
   staleContacts,
@@ -79,6 +82,7 @@ import {
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 const activeRecommendationRunIds = new Set<string>();
+const CANDIDATE_LIMIT_STORAGE_KEY = "zhimai:recommendation-candidate-limit";
 
 export function RemindersPanel({
   preset,
@@ -113,6 +117,15 @@ export function RemindersPanel({
   const [targetChoices, setTargetChoices] = useState<PersonRecord[]>([]);
   const [selectedTargetId, setSelectedTargetId] = useState("");
   const [includeInferredPaths, setIncludeInferredPaths] = useState(false);
+  const [candidateLimit, setCandidateLimit] = useState(() => {
+    try {
+      return normalizeRecommendationCandidateLimit(
+        window.localStorage.getItem(CANDIDATE_LIMIT_STORAGE_KEY),
+      );
+    } catch {
+      return DEFAULT_RECOMMENDATION_CANDIDATE_LIMIT;
+    }
+  });
   const [recommendationNotice, setRecommendationNotice] = useState("");
   const [aiArchiveMode, setAiArchiveMode] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
@@ -353,7 +366,7 @@ export function RemindersPanel({
       relations,
       events,
       targetId,
-      limit: 3,
+      limit: candidateLimit,
       includeInferred,
     });
     const targetSide = ranked.length
@@ -364,7 +377,7 @@ export function RemindersPanel({
           relations,
           events,
           targetId,
-          limit: 3,
+          limit: candidateLimit,
           includeInferred,
         });
     setCandidates(ranked.length ? ranked : targetSide);
@@ -405,7 +418,7 @@ export function RemindersPanel({
       return;
     }
     setTargetChoices([]);
-    const ranked = rankCandidates(ask.trim(), persons, events).slice(0, 3);
+    const ranked = rankCandidates(ask.trim(), persons, events).slice(0, candidateLimit);
     setCandidates(ranked.map((candidate) => ({ ...candidate, mode: "open" as const })));
     setSelectedTargetId("");
     setRecommendationNotice(t("开放求助模式：按任务匹配、可联系程度和近期互动筛选候选。"));
@@ -418,7 +431,7 @@ export function RemindersPanel({
 
   const loadOfflineRecommendationDemo = () => {
     const question = "我要组织校园记忆展开幕活动，找谁负责拍照比较合适？";
-    const ranked = rankCandidates(question, persons, events).slice(0, 3);
+    const ranked = rankCandidates(question, persons, events).slice(0, candidateLimit);
     setAsk(question);
     setCandidates(ranked);
     setCandidateMode("local");
@@ -573,6 +586,7 @@ export function RemindersPanel({
           task,
           archiveVersion,
           includeInferredPaths: inferred,
+          candidateLimit,
           targetPersonId,
           maxRounds: budget.maxRounds,
         });
@@ -608,6 +622,7 @@ export function RemindersPanel({
         events,
         targetPersonId,
         includeInferredPaths: inferred,
+        candidateLimit,
         signal: controller.signal,
         archiveVersion,
         budget,
@@ -1075,7 +1090,7 @@ export function RemindersPanel({
             {t("不提交照片、人脸特征、联系方式原文；天气与资讯查询不携带人物档案")}
           </span>
         </div>
-        <div className="mt-2 flex flex-wrap justify-end gap-2">
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-3">
           <label className="mr-auto flex items-center gap-2 text-[11px] text-muted-foreground">
             <Switch
               checked={includeInferredPaths}
@@ -1089,6 +1104,31 @@ export function RemindersPanel({
               aria-label={t("允许已确认的推导关系参与引荐")}
             />
             {t("允许已确认的推导关系参与引荐")}
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            {t("推荐人数上限")}
+            <select
+              value={candidateLimit}
+              onChange={(event) => {
+                const next = normalizeRecommendationCandidateLimit(event.target.value);
+                setCandidateLimit(next);
+                try {
+                  window.localStorage.setItem(CANDIDATE_LIMIT_STORAGE_KEY, String(next));
+                } catch {
+                  // The in-memory choice still applies for this session.
+                }
+                setSuspendedRecommendation(null);
+              }}
+              disabled={agentBusy}
+              className="h-8 rounded-md border border-border bg-background px-2"
+              aria-label={t("推荐人数上限")}
+            >
+              {RECOMMENDATION_CANDIDATE_LIMIT_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
           </label>
           <Button variant="ghost" onClick={loadOfflineRecommendationDemo}>
             <Sparkles className="size-4" aria-hidden="true" />
