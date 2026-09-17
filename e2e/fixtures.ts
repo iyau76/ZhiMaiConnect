@@ -505,6 +505,24 @@ export async function openApp(page: Page, options: { initialView?: "today" | "in
   }
 }
 
+/** 展开核对页全部默认收起的折叠分区（核对页默认只展示需要决定的内容）。
+ * 草稿渲染期间可能出现迟挂载或点击被重渲染吞掉，循环到一整轮无关闭项为止。 */
+export async function expandReviewFolds(page: Page) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const triggers = page.locator("[data-review-fold-trigger]");
+    let opened = 0;
+    for (let i = 0; i < (await triggers.count()); i++) {
+      const trigger = triggers.nth(i);
+      if ((await trigger.getAttribute("data-state")) === "closed") {
+        await trigger.click();
+        opened += 1;
+      }
+    }
+    if (opened === 0) return;
+    await page.waitForTimeout(150);
+  }
+}
+
 export async function clickVisible(page: Page, locator: ReturnType<Page["getByRole"]>) {
   for (const candidate of await locator.all()) {
     if (await candidate.isVisible()) {

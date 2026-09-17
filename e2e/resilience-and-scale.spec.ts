@@ -5,6 +5,7 @@ import {
   openApp,
   readIndexedDbStore,
   seedIndexedDb,
+  expandReviewFolds,
   snapshotDraftCards,
   test,
 } from "./fixtures";
@@ -53,6 +54,8 @@ test("文件解析失败不会覆盖已经在编辑的草稿", async ({ page }) 
   await page.getByRole("button", { name: "离线演示草稿" }).click();
   const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
   const before = await intake.getByRole("textbox").inputValue();
+  await page.waitForSelector("[data-review-fold-trigger]");
+  await expandReviewFolds(page);
   const beforeDraft = await snapshotDraftCards(page);
   const draftKinds = beforeDraft
     .map((card) => card.kind)
@@ -149,6 +152,8 @@ test("草稿中人工修改的关系、证据与 Fact 不会被误标为 AI 来�
   await openApp(page);
   await page.getByRole("button", { name: "离线演示草稿" }).click();
 
+  await page.waitForSelector("[data-review-fold-trigger]");
+  await expandReviewFolds(page);
   const relation = page.locator('[data-draft-kind="relation"]');
   await relation.getByPlaceholder("关系").fill("校庆展搭档");
   const evidence = page.locator('[data-draft-kind="evidence"]');

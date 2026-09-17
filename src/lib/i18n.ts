@@ -68,6 +68,13 @@ const EN: Record<string, string> = {
   "圈层 / 集合": "Circles / collections",
   按圈层筛选档案: "Filter profiles by circle",
   圈层草稿: "Draft circles",
+  事实草稿: "Draft facts",
+  事件草稿: "Draft events",
+  提醒草稿: "Draft reminders",
+  来源材料: "Source materials",
+  详细字段: "Detailed fields",
+  查看逐项解析过程: "Per-item parsing trace",
+  展开或收起: "Expand or collapse",
   "与人物一起确认入库；圈层成员会跟随你选择的具体档案。":
     "Save with the people drafts. Members follow the profiles you select.",
   移除此项: "Remove item",
@@ -1112,6 +1119,7 @@ const EN: Record<string, string> = {
     "Based on the local festival calendar; review tone and recipient before sending.",
   "已复制；系统不会自动发送": "Copied; the system will not send it automatically",
   "复制失败，请手动选择文本": "Copy failed; select the text manually",
+  推荐人数上限: "Candidate limit",
   复制: "Copy",
   长期未联系: "Out of touch",
   "暂无超过 90 天未互动的人物；这里只依据本地共同事件记录计算。":

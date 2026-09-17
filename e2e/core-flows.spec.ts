@@ -1,6 +1,7 @@
 import {
   acceptAllDraftItems,
   clickVisible,
+  expandReviewFolds,
   expect,
   openApp,
   readIndexedDbStore,
@@ -22,6 +23,7 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
 
   await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
+  await expandReviewFolds(page);
   const intakeTrace = intake.getByRole("status");
   await expect(intakeTrace).toContainText("整理轨迹");
   await expect(intakeTrace).toContainText("整理完成");
@@ -187,9 +189,10 @@ test("批量接受只确认来源对齐关系，名称子串误配保持可见�
 
   const intakePanel = page.getByTestId("intake-panel");
   const relationCardsBeforeReload = page.locator('[data-draft-kind="relation"]');
+  await expect(intakePanel).toHaveAttribute("data-intake-draft-persisted", "true");
+  await expandReviewFolds(page);
   await expect(relationCardsBeforeReload).toHaveCount(2);
   await expect(relationCardsBeforeReload.first()).toContainText("原依据已保留");
-  await expect(intakePanel).toHaveAttribute("data-intake-draft-persisted", "true");
 
   const persistedDraft = await page.evaluate(() => {
     const raw = localStorage.getItem("zhimai.intake.draft.v1");
@@ -206,6 +209,7 @@ test("批量接受只确认来源对齐关系，名称子串误配保持可见�
     "true",
   );
   await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
+  await expandReviewFolds(page);
 
   const relationCards = page.locator('[data-draft-kind="relation"]');
   await expect(relationCards).toHaveCount(2);
@@ -234,6 +238,9 @@ test("批量接受只确认来源对齐关系，名称子串误配保持可见�
 test("事件草稿按月或年录入时不要求选择具体日期，并能解析原始时间表述", async ({ page }) => {
   await openApp(page);
   await page.getByRole("button", { name: "离线演示草稿" }).click();
+  await page.waitForSelector("[data-review-fold-trigger]");
+  await expandReviewFolds(page);
+  await page.waitForSelector('[data-draft-kind="event"]', { state: "attached" });
   const eventDraft = page.locator('[data-draft-kind="event"]').first();
   const precision = eventDraft.getByRole("combobox", { name: "日期精度" });
 
@@ -389,14 +396,18 @@ test("补充并重新整理会保留人工字段及其来源", async ({ page, mo
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
 
   const person = page.locator('[data-draft-kind="person"]');
+  await page.waitForSelector('[data-draft-kind="person"]', { state: "attached" });
+  await expandReviewFolds(page);
   await person.getByRole("combobox", { name: "亲密度", exact: true }).selectOption("4");
   await expect(person.getByText(/亲密度\s*·\s*人工填写/)).toBeVisible();
   await person.getByPlaceholder("和我的关系").fill("");
+  await expandReviewFolds(page);
   const supplement = page.getByPlaceholder(/补一句就行/);
   await supplement.fill("补充说明：唐悦愿意帮校园记忆展拍摄。 ");
   await page.getByRole("button", { name: "补充并重新整理" }).click();
 
   await expect.poll(() => mockNetwork.visionRequests.length).toBe(2);
+  await expandReviewFolds(page);
   await expect(person.getByRole("combobox", { name: "亲密度", exact: true })).toHaveValue("4");
   await expect(person.getByPlaceholder("和我的关系")).toHaveValue("");
   await expect(person.getByText(/亲密度\s*·\s*人工填写/)).toBeVisible();
@@ -970,6 +981,9 @@ test("AI 录入可检索并更新已有事件，确认前不覆盖原记录", as
   await intake.getByRole("textbox").fill("把团队聚餐改到 9 月 2 日");
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
 
+  await page.waitForSelector("[data-review-fold-trigger]");
+  await expandReviewFolds(page);
+  await page.waitForSelector('[data-draft-kind="event"]', { state: "attached" });
   const eventDraft = page.locator('[data-draft-kind="event"]');
   await expect(eventDraft.getByRole("combobox", { name: "事件写入方式" })).toHaveValue(
     "event-update-agent",

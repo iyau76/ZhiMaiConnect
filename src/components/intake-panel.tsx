@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import intakeArt from "@/assets/art/web/intake.webp";
 
 import { DraftGraph } from "@/components/draft-graph";
+import { ReviewFold } from "@/components/review-fold";
 import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { RelationshipSamplePicker } from "@/components/relationship-sample-picker";
@@ -3557,21 +3558,26 @@ export function IntakePanel({
               {intakeState.tasks.length} {t("项已形成待确认结果")}
             </span>
           </div>
-          <div className="flex flex-wrap gap-1.5" data-testid="intake-semantic-tasks">
-            {intakeState.tasks.map((task) => (
-              <span
-                key={task.task.id}
-                className={cn(
-                  "rounded-full border px-2 py-1 text-[10px]",
-                  task.status === "needs_input"
-                    ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-200"
-                    : "border-border text-muted-foreground",
-                )}
-              >
-                {task.task.domain} · {task.task.intent} · {task.status}
-              </span>
-            ))}
-          </div>
+          <details data-testid="intake-semantic-tasks-fold">
+            <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
+              {t("查看逐项解析过程")}
+            </summary>
+            <div className="mt-2 flex flex-wrap gap-1.5" data-testid="intake-semantic-tasks">
+              {intakeState.tasks.map((task) => (
+                <span
+                  key={task.task.id}
+                  className={cn(
+                    "rounded-full border px-2 py-1 text-[10px]",
+                    task.status === "needs_input"
+                      ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-200"
+                      : "border-border text-muted-foreground",
+                  )}
+                >
+                  {task.task.domain} · {task.task.intent} · {task.status}
+                </span>
+              ))}
+            </div>
+          </details>
           {resolutionIssues.length > 0 && (
             <div className="space-y-2" data-testid="intake-resolution-issues">
               <p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -3653,109 +3659,6 @@ export function IntakePanel({
         >
           {draft.summary && (
             <p className="text-[11px] leading-relaxed text-muted-foreground">{draft.summary}</p>
-          )}
-
-          {(draft.collections?.length ?? 0) > 0 && (
-            <section className="space-y-2" aria-label={t("圈层草稿")}>
-              <h3 className="text-sm font-medium">{t("圈层草稿")}</h3>
-              <p className="text-xs text-muted-foreground">
-                {t("与人物一起确认入库；圈层成员会跟随你选择的具体档案。")}
-              </p>
-              {draft.collections!.map((collection, index) => (
-                <div key={collection._draftId} className="space-y-2 rounded-xl border p-3">
-                  <div className="flex gap-2">
-                    <Input
-                      aria-label={t("圈层名称")}
-                      value={collection.name}
-                      onChange={(event) =>
-                        setDraft((current) =>
-                          current
-                            ? {
-                                ...current,
-                                collections: current.collections?.map((row, rowIndex) =>
-                                  rowIndex === index
-                                    ? mergeDraftPatch(row, { name: event.target.value })
-                                    : row,
-                                ),
-                              }
-                            : current,
-                        )
-                      }
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() =>
-                        setDraft((current) =>
-                          current
-                            ? {
-                                ...current,
-                                collections: current.collections?.filter(
-                                  (_, rowIndex) => rowIndex !== index,
-                                ),
-                              }
-                            : current,
-                        )
-                      }
-                    >
-                      {t("移除此项")}
-                    </Button>
-                  </div>
-                  <ul className="space-y-1 text-xs">
-                    {collection.memberships.map((member, memberIndex) => (
-                      <li key={memberIndex}>
-                        {member.action === "add" ? t("加入") : t("移出")}：
-                        {draft.people?.find((person) => person._draftId === member.personDraftId)
-                          ?.name ?? member.person}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </section>
-          )}
-
-          {(draft._groundingWarnings?.length ?? 0) > 0 && (
-            <details
-              className="group rounded-xl border border-amber-500/50 bg-amber-500/10 text-xs"
-              role="alert"
-            >
-              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 font-medium text-amber-800 marker:content-none dark:text-amber-200">
-                <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
-                <span>
-                  {t("AI 推断值待核验")} · {draft._groundingWarnings?.length}
-                </span>
-                <span className="ml-auto text-[10px] font-normal text-muted-foreground">
-                  {t("查看待核验项")}
-                </span>
-                <ArrowRight
-                  className="size-3.5 shrink-0 transition-transform group-open:rotate-90"
-                  aria-hidden="true"
-                />
-              </summary>
-              <div className="border-t border-amber-500/25 px-3 pb-3 pt-2">
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  {t(
-                    "这些值会保留在 AI 草稿中，感叹号表示未找到充分原文证据；请辨别真伪，编辑后会标记为人工来源。",
-                  )}
-                </p>
-                <ul className="mt-2 space-y-1 text-[11px]">
-                  {draft._groundingWarnings?.map((item, index) => (
-                    <li key={`${item.personDraftId}-${item.field}-${index}`}>
-                      {item.personName} · {sensitiveFieldLabel(item.field)}：
-                      <span>{item.rejectedValue}</span>{" "}
-                      <span
-                        className="font-bold text-amber-700 dark:text-amber-300"
-                        title={t("AI 推断，待核验")}
-                        aria-label={t("AI 推断，待核验")}
-                      >
-                        !
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </details>
           )}
 
           <div className="rounded-xl border border-border bg-background/60 p-3">
@@ -3850,12 +3753,110 @@ export function IntakePanel({
             </div>
           </div>
 
-          {gaps.length > 0 && (
-            <div className="rounded-xl border border-primary/40 bg-primary/5 p-3">
-              <p className="flex items-center gap-1.5 text-sm font-medium">
-                <TriangleAlert className="size-4 text-primary" aria-hidden="true" />
-                {t("这些必要信息还缺")}
+          {(draft.collections?.length ?? 0) > 0 && (
+            <ReviewFold title={t("圈层草稿")} count={draft.collections!.length}>
+              <p className="text-xs text-muted-foreground">
+                {t("与人物一起确认入库；圈层成员会跟随你选择的具体档案。")}
               </p>
+              {draft.collections!.map((collection, index) => (
+                <div key={collection._draftId} className="space-y-2 rounded-xl border p-3">
+                  <div className="flex gap-2">
+                    <Input
+                      aria-label={t("圈层名称")}
+                      value={collection.name}
+                      onChange={(event) =>
+                        setDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                collections: current.collections?.map((row, rowIndex) =>
+                                  rowIndex === index
+                                    ? mergeDraftPatch(row, { name: event.target.value })
+                                    : row,
+                                ),
+                              }
+                            : current,
+                        )
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() =>
+                        setDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                collections: current.collections?.filter(
+                                  (_, rowIndex) => rowIndex !== index,
+                                ),
+                              }
+                            : current,
+                        )
+                      }
+                    >
+                      {t("移除此项")}
+                    </Button>
+                  </div>
+                  <ul className="space-y-1 text-xs">
+                    {collection.memberships.map((member, memberIndex) => (
+                      <li key={memberIndex}>
+                        {member.action === "add" ? t("加入") : t("移出")}：
+                        {draft.people?.find((person) => person._draftId === member.personDraftId)
+                          ?.name ?? member.person}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </ReviewFold>
+          )}
+
+          {(draft._groundingWarnings?.length ?? 0) > 0 && (
+            <details
+              className="group rounded-xl border border-amber-500/50 bg-amber-500/10 text-xs"
+              role="alert"
+            >
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 font-medium text-amber-800 marker:content-none dark:text-amber-200">
+                <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+                <span>
+                  {t("AI 推断值待核验")} · {draft._groundingWarnings?.length}
+                </span>
+                <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+                  {t("查看待核验项")}
+                </span>
+                <ArrowRight
+                  className="size-3.5 shrink-0 transition-transform group-open:rotate-90"
+                  aria-hidden="true"
+                />
+              </summary>
+              <div className="border-t border-amber-500/25 px-3 pb-3 pt-2">
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {t(
+                    "这些值会保留在 AI 草稿中，感叹号表示未找到充分原文证据；请辨别真伪，编辑后会标记为人工来源。",
+                  )}
+                </p>
+                <ul className="mt-2 space-y-1 text-[11px]">
+                  {draft._groundingWarnings?.map((item, index) => (
+                    <li key={`${item.personDraftId}-${item.field}-${index}`}>
+                      {item.personName} · {sensitiveFieldLabel(item.field)}：
+                      <span>{item.rejectedValue}</span>{" "}
+                      <span
+                        className="font-bold text-amber-700 dark:text-amber-300"
+                        title={t("AI 推断，待核验")}
+                        aria-label={t("AI 推断，待核验")}
+                      >
+                        !
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </details>
+          )}
+
+          {gaps.length > 0 && (
+            <ReviewFold title={t("这些必要信息还缺")} count={gaps.length} tone="warning">
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {gaps.map((gap) => (
                   <span
@@ -3888,7 +3889,7 @@ export function IntakePanel({
                 )}
                 {t("补充并重新整理")}
               </Button>
-            </div>
+            </ReviewFold>
           )}
 
           <div className="space-y-3">
@@ -3955,230 +3956,242 @@ export function IntakePanel({
                     </span>
                   ))}
                 </div>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {(
-                    [
-                      ["relation", t("和我的关系")],
-                      ["birthday", t("生日")],
-                      ["contact", t("联系方式")],
-                    ] as Array<[keyof DraftPerson, string]>
-                  ).map(([key, label]) => (
-                    <Input
-                      key={String(key)}
-                      value={(person[key] as string) ?? ""}
-                      onChange={(event) => patchPerson(index, { [key]: event.target.value })}
-                      className="h-8 text-xs"
-                      placeholder={label}
-                    />
-                  ))}
-                </div>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {(
-                    [
-                      ["age", t("年龄")],
-                      ["gender", t("性别")],
-                      ["address", t("办公地点")],
-                      ["department", t("部门 / 科室")],
-                      ["org", t("单位 / 公司")],
-                      ["reportsTo", t("汇报对象")],
-                      ["employeeId", t("工号 / 编号")],
-                      ["metAt", t("相识场景")],
-                    ] as Array<[keyof DraftPerson, string]>
-                  ).map(([key, label]) => (
-                    <Input
-                      key={String(key)}
-                      value={(person[key] as string) ?? ""}
-                      onChange={(event) => patchPerson(index, { [key]: event.target.value })}
-                      className="h-8 text-xs"
-                      aria-label={label}
-                      placeholder={label}
-                    />
-                  ))}
-                </div>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  <Input
-                    value={person.title ?? ""}
-                    onChange={(event) => patchPerson(index, { title: event.target.value })}
-                    className="h-8 text-xs"
-                    aria-label={t("职务/技能")}
-                    placeholder={t("职务/技能")}
-                  />
-                  <select
-                    value={person.closeness ?? ""}
-                    onChange={(event) =>
-                      patchPerson(index, {
-                        closeness: event.target.value ? Number(event.target.value) : undefined,
-                      })
-                    }
-                    className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                    aria-label={t("亲密度")}
-                  >
-                    <option value="">{t("亲密度（未填写）")}</option>
-                    {[1, 2, 3, 4, 5].map((value) => (
-                      <option key={value} value={value}>
-                        {t("亲密度")} {value}/5
-                      </option>
-                    ))}
-                  </select>
-                  <Input
-                    value={(person.projects ?? []).join("、")}
-                    onChange={(event) =>
-                      patchPerson(index, { projects: splitDraftList(event.target.value) })
-                    }
-                    className="h-8 text-xs"
-                    aria-label={t("项目/技能")}
-                    placeholder={t("项目/技能（用逗号分隔）")}
-                  />
-                  <Input
-                    value={(person.likes ?? []).join("、")}
-                    onChange={(event) =>
-                      patchPerson(index, { likes: splitDraftList(event.target.value) })
-                    }
-                    className="h-8 text-xs"
-                    aria-label={t("喜好/技能关键词")}
-                    placeholder={t("喜好/技能关键词（用逗号分隔）")}
-                  />
-                  <Input
-                    value={(person.tags ?? []).join("、")}
-                    onChange={(event) =>
-                      patchPerson(index, { tags: splitDraftList(event.target.value) })
-                    }
-                    className="h-8 text-xs sm:col-span-2"
-                    aria-label={t("标签/技能")}
-                    placeholder={t("标签/技能（用逗号分隔）")}
-                  />
-                  <Input
-                    value={(person.dislikes ?? []).join("、")}
-                    onChange={(event) =>
-                      patchPerson(index, { dislikes: splitDraftList(event.target.value) })
-                    }
-                    className="h-8 text-xs"
-                    aria-label={t("忌口 / 不喜欢")}
-                    placeholder={t("忌口 / 不喜欢（用逗号分隔）")}
-                  />
-                  <Input
-                    value={(person.gifts ?? []).join("、")}
-                    onChange={(event) =>
-                      patchPerson(index, { gifts: splitDraftList(event.target.value) })
-                    }
-                    className="h-8 text-xs"
-                    aria-label={t("送礼记录")}
-                    placeholder={t("送礼记录（用逗号分隔）")}
-                  />
-                </div>
-                {Object.keys(person._fieldGrounding ?? {}).length > 0 && (
-                  <div className="mt-2 space-y-1 rounded-lg bg-muted/40 px-2.5 py-2 text-[10px] text-muted-foreground">
-                    {Object.entries(person._fieldGrounding ?? {}).map(([field, detail]) => (
-                      <p key={field}>
-                        <span className="font-medium text-foreground">
-                          {sensitiveFieldLabel(field as SensitivePersonField)}
-                        </span>{" "}
-                        ·{" "}
-                        {detail?.status === "manual"
-                          ? t("人工填写")
-                          : detail?.status === "unverified"
-                            ? `! ${t("AI 推断，待核验")}`
-                            : t("应用侧原文匹配")}
-                        {detail?.evidenceQuote ? `：${detail.evidenceQuote}` : ""}
-                      </p>
-                    ))}
-                  </div>
-                )}
-                <div className="mt-2 space-y-2 rounded-lg border border-dashed border-border p-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground">
-                      {t("平台账号与历史昵称（仅保留材料明确写出的内容）")}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="ml-auto h-6 px-2 text-[10px]"
-                      onClick={() =>
-                        patchPerson(index, {
-                          identities: [
-                            ...(person.identities ?? []),
-                            {
-                              platform: "",
-                              account: "",
-                              alias: "",
-                              validFrom: "",
-                              validTo: "",
-                            },
-                          ],
-                        })
-                      }
+                {(() => {
+                  const unresolvedIdentity = !person.targetPersonId;
+                  const unverifiedGrounding = Object.values(person._fieldGrounding ?? {}).some(
+                    (detail) => detail?.status === "unverified",
+                  );
+                  return (
+                    <ReviewFold
+                      title={t("详细字段")}
+                      stateKey={`person-detail:${person._draftId ?? index}`}
+                      defaultOpen={unresolvedIdentity || unverifiedGrounding}
                     >
-                      <Plus className="size-3" aria-hidden="true" />
-                      {t("添加")}
-                    </Button>
-                  </div>
-                  {(person.identities ?? []).map((identity, identityIndex) => (
-                    <div
-                      key={identityIndex}
-                      className="grid items-center gap-1.5 sm:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto]"
-                    >
-                      {(
-                        [
-                          ["platform", t("平台")],
-                          ["account", t("账号")],
-                          ["alias", t("当时昵称")],
-                          ["validFrom", t("生效日期")],
-                          ["validTo", t("失效日期")],
-                        ] as Array<
-                          ["platform" | "account" | "alias" | "validFrom" | "validTo", string]
-                        >
-                      ).map(([key, label]) => (
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        {(
+                          [
+                            ["relation", t("和我的关系")],
+                            ["birthday", t("生日")],
+                            ["contact", t("联系方式")],
+                          ] as Array<[keyof DraftPerson, string]>
+                        ).map(([key, label]) => (
+                          <Input
+                            key={String(key)}
+                            value={(person[key] as string) ?? ""}
+                            onChange={(event) => patchPerson(index, { [key]: event.target.value })}
+                            className="h-8 text-xs"
+                            placeholder={label}
+                          />
+                        ))}
+                      </div>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        {(
+                          [
+                            ["age", t("年龄")],
+                            ["gender", t("性别")],
+                            ["address", t("办公地点")],
+                            ["department", t("部门 / 科室")],
+                            ["org", t("单位 / 公司")],
+                            ["reportsTo", t("汇报对象")],
+                            ["employeeId", t("工号 / 编号")],
+                            ["metAt", t("相识场景")],
+                          ] as Array<[keyof DraftPerson, string]>
+                        ).map(([key, label]) => (
+                          <Input
+                            key={String(key)}
+                            value={(person[key] as string) ?? ""}
+                            onChange={(event) => patchPerson(index, { [key]: event.target.value })}
+                            className="h-8 text-xs"
+                            aria-label={label}
+                            placeholder={label}
+                          />
+                        ))}
+                      </div>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
                         <Input
-                          key={key}
-                          value={identity[key] ?? ""}
+                          value={person.title ?? ""}
+                          onChange={(event) => patchPerson(index, { title: event.target.value })}
+                          className="h-8 text-xs"
+                          aria-label={t("职务/技能")}
+                          placeholder={t("职务/技能")}
+                        />
+                        <select
+                          value={person.closeness ?? ""}
                           onChange={(event) =>
                             patchPerson(index, {
-                              identities: (person.identities ?? []).map((row, rowIndex) =>
-                                rowIndex === identityIndex
-                                  ? { ...row, [key]: event.target.value }
-                                  : row,
-                              ),
+                              closeness: event.target.value
+                                ? Number(event.target.value)
+                                : undefined,
                             })
                           }
-                          className="h-7 text-[11px]"
-                          placeholder={label}
+                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                          aria-label={t("亲密度")}
+                        >
+                          <option value="">{t("亲密度（未填写）")}</option>
+                          {[1, 2, 3, 4, 5].map((value) => (
+                            <option key={value} value={value}>
+                              {t("亲密度")} {value}/5
+                            </option>
+                          ))}
+                        </select>
+                        <Input
+                          value={(person.projects ?? []).join("、")}
+                          onChange={(event) =>
+                            patchPerson(index, { projects: splitDraftList(event.target.value) })
+                          }
+                          className="h-8 text-xs"
+                          aria-label={t("项目/技能")}
+                          placeholder={t("项目/技能（用逗号分隔）")}
                         />
-                      ))}
-                      <button
-                        type="button"
-                        aria-label={t("删除平台身份")}
-                        className="p-1 text-muted-foreground hover:text-destructive"
-                        onClick={() =>
-                          patchPerson(index, {
-                            identities: (person.identities ?? []).filter(
-                              (_, rowIndex) => rowIndex !== identityIndex,
-                            ),
-                          })
-                        }
-                      >
-                        <Trash2 className="size-3.5" aria-hidden="true" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <Textarea
-                  value={person.note ?? ""}
-                  onChange={(event) => patchPerson(index, { note: event.target.value })}
-                  rows={2}
-                  className="mt-2 text-xs"
-                  placeholder={t("备注")}
-                />
+                        <Input
+                          value={(person.likes ?? []).join("、")}
+                          onChange={(event) =>
+                            patchPerson(index, { likes: splitDraftList(event.target.value) })
+                          }
+                          className="h-8 text-xs"
+                          aria-label={t("喜好/技能关键词")}
+                          placeholder={t("喜好/技能关键词（用逗号分隔）")}
+                        />
+                        <Input
+                          value={(person.tags ?? []).join("、")}
+                          onChange={(event) =>
+                            patchPerson(index, { tags: splitDraftList(event.target.value) })
+                          }
+                          className="h-8 text-xs sm:col-span-2"
+                          aria-label={t("标签/技能")}
+                          placeholder={t("标签/技能（用逗号分隔）")}
+                        />
+                        <Input
+                          value={(person.dislikes ?? []).join("、")}
+                          onChange={(event) =>
+                            patchPerson(index, { dislikes: splitDraftList(event.target.value) })
+                          }
+                          className="h-8 text-xs"
+                          aria-label={t("忌口 / 不喜欢")}
+                          placeholder={t("忌口 / 不喜欢（用逗号分隔）")}
+                        />
+                        <Input
+                          value={(person.gifts ?? []).join("、")}
+                          onChange={(event) =>
+                            patchPerson(index, { gifts: splitDraftList(event.target.value) })
+                          }
+                          className="h-8 text-xs"
+                          aria-label={t("送礼记录")}
+                          placeholder={t("送礼记录（用逗号分隔）")}
+                        />
+                      </div>
+                      {Object.keys(person._fieldGrounding ?? {}).length > 0 && (
+                        <div className="mt-2 space-y-1 rounded-lg bg-muted/40 px-2.5 py-2 text-[10px] text-muted-foreground">
+                          {Object.entries(person._fieldGrounding ?? {}).map(([field, detail]) => (
+                            <p key={field}>
+                              <span className="font-medium text-foreground">
+                                {sensitiveFieldLabel(field as SensitivePersonField)}
+                              </span>{" "}
+                              ·{" "}
+                              {detail?.status === "manual"
+                                ? t("人工填写")
+                                : detail?.status === "unverified"
+                                  ? `! ${t("AI 推断，待核验")}`
+                                  : t("应用侧原文匹配")}
+                              {detail?.evidenceQuote ? `：${detail.evidenceQuote}` : ""}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-2 space-y-2 rounded-lg border border-dashed border-border p-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-muted-foreground">
+                            {t("平台账号与历史昵称（仅保留材料明确写出的内容）")}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="ml-auto h-6 px-2 text-[10px]"
+                            onClick={() =>
+                              patchPerson(index, {
+                                identities: [
+                                  ...(person.identities ?? []),
+                                  {
+                                    platform: "",
+                                    account: "",
+                                    alias: "",
+                                    validFrom: "",
+                                    validTo: "",
+                                  },
+                                ],
+                              })
+                            }
+                          >
+                            <Plus className="size-3" aria-hidden="true" />
+                            {t("添加")}
+                          </Button>
+                        </div>
+                        {(person.identities ?? []).map((identity, identityIndex) => (
+                          <div
+                            key={identityIndex}
+                            className="grid items-center gap-1.5 sm:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto]"
+                          >
+                            {(
+                              [
+                                ["platform", t("平台")],
+                                ["account", t("账号")],
+                                ["alias", t("当时昵称")],
+                                ["validFrom", t("生效日期")],
+                                ["validTo", t("失效日期")],
+                              ] as Array<
+                                ["platform" | "account" | "alias" | "validFrom" | "validTo", string]
+                              >
+                            ).map(([key, label]) => (
+                              <Input
+                                key={key}
+                                value={identity[key] ?? ""}
+                                onChange={(event) =>
+                                  patchPerson(index, {
+                                    identities: (person.identities ?? []).map((row, rowIndex) =>
+                                      rowIndex === identityIndex
+                                        ? { ...row, [key]: event.target.value }
+                                        : row,
+                                    ),
+                                  })
+                                }
+                                className="h-7 text-[11px]"
+                                placeholder={label}
+                              />
+                            ))}
+                            <button
+                              type="button"
+                              aria-label={t("删除平台身份")}
+                              className="p-1 text-muted-foreground hover:text-destructive"
+                              onClick={() =>
+                                patchPerson(index, {
+                                  identities: (person.identities ?? []).filter(
+                                    (_, rowIndex) => rowIndex !== identityIndex,
+                                  ),
+                                })
+                              }
+                            >
+                              <Trash2 className="size-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <Textarea
+                        value={person.note ?? ""}
+                        onChange={(event) => patchPerson(index, { note: event.target.value })}
+                        rows={2}
+                        className="mt-2 text-xs"
+                        placeholder={t("备注")}
+                      />
+                    </ReviewFold>
+                  );
+                })()}
               </div>
             ))}
           </div>
 
-          <div className="space-y-2 rounded-xl border border-dashed border-border p-3">
+          <ReviewFold title={t("事实草稿")} count={(draft.facts ?? []).length}>
             <div className="flex items-center gap-2">
-              <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
-              <span className="text-xs font-medium">
-                {t("事实草稿")} · {(draft.facts ?? []).length}
-              </span>
               <Button
                 variant="ghost"
                 size="sm"
@@ -4256,513 +4269,523 @@ export function IntakePanel({
                 </div>
               </div>
             ))}
-          </div>
+          </ReviewFold>
 
-          <DraftGraph
-            people={draft.people ?? []}
-            relations={(draft.relations ?? []).map((r) => ({
-              from: r.from ?? "",
-              to: r.to ?? "",
-              label: r.label ?? "",
-            }))}
-            onAddPerson={(name) =>
-              setDraft((prev) => {
-                const person = withIdentityDecision(
-                  {
-                    name,
-                    _draftId: `draft:person:${crypto.randomUUID()}`,
-                    _fieldGrounding: { name: { status: "manual" } },
-                    _audit: makeManualAudit(t("草稿关系图中手动添加")),
-                  },
-                  existingPeople,
-                );
-                return { ...(prev ?? {}), people: [...(prev?.people ?? []), person] };
-              })
-            }
-            onAddRelation={(from, to, label) =>
-              setDraft((prev) => ({
-                ...(prev ?? {}),
-                relations: [
-                  ...(prev?.relations ?? []),
-                  {
-                    from,
-                    to,
-                    label,
-                    _draftId: `draft:relation:${crypto.randomUUID()}`,
-                    _audit: makeManualAudit(t("草稿关系图中手动添加")),
-                  },
-                ],
-              }))
-            }
-            onPatchRelation={(index, label) => patchRelation(index, { label })}
-            onRemoveRelation={removeRelation}
-          />
+          <ReviewFold title={t("关系网预览")}>
+            <DraftGraph
+              people={draft.people ?? []}
+              relations={(draft.relations ?? []).map((r) => ({
+                from: r.from ?? "",
+                to: r.to ?? "",
+                label: r.label ?? "",
+              }))}
+              onAddPerson={(name) =>
+                setDraft((prev) => {
+                  const person = withIdentityDecision(
+                    {
+                      name,
+                      _draftId: `draft:person:${crypto.randomUUID()}`,
+                      _fieldGrounding: { name: { status: "manual" } },
+                      _audit: makeManualAudit(t("草稿关系图中手动添加")),
+                    },
+                    existingPeople,
+                  );
+                  return { ...(prev ?? {}), people: [...(prev?.people ?? []), person] };
+                })
+              }
+              onAddRelation={(from, to, label) =>
+                setDraft((prev) => ({
+                  ...(prev ?? {}),
+                  relations: [
+                    ...(prev?.relations ?? []),
+                    {
+                      from,
+                      to,
+                      label,
+                      _draftId: `draft:relation:${crypto.randomUUID()}`,
+                      _audit: makeManualAudit(t("草稿关系图中手动添加")),
+                    },
+                  ],
+                }))
+              }
+              onPatchRelation={(index, label) => patchRelation(index, { label })}
+              onRemoveRelation={removeRelation}
+            />
+          </ReviewFold>
 
-          {(draft.relations ?? []).length > 0 && (
-            <div className="space-y-2">
-              {(draft.relations ?? []).map((relation, index) => (
-                <div
-                  key={relation._draftId ?? `relation-${index}`}
-                  className="flex flex-wrap items-center gap-2 rounded-xl border border-border p-2"
-                  data-draft-kind="relation"
-                  data-draft-index={index}
-                >
-                  <div className="w-full">
-                    <DraftAuditLine
-                      audit={relation._audit}
-                      onAccept={() =>
-                        patchRelation(index, { _audit: acceptedAudit(relation._audit) })
-                      }
-                      onReject={() => removeRelation(index)}
-                    />
-                  </div>
-                  <DraftPersonReferenceInput
-                    name={relation.from ?? ""}
-                    draftId={relation.fromDraftId}
-                    people={draft.people ?? []}
-                    onChange={(from, fromDraftId) =>
-                      patchRelation(index, { from, fromDraftId, fromPersonId: undefined })
-                    }
-                    className="h-8 w-28 text-xs"
-                    placeholder={t("谁")}
-                  />
-                  <ArrowRight className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-                  <Input
-                    value={relation.label ?? ""}
-                    onChange={(event) => patchRelation(index, { label: event.target.value })}
-                    className="h-8 w-32 text-xs"
-                    placeholder={t("关系")}
-                  />
-                  <ArrowRight className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-                  <DraftPersonReferenceInput
-                    name={relation.to ?? ""}
-                    draftId={relation.toDraftId}
-                    people={draft.people ?? []}
-                    onChange={(to, toDraftId) =>
-                      patchRelation(index, { to, toDraftId, toPersonId: undefined })
-                    }
-                    className="h-8 w-28 text-xs"
-                    placeholder={t("对谁")}
-                  />
-                  <button
-                    type="button"
-                    className="ml-auto text-muted-foreground transition-colors hover:text-destructive"
-                    onClick={() => removeRelation(index)}
-                  >
-                    <Trash2 className="size-3.5" aria-hidden="true" />
-                  </button>
+          <ReviewFold title={t("新关系")} count={(draft.relations ?? []).length}>
+            {(draft.relations ?? []).length > 0 && (
+              <div className="space-y-2">
+                {(draft.relations ?? []).map((relation, index) => (
                   <div
-                    className={cn(
-                      "w-full space-y-1.5 rounded-lg border px-2.5 py-2",
-                      relationNeedsInferenceReview({
-                        basis: relation.basis,
-                        note: relation.note,
-                        confidence: relation._audit?.confidence,
-                      })
-                        ? "border-amber-400/50 bg-amber-400/5"
-                        : "border-border bg-muted/25",
-                    )}
+                    key={relation._draftId ?? `relation-${index}`}
+                    className="flex flex-wrap items-center gap-2 rounded-xl border border-border p-2"
+                    data-draft-kind="relation"
+                    data-draft-index={index}
                   >
-                    <div className="flex flex-wrap items-center gap-2 text-[10px]">
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-0.5 font-medium",
-                          relationNeedsInferenceReview({
-                            basis: relation.basis,
-                            note: relation.note,
-                            confidence: relation._audit?.confidence,
-                          })
-                            ? "bg-amber-400/15 text-amber-700 dark:text-amber-300"
-                            : "bg-primary/10 text-primary",
-                        )}
-                      >
-                        {relationNeedsInferenceReview({
+                    <div className="w-full">
+                      <DraftAuditLine
+                        audit={relation._audit}
+                        onAccept={() =>
+                          patchRelation(index, { _audit: acceptedAudit(relation._audit) })
+                        }
+                        onReject={() => removeRelation(index)}
+                      />
+                    </div>
+                    <DraftPersonReferenceInput
+                      name={relation.from ?? ""}
+                      draftId={relation.fromDraftId}
+                      people={draft.people ?? []}
+                      onChange={(from, fromDraftId) =>
+                        patchRelation(index, { from, fromDraftId, fromPersonId: undefined })
+                      }
+                      className="h-8 w-28 text-xs"
+                      placeholder={t("谁")}
+                    />
+                    <ArrowRight className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                    <Input
+                      value={relation.label ?? ""}
+                      onChange={(event) => patchRelation(index, { label: event.target.value })}
+                      className="h-8 w-32 text-xs"
+                      placeholder={t("关系")}
+                    />
+                    <ArrowRight className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                    <DraftPersonReferenceInput
+                      name={relation.to ?? ""}
+                      draftId={relation.toDraftId}
+                      people={draft.people ?? []}
+                      onChange={(to, toDraftId) =>
+                        patchRelation(index, { to, toDraftId, toPersonId: undefined })
+                      }
+                      className="h-8 w-28 text-xs"
+                      placeholder={t("对谁")}
+                    />
+                    <button
+                      type="button"
+                      className="ml-auto text-muted-foreground transition-colors hover:text-destructive"
+                      onClick={() => removeRelation(index)}
+                    >
+                      <Trash2 className="size-3.5" aria-hidden="true" />
+                    </button>
+                    <div
+                      className={cn(
+                        "w-full space-y-1.5 rounded-lg border px-2.5 py-2",
+                        relationNeedsInferenceReview({
                           basis: relation.basis,
                           note: relation.note,
                           confidence: relation._audit?.confidence,
                         })
-                          ? relation._audit?.confirmationStatus === "accepted"
-                            ? t("AI 推断，已人工接受")
-                            : t("AI 推断，待核验")
-                          : t("原文关系")}
-                      </span>
-                      {relation.note && (
-                        <span className="text-muted-foreground">{relation.note}</span>
+                          ? "border-amber-400/50 bg-amber-400/5"
+                          : "border-border bg-muted/25",
                       )}
+                    >
+                      <div className="flex flex-wrap items-center gap-2 text-[10px]">
+                        <span
+                          className={cn(
+                            "rounded-full px-2 py-0.5 font-medium",
+                            relationNeedsInferenceReview({
+                              basis: relation.basis,
+                              note: relation.note,
+                              confidence: relation._audit?.confidence,
+                            })
+                              ? "bg-amber-400/15 text-amber-700 dark:text-amber-300"
+                              : "bg-primary/10 text-primary",
+                          )}
+                        >
+                          {relationNeedsInferenceReview({
+                            basis: relation.basis,
+                            note: relation.note,
+                            confidence: relation._audit?.confidence,
+                          })
+                            ? relation._audit?.confirmationStatus === "accepted"
+                              ? t("AI 推断，已人工接受")
+                              : t("AI 推断，待核验")
+                            : t("原文关系")}
+                        </span>
+                        {relation.note && (
+                          <span className="text-muted-foreground">{relation.note}</span>
+                        )}
+                      </div>
+                      {relation._relationChecked === false && relation._relationReason && (
+                        <p className="text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
+                          {relation._relationReason}
+                        </p>
+                      )}
+                      <Input
+                        value={relation.basis ?? ""}
+                        onChange={(event) => patchRelation(index, { basis: event.target.value })}
+                        className="h-8 text-xs"
+                        aria-label={t("关系依据")}
+                        placeholder={t("原文：… / 推断依据：…")}
+                      />
                     </div>
-                    {relation._relationChecked === false && relation._relationReason && (
-                      <p className="text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
-                        {relation._relationReason}
-                      </p>
-                    )}
-                    <Input
-                      value={relation.basis ?? ""}
-                      onChange={(event) => patchRelation(index, { basis: event.target.value })}
-                      className="h-8 text-xs"
-                      aria-label={t("关系依据")}
-                      placeholder={t("原文：… / 推断依据：…")}
-                    />
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="space-y-2 rounded-xl border border-dashed border-border p-3">
-            <div className="flex items-center gap-2">
-              <CalendarDays className="size-3.5 text-primary" aria-hidden="true" />
-              <span className="text-xs font-medium">
-                {t("事件草稿")} · {(draft.events ?? []).length}
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="ml-auto h-7 rounded-full px-3 text-xs"
-                onClick={addEvent}
-              >
-                <Plus className="size-3.5" aria-hidden="true" />
-                {t("加一条事件")}
-              </Button>
-            </div>
-            {(draft.events ?? []).length === 0 && (
-              <p className="text-[11px] text-muted-foreground">
-                {t("材料里没读到明确事件。可手动补充往事、见面、通话或已经约定的日历事项。")}
-              </p>
-            )}
-            {(draft.events ?? []).map((item, index) => (
-              <div
-                key={item._draftId ?? `event-${index}`}
-                className="space-y-2 rounded-xl border border-border p-3"
-                data-draft-kind="event"
-                data-draft-index={index}
-              >
-                <DraftAuditLine
-                  audit={item._audit}
-                  onAccept={() => patchEvent(index, { _audit: acceptedAudit(item._audit) })}
-                  onReject={() => removeEvent(index)}
-                />
-                <div className="space-y-1">
-                  <select
-                    value={item.targetEventId ?? CREATE_NEW_EVENT}
-                    onChange={(event) =>
-                      patchEvent(index, {
-                        targetEventId: event.target.value,
-                        _eventChecked: true,
-                        _eventReason:
-                          event.target.value === CREATE_NEW_EVENT
-                            ? "将新建一条事件"
-                            : "将覆盖所选事件；写入前仍需接受本草稿",
-                      })
-                    }
-                    className="h-8 w-full rounded-md border border-input bg-background px-3 text-xs"
-                    aria-label={t("事件写入方式")}
-                  >
-                    <option value={CREATE_NEW_EVENT}>{t("新增事件")}</option>
-                    {existingEvents.slice(0, 100).map((event) => (
-                      <option key={event.id} value={event.id}>
-                        {t("更新已有")} · {event.date} · {event.title}
-                      </option>
-                    ))}
-                  </select>
-                  {item._eventReason && (
-                    <p className="text-[11px] text-amber-600 dark:text-amber-300">
-                      {item._eventReason}
-                    </p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={item.title ?? ""}
-                    onChange={(event) => patchEvent(index, { title: event.target.value })}
-                    className="h-8 flex-1 text-sm"
-                    placeholder={t("事件名称")}
-                  />
-                  <button
-                    type="button"
-                    aria-label={t("删除事件草稿")}
-                    className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
-                    onClick={() => removeEvent(index)}
-                  >
-                    <Trash2 className="size-3.5" aria-hidden="true" />
-                  </button>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {item.precision === "year" ? (
-                    <Input
-                      type="number"
-                      min={1900}
-                      max={2200}
-                      value={item.date?.slice(0, 4) ?? ""}
-                      onChange={(event) =>
-                        patchEvent(index, {
-                          date: /^\d{4}$/.test(event.target.value)
-                            ? `${event.target.value}-01-01`
-                            : "",
-                        })
-                      }
-                      className="h-8 text-xs"
-                      placeholder={t("年份")}
-                      aria-label={t("事件年份")}
-                    />
-                  ) : (
-                    <Input
-                      type={item.precision === "month" ? "month" : "date"}
-                      value={
-                        item.precision === "month"
-                          ? (item.date?.slice(0, 7) ?? "")
-                          : (item.date ?? "")
-                      }
-                      onChange={(event) =>
-                        patchEvent(index, {
-                          date:
-                            item.precision === "month" && event.target.value
-                              ? `${event.target.value}-01`
-                              : event.target.value,
-                        })
-                      }
-                      className="h-8 text-xs"
-                      aria-label={item.precision === "month" ? t("事件月份") : t("事件日期")}
-                    />
-                  )}
-                  <select
-                    value={item.precision ?? "day"}
-                    onChange={(event) => {
-                      const precision = event.target.value as DraftEvent["precision"];
-                      const current = item.date ?? "";
-                      patchEvent(index, {
-                        precision,
-                        date:
-                          precision === "year" && current
-                            ? `${current.slice(0, 4)}-01-01`
-                            : precision === "month" && current
-                              ? `${current.slice(0, 7)}-01`
-                              : current,
-                        dateEnd: precision === "range" ? item.dateEnd : undefined,
-                      });
-                    }}
-                    className="h-8 rounded-md border border-input bg-background px-3 text-xs"
-                    aria-label={t("日期精度")}
-                  >
-                    <option value="day">{t("确定到日")}</option>
-                    <option value="month">{t("只确定到月")}</option>
-                    <option value="year">{t("只确定到年")}</option>
-                    <option value="range">{t("时间范围")}</option>
-                  </select>
-                  {item.precision === "range" && (
-                    <Input
-                      type="date"
-                      value={item.dateEnd ?? ""}
-                      onChange={(event) => patchEvent(index, { dateEnd: event.target.value })}
-                      className="h-8 text-xs"
-                      aria-label={t("事件结束日期")}
-                    />
-                  )}
-                  <Input
-                    value={item.timeText ?? ""}
-                    onChange={(event) => patchEvent(index, { timeText: event.target.value })}
-                    onBlur={(event) => {
-                      const parsed = parseFuzzyLocal(event.target.value);
-                      if (parsed) patchEvent(index, parsed);
-                    }}
-                    className="h-8 text-xs"
-                    placeholder={t("原始时间表述，如：去年夏天")}
-                    aria-label={t("原始时间表述")}
-                  />
-                  <Input
-                    value={item.place ?? ""}
-                    onChange={(event) => patchEvent(index, { place: event.target.value })}
-                    className="h-8 text-xs"
-                    placeholder={t("地点")}
-                  />
-                  <div>
-                    <Input
-                      value={(item.people ?? []).join("、")}
-                      onChange={(event) =>
-                        patchEvent(index, {
-                          people: event.target.value
-                            .split(/[、,，\s]+/)
-                            .map((name) => name.trim())
-                            .filter(Boolean),
-                          peopleDraftIds: undefined,
-                          peoplePersonIds: undefined,
-                        })
-                      }
-                      className="h-8 text-xs"
-                      placeholder={t("相关人物（顿号分隔）")}
-                    />
-                    <DraftAmbiguousPeopleRefs
-                      names={item.people ?? []}
-                      draftIds={item.peopleDraftIds}
-                      people={draft.people ?? []}
-                      onChange={(peopleDraftIds) =>
-                        patchEvent(index, { peopleDraftIds, peoplePersonIds: undefined })
-                      }
-                    />
-                  </div>
-                  <Input
-                    value={item.kind ?? ""}
-                    onChange={(event) => patchEvent(index, { kind: event.target.value })}
-                    className="h-8 text-xs"
-                    placeholder={t("类型，如聚会 / 通话 / 帮忙")}
-                  />
-                </div>
-                <Textarea
-                  value={item.detail ?? ""}
-                  onChange={(event) => patchEvent(index, { detail: event.target.value })}
-                  rows={2}
-                  className="text-xs"
-                  placeholder={t("事件细节")}
-                />
+                ))}
               </div>
-            ))}
-          </div>
-
-          <div className="space-y-2 rounded-xl border border-dashed border-border p-3">
-            <div className="flex items-center gap-2">
-              <Bell className="size-3.5 text-primary" aria-hidden="true" />
-              <span className="text-xs font-medium">
-                {t("提醒草稿")} · {(draft.reminders ?? []).length}
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="ml-auto h-7 rounded-full px-3 text-xs"
-                onClick={addReminder}
-              >
-                <Plus className="size-3.5" aria-hidden="true" />
-                {t("加一条提醒")}
-              </Button>
-            </div>
-            {(draft.reminders ?? []).length === 0 && (
-              <p className="text-[11px] text-muted-foreground">
-                {t("材料里没读到待办。可手动添加需要联系、祝福、送礼或跟进的行动。")}
-              </p>
             )}
-            {(draft.reminders ?? []).map((item, index) => (
-              <div
-                key={item._draftId ?? `reminder-${index}`}
-                className="space-y-2 rounded-xl border border-border p-3"
-                data-draft-kind="reminder"
-                data-draft-index={index}
-              >
-                <DraftAuditLine
-                  audit={item._audit}
-                  onAccept={() => patchReminder(index, { _audit: acceptedAudit(item._audit) })}
-                  onReject={() => removeReminder(index)}
-                />
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={item.title ?? ""}
-                    onChange={(event) => patchReminder(index, { title: event.target.value })}
-                    className="h-8 flex-1 text-sm"
-                    placeholder={t("要做什么")}
-                  />
-                  <button
-                    type="button"
-                    aria-label={t("删除提醒草稿")}
-                    className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
-                    onClick={() => removeReminder(index)}
-                  >
-                    <Trash2 className="size-3.5" aria-hidden="true" />
-                  </button>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Input
-                    type="date"
-                    value={item.due ?? ""}
-                    onChange={(event) => patchReminder(index, { due: event.target.value })}
-                    className="h-8 text-xs"
-                    aria-label={t("提醒日期")}
-                  />
-                  <select
-                    value={item.kind ?? "custom"}
-                    onChange={(event) =>
-                      patchReminder(index, {
-                        kind: event.target.value as DraftReminder["kind"],
-                      })
-                    }
-                    className="h-8 rounded-md border border-input bg-background px-3 text-xs"
-                    aria-label={t("提醒类型")}
-                  >
-                    <option value="custom">{t("普通待办")}</option>
-                    <option value="birthday">{t("生日")}</option>
-                    <option value="festival">{t("节日")}</option>
-                    <option value="gift">{t("送礼")}</option>
-                  </select>
-                  <div className="sm:col-span-2">
-                    <Input
-                      value={(item.people ?? []).join("、")}
-                      onChange={(event) =>
-                        patchReminder(index, {
-                          people: event.target.value
-                            .split(/[、,，\s]+/)
-                            .map((name) => name.trim())
-                            .filter(Boolean),
-                          peopleDraftIds: undefined,
-                        })
-                      }
-                      className="h-8 text-xs"
-                      placeholder={t("相关人物（顿号分隔）")}
-                    />
-                    <DraftAmbiguousPeopleRefs
-                      names={item.people ?? []}
-                      draftIds={item.peopleDraftIds}
-                      people={draft.people ?? []}
-                      onChange={(peopleDraftIds) => patchReminder(index, { peopleDraftIds })}
-                    />
-                  </div>
-                </div>
-                <Textarea
-                  value={item.detail ?? ""}
-                  onChange={(event) => patchReminder(index, { detail: event.target.value })}
-                  rows={2}
-                  className="text-xs"
-                  placeholder={t("提醒说明")}
-                />
-              </div>
-            ))}
-          </div>
+          </ReviewFold>
 
-          {(draft.evidence ?? []).length > 0 && (
-            <div className="space-y-2">
-              {(draft.evidence ?? []).map((item, index) => (
+          <ReviewFold title={t("事件草稿")} count={(draft.events ?? []).length}>
+            <div className="space-y-2 rounded-xl border border-dashed border-border p-3">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="size-3.5 text-primary" aria-hidden="true" />
+                <span className="text-xs font-medium">
+                  {t("事件草稿")} · {(draft.events ?? []).length}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto h-7 rounded-full px-3 text-xs"
+                  onClick={addEvent}
+                >
+                  <Plus className="size-3.5" aria-hidden="true" />
+                  {t("加一条事件")}
+                </Button>
+              </div>
+              {(draft.events ?? []).length === 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  {t("材料里没读到明确事件。可手动补充往事、见面、通话或已经约定的日历事项。")}
+                </p>
+              )}
+              {(draft.events ?? []).map((item, index) => (
                 <div
-                  key={item._draftId ?? `evidence-${index}`}
-                  className="space-y-2 rounded-xl border border-dashed border-border p-3"
-                  data-draft-kind="evidence"
+                  key={item._draftId ?? `event-${index}`}
+                  className="space-y-2 rounded-xl border border-border p-3"
+                  data-draft-kind="event"
                   data-draft-index={index}
                 >
                   <DraftAuditLine
                     audit={item._audit}
-                    onAccept={() => patchEvidence(index, { _audit: acceptedAudit(item._audit) })}
-                    onReject={() => removeEvidence(index)}
+                    onAccept={() => patchEvent(index, { _audit: acceptedAudit(item._audit) })}
+                    onReject={() => removeEvent(index)}
                   />
+                  <div className="space-y-1">
+                    <select
+                      value={item.targetEventId ?? CREATE_NEW_EVENT}
+                      onChange={(event) =>
+                        patchEvent(index, {
+                          targetEventId: event.target.value,
+                          _eventChecked: true,
+                          _eventReason:
+                            event.target.value === CREATE_NEW_EVENT
+                              ? "将新建一条事件"
+                              : "将覆盖所选事件；写入前仍需接受本草稿",
+                        })
+                      }
+                      className="h-8 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      aria-label={t("事件写入方式")}
+                    >
+                      <option value={CREATE_NEW_EVENT}>{t("新增事件")}</option>
+                      {existingEvents.slice(0, 100).map((event) => (
+                        <option key={event.id} value={event.id}>
+                          {t("更新已有")} · {event.date} · {event.title}
+                        </option>
+                      ))}
+                    </select>
+                    {item._eventReason && (
+                      <p className="text-[11px] text-amber-600 dark:text-amber-300">
+                        {item._eventReason}
+                      </p>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <Input
                       value={item.title ?? ""}
-                      onChange={(event) => patchEvidence(index, { title: event.target.value })}
+                      onChange={(event) => patchEvent(index, { title: event.target.value })}
                       className="h-8 flex-1 text-sm"
-                      placeholder={t("材料标题")}
+                      placeholder={t("事件名称")}
                     />
                     <button
                       type="button"
+                      aria-label={t("删除事件草稿")}
                       className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
-                      onClick={() => removeEvidence(index)}
+                      onClick={() => removeEvent(index)}
                     >
                       <Trash2 className="size-3.5" aria-hidden="true" />
                     </button>
                   </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {item.precision === "year" ? (
+                      <Input
+                        type="number"
+                        min={1900}
+                        max={2200}
+                        value={item.date?.slice(0, 4) ?? ""}
+                        onChange={(event) =>
+                          patchEvent(index, {
+                            date: /^\d{4}$/.test(event.target.value)
+                              ? `${event.target.value}-01-01`
+                              : "",
+                          })
+                        }
+                        className="h-8 text-xs"
+                        placeholder={t("年份")}
+                        aria-label={t("事件年份")}
+                      />
+                    ) : (
+                      <Input
+                        type={item.precision === "month" ? "month" : "date"}
+                        value={
+                          item.precision === "month"
+                            ? (item.date?.slice(0, 7) ?? "")
+                            : (item.date ?? "")
+                        }
+                        onChange={(event) =>
+                          patchEvent(index, {
+                            date:
+                              item.precision === "month" && event.target.value
+                                ? `${event.target.value}-01`
+                                : event.target.value,
+                          })
+                        }
+                        className="h-8 text-xs"
+                        aria-label={item.precision === "month" ? t("事件月份") : t("事件日期")}
+                      />
+                    )}
+                    <select
+                      value={item.precision ?? "day"}
+                      onChange={(event) => {
+                        const precision = event.target.value as DraftEvent["precision"];
+                        const current = item.date ?? "";
+                        patchEvent(index, {
+                          precision,
+                          date:
+                            precision === "year" && current
+                              ? `${current.slice(0, 4)}-01-01`
+                              : precision === "month" && current
+                                ? `${current.slice(0, 7)}-01`
+                                : current,
+                          dateEnd: precision === "range" ? item.dateEnd : undefined,
+                        });
+                      }}
+                      className="h-8 rounded-md border border-input bg-background px-3 text-xs"
+                      aria-label={t("日期精度")}
+                    >
+                      <option value="day">{t("确定到日")}</option>
+                      <option value="month">{t("只确定到月")}</option>
+                      <option value="year">{t("只确定到年")}</option>
+                      <option value="range">{t("时间范围")}</option>
+                    </select>
+                    {item.precision === "range" && (
+                      <Input
+                        type="date"
+                        value={item.dateEnd ?? ""}
+                        onChange={(event) => patchEvent(index, { dateEnd: event.target.value })}
+                        className="h-8 text-xs"
+                        aria-label={t("事件结束日期")}
+                      />
+                    )}
+                    <Input
+                      value={item.timeText ?? ""}
+                      onChange={(event) => patchEvent(index, { timeText: event.target.value })}
+                      onBlur={(event) => {
+                        const parsed = parseFuzzyLocal(event.target.value);
+                        if (parsed) patchEvent(index, parsed);
+                      }}
+                      className="h-8 text-xs"
+                      placeholder={t("原始时间表述，如：去年夏天")}
+                      aria-label={t("原始时间表述")}
+                    />
+                    <Input
+                      value={item.place ?? ""}
+                      onChange={(event) => patchEvent(index, { place: event.target.value })}
+                      className="h-8 text-xs"
+                      placeholder={t("地点")}
+                    />
+                    <div>
+                      <Input
+                        value={(item.people ?? []).join("、")}
+                        onChange={(event) =>
+                          patchEvent(index, {
+                            people: event.target.value
+                              .split(/[、,，\s]+/)
+                              .map((name) => name.trim())
+                              .filter(Boolean),
+                            peopleDraftIds: undefined,
+                            peoplePersonIds: undefined,
+                          })
+                        }
+                        className="h-8 text-xs"
+                        placeholder={t("相关人物（顿号分隔）")}
+                      />
+                      <DraftAmbiguousPeopleRefs
+                        names={item.people ?? []}
+                        draftIds={item.peopleDraftIds}
+                        people={draft.people ?? []}
+                        onChange={(peopleDraftIds) =>
+                          patchEvent(index, { peopleDraftIds, peoplePersonIds: undefined })
+                        }
+                      />
+                    </div>
+                    <Input
+                      value={item.kind ?? ""}
+                      onChange={(event) => patchEvent(index, { kind: event.target.value })}
+                      className="h-8 text-xs"
+                      placeholder={t("类型，如聚会 / 通话 / 帮忙")}
+                    />
+                  </div>
                   <Textarea
-                    value={item.text ?? ""}
-                    onChange={(event) => patchEvidence(index, { text: event.target.value })}
-                    rows={3}
+                    value={item.detail ?? ""}
+                    onChange={(event) => patchEvent(index, { detail: event.target.value })}
+                    rows={2}
                     className="text-xs"
-                    placeholder={t("材料正文")}
+                    placeholder={t("事件细节")}
                   />
                 </div>
               ))}
             </div>
-          )}
+          </ReviewFold>
+
+          <ReviewFold title={t("提醒草稿")} count={(draft.reminders ?? []).length}>
+            <div className="space-y-2 rounded-xl border border-dashed border-border p-3">
+              <div className="flex items-center gap-2">
+                <Bell className="size-3.5 text-primary" aria-hidden="true" />
+                <span className="text-xs font-medium">
+                  {t("提醒草稿")} · {(draft.reminders ?? []).length}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto h-7 rounded-full px-3 text-xs"
+                  onClick={addReminder}
+                >
+                  <Plus className="size-3.5" aria-hidden="true" />
+                  {t("加一条提醒")}
+                </Button>
+              </div>
+              {(draft.reminders ?? []).length === 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  {t("材料里没读到待办。可手动添加需要联系、祝福、送礼或跟进的行动。")}
+                </p>
+              )}
+              {(draft.reminders ?? []).map((item, index) => (
+                <div
+                  key={item._draftId ?? `reminder-${index}`}
+                  className="space-y-2 rounded-xl border border-border p-3"
+                  data-draft-kind="reminder"
+                  data-draft-index={index}
+                >
+                  <DraftAuditLine
+                    audit={item._audit}
+                    onAccept={() => patchReminder(index, { _audit: acceptedAudit(item._audit) })}
+                    onReject={() => removeReminder(index)}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={item.title ?? ""}
+                      onChange={(event) => patchReminder(index, { title: event.target.value })}
+                      className="h-8 flex-1 text-sm"
+                      placeholder={t("要做什么")}
+                    />
+                    <button
+                      type="button"
+                      aria-label={t("删除提醒草稿")}
+                      className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
+                      onClick={() => removeReminder(index)}
+                    >
+                      <Trash2 className="size-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Input
+                      type="date"
+                      value={item.due ?? ""}
+                      onChange={(event) => patchReminder(index, { due: event.target.value })}
+                      className="h-8 text-xs"
+                      aria-label={t("提醒日期")}
+                    />
+                    <select
+                      value={item.kind ?? "custom"}
+                      onChange={(event) =>
+                        patchReminder(index, {
+                          kind: event.target.value as DraftReminder["kind"],
+                        })
+                      }
+                      className="h-8 rounded-md border border-input bg-background px-3 text-xs"
+                      aria-label={t("提醒类型")}
+                    >
+                      <option value="custom">{t("普通待办")}</option>
+                      <option value="birthday">{t("生日")}</option>
+                      <option value="festival">{t("节日")}</option>
+                      <option value="gift">{t("送礼")}</option>
+                    </select>
+                    <div className="sm:col-span-2">
+                      <Input
+                        value={(item.people ?? []).join("、")}
+                        onChange={(event) =>
+                          patchReminder(index, {
+                            people: event.target.value
+                              .split(/[、,，\s]+/)
+                              .map((name) => name.trim())
+                              .filter(Boolean),
+                            peopleDraftIds: undefined,
+                          })
+                        }
+                        className="h-8 text-xs"
+                        placeholder={t("相关人物（顿号分隔）")}
+                      />
+                      <DraftAmbiguousPeopleRefs
+                        names={item.people ?? []}
+                        draftIds={item.peopleDraftIds}
+                        people={draft.people ?? []}
+                        onChange={(peopleDraftIds) => patchReminder(index, { peopleDraftIds })}
+                      />
+                    </div>
+                  </div>
+                  <Textarea
+                    value={item.detail ?? ""}
+                    onChange={(event) => patchReminder(index, { detail: event.target.value })}
+                    rows={2}
+                    className="text-xs"
+                    placeholder={t("提醒说明")}
+                  />
+                </div>
+              ))}
+            </div>
+          </ReviewFold>
+
+          <ReviewFold title={t("来源材料")} count={(draft.evidence ?? []).length}>
+            {(draft.evidence ?? []).length > 0 && (
+              <div className="space-y-2">
+                {(draft.evidence ?? []).map((item, index) => (
+                  <div
+                    key={item._draftId ?? `evidence-${index}`}
+                    className="space-y-2 rounded-xl border border-dashed border-border p-3"
+                    data-draft-kind="evidence"
+                    data-draft-index={index}
+                  >
+                    <DraftAuditLine
+                      audit={item._audit}
+                      onAccept={() => patchEvidence(index, { _audit: acceptedAudit(item._audit) })}
+                      onReject={() => removeEvidence(index)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={item.title ?? ""}
+                        onChange={(event) => patchEvidence(index, { title: event.target.value })}
+                        className="h-8 flex-1 text-sm"
+                        placeholder={t("材料标题")}
+                      />
+                      <button
+                        type="button"
+                        className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
+                        onClick={() => removeEvidence(index)}
+                      >
+                        <Trash2 className="size-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <Textarea
+                      value={item.text ?? ""}
+                      onChange={(event) => patchEvidence(index, { text: event.target.value })}
+                      rows={3}
+                      className="text-xs"
+                      placeholder={t("材料正文")}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </ReviewFold>
 
           <Button
             className="rounded-full px-5"
