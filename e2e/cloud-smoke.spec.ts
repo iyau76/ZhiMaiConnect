@@ -14,7 +14,7 @@ test.describe("Cloudflare 公开版本", () => {
     test.setTimeout(90_000);
     await openApp(page);
 
-    const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
+    const intake = page.getByTestId("intake-panel");
     await intake
       .getByRole("textbox")
       .fill(

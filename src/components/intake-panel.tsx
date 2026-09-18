@@ -68,6 +68,16 @@ import {
 } from "@/lib/face-db";
 import type { ArchiveMutationPlan } from "@/lib/archive-mutation-plan";
 import { matchIdentity } from "@/lib/identity-match";
+import {
+  addableCircles,
+  effectiveCircles,
+  membershipEntry,
+  metadataRepair,
+  newCircleRow,
+  resolvePersonRef,
+  savedCircleRow,
+} from "@/lib/intake-circle-membership";
+
 import { parseFuzzyLocal } from "@/lib/fuzzy-date";
 import { getLang, t, tFormat } from "@/lib/i18n";
 import { isSelfReference, SELF_PERSON_ID } from "@/lib/person-identity";
@@ -3325,13 +3335,17 @@ export function IntakePanel({
     (draft?.collections ?? []).length,
   );
 
-  /** 圈层改在人物卡片里维护：草稿里的成员关系就是待写入的圈层变更。 */
-  const circlesOfPerson = (person: DraftPerson) =>
-    (draft?.collections ?? []).filter((collection) =>
-      collection.memberships.some(
-        (member) => member.action === "add" && member.personDraftId === person._draftId,
-      ),
-    );
+  /** 圈层成员状态的唯一来源：投影规则放在 lib 里，组件只提供当前数据。 */
+  const circleProjection = (person: DraftPerson) => ({
+    person,
+    drafts: draft?.collections,
+    collections: existingCollections,
+    memberships: existingCollectionMemberships,
+    createNewSentinel: CREATE_NEW_PERSON,
+    unnamedLabel: t("未命名圈层"),
+  });
+  const circlesOfPerson = (person: DraftPerson) => effectiveCircles(circleProjection(person));
+  const addableCirclesFor = (person: DraftPerson) => addableCircles(circleProjection(person));
 
   const groundingWarningsOf = (person: DraftPerson) =>
     (draft?._groundingWarnings ?? []).filter((item) => item.personDraftId === person._draftId);
@@ -3342,44 +3356,59 @@ export function IntakePanel({
     action: "add" | "remove",
     circleName?: string,
   ) => {
+    const { existingId } = resolvePersonRef(person, CREATE_NEW_PERSON);
     setDraft((current) => {
       if (!current) return current;
       const rows = current.collections ?? [];
       const existingRow = rows.find((row) => row.targetCollectionId === targetCollectionId);
-      const fallback = existingCollections.find((row) => row.id === targetCollectionId);
-      const membership = {
-        person: person.name ?? "",
-        personDraftId: person._draftId,
-        action,
-      };
+      const saved = existingCollections.find((row) => row.id === targetCollectionId);
+      const membership = membershipEntry({ person, existingId, action });
       if (existingRow) {
+        const backed = Boolean(saved);
+        // 只动成员的新建草稿：把人移出后整行没有意义，直接丢掉这行草稿
+        if (action === "remove" && !backed) {
+          return {
+            ...current,
+            collections: rows.filter((row) => row.targetCollectionId !== targetCollectionId),
+          };
+        }
         return {
           ...current,
           collections: rows.map((row) =>
             row.targetCollectionId === targetCollectionId
               ? mergeDraftPatch(row, {
                   memberships: [
-                    ...row.memberships.filter((item) => item.personDraftId !== person._draftId),
+                    ...row.memberships.filter(
+                      (item) =>
+                        item.personDraftId !== person._draftId &&
+                        !(existingId !== null && item.personId === existingId),
+                    ),
                     membership,
                   ],
+                  // 只加成员时不要顺手清掉用户没编辑过的圈层元数据
+                  ...metadataRepair(row, saved),
                 })
               : row,
           ),
         };
       }
-      return {
-        ...current,
-        collections: [
-          ...rows,
-          {
-            _draftId: `draft:collection:${crypto.randomUUID()}`,
+      const draftId = `draft:collection:${crypto.randomUUID()}`;
+      const row = saved
+        ? savedCircleRow({
             targetCollectionId,
-            name: circleName?.trim() || fallback?.name || t("未命名圈层"),
-            kind: fallback?.kind === "relationship_circle" ? "relationship_circle" : "context",
+            draftId,
             memberships: [membership],
-          },
-        ],
-      };
+            saved,
+            unnamedLabel: t("未命名圈层"),
+          })
+        : newCircleRow({
+            targetCollectionId,
+            draftId,
+            membership,
+            name: circleName,
+            unnamedLabel: t("未命名圈层"),
+          });
+      return { ...current, collections: [...rows, row] };
     });
   };
 
@@ -4176,7 +4205,7 @@ export function IntakePanel({
                     <span className="text-[10px] text-muted-foreground">{t("圈层")}</span>
                     {circlesOfPerson(person).map((collection) => (
                       <span
-                        key={collection._draftId}
+                        key={collection.id}
                         className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[10px]"
                       >
                         {collection.name}
@@ -4184,9 +4213,7 @@ export function IntakePanel({
                           type="button"
                           aria-label={t("移出圈层")}
                           className="text-muted-foreground hover:text-destructive"
-                          onClick={() =>
-                            upsertCircleMembership(person, collection.targetCollectionId, "remove")
-                          }
+                          onClick={() => upsertCircleMembership(person, collection.id, "remove")}
                         >
                           <X className="size-3" aria-hidden="true" />
                         </button>
@@ -4202,19 +4229,11 @@ export function IntakePanel({
                       className="h-7 rounded-md border border-input bg-background px-1.5 text-[11px]"
                     >
                       <option value="">{t("加入已有圈层…")}</option>
-                      {existingCollections
-                        .filter((row) => row.kind !== "computed_community")
-                        .filter(
-                          (row) =>
-                            !circlesOfPerson(person).some(
-                              (item) => item.targetCollectionId === row.id,
-                            ),
-                        )
-                        .map((row) => (
-                          <option key={row.id} value={row.id}>
-                            {row.name}
-                          </option>
-                        ))}
+                      {addableCirclesFor(person).map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {row.name}
+                        </option>
+                      ))}
                     </select>
                     <Input
                       value={newCircleName}

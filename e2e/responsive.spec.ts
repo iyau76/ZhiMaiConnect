@@ -1,11 +1,11 @@
-import { clickVisible, expect, openApp, openAskForHelp, test } from "./fixtures";
+import { clickVisible, expect, openApp, openAskForHelp, seedIntakeDraft, test } from "./fixtures";
 
 for (const width of [390, 768, 1440]) {
   test(`${width}px 下七项核心操作可完成且页面无整体横向溢出`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await openApp(page);
 
-    await page.getByRole("button", { name: "离线演示草稿" }).click();
+    await seedIntakeDraft(page);
     await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
     await page.getByRole("button", { name: "清除本地录入材料" }).click();
     await expect(page.getByRole("button", { name: "确认入库" })).toHaveCount(0);

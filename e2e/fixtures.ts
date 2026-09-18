@@ -1,5 +1,7 @@
 import { expect, test as base, type Page, type Route } from "@playwright/test";
 
+import { makeOfflineDemoCandidate, OFFLINE_DEMO_MATERIAL } from "../src/lib/intake-draft";
+
 const publicAppHostname = process.env.PLAYWRIGHT_BASE_URL
   ? new URL(process.env.PLAYWRIGHT_BASE_URL).hostname
   : undefined;
@@ -506,6 +508,48 @@ export async function openApp(page: Page, options: { initialView?: "today" | "in
   } else {
     await expect(page.getByRole("heading", { name: /今天先看/ })).toBeVisible();
   }
+}
+
+/** 录入草稿的本地暂存键，与 src/components/intake-panel.tsx 里的 DRAFT_KEY 保持一致。 */
+export const INTAKE_DRAFT_KEY = "zhimai.intake.draft.v1";
+
+export interface IntakeDraftSeed {
+  /** 录入框里的原始材料；默认用内置的合成演示材料。 */
+  raw?: string;
+  /** 复核页草稿；默认用内置的合成演示候选。 */
+  draft?: unknown;
+}
+
+/**
+ * 「离线演示草稿」按钮已按 UI 减法移除，原来点它的用例改成把同一份合成草稿
+ * 直接写进本地暂存再重新加载，让录入面板走和真实用户切页返回时一样的恢复路径。
+ */
+export async function seedIntakeDraft(page: Page, seed: IntakeDraftSeed = {}) {
+  const raw = seed.raw ?? OFFLINE_DEMO_MATERIAL;
+  const draft = "draft" in seed ? seed.draft : makeOfflineDemoCandidate();
+  const payload = JSON.stringify({
+    raw,
+    supplement: "",
+    draft,
+    attached: [],
+    importedCaptureIds: [],
+    at: Date.now(),
+  });
+  await page.addInitScript(
+    ([key, value]) => {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch {
+        /* about:blank 这类早期文档没有 localStorage */
+      }
+    },
+    [INTAKE_DRAFT_KEY, payload] as const,
+  );
+  await page.reload();
+  await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.getByTestId("intake-panel").getByRole("textbox", { name: "录入材料" }),
+  ).toHaveValue(raw, { timeout: 30_000 });
 }
 
 /** 展开核对页全部默认收起的折叠分区（核对页默认只展示需要决定的内容）。
