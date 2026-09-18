@@ -575,6 +575,8 @@ export async function expandReviewFolds(page: Page) {
 }
 
 export async function clickVisible(page: Page, locator: ReturnType<Page["getByRole"]>) {
+  // 提示条是浮在最上层的一层，它盖住的往往正是底部导航；先让这一层别拦点击。
+  await clearToasts(page);
   for (const candidate of await locator.all()) {
     if (await candidate.isVisible()) {
       await candidate.click();
@@ -582,6 +584,21 @@ export async function clickVisible(page: Page, locator: ReturnType<Page["getByRo
     }
   }
   throw new Error(`没有找到可见元素：${await locator.allTextContents()}`);
+}
+
+/**
+ * 窄屏上右下角的提示条会盖住底部导航，点导航前先等它自己消失。
+ * 提示条是正常的产品行为，所以不假装它不存在；只有它按住不放（计时器被浏览器节流）时，
+ * 才让它不再拦截点击，好让用例继续验证导航本身。
+ */
+export async function clearToasts(page: Page) {
+  const toast = page.locator("[data-sonner-toast]");
+  if ((await toast.count()) === 0) return;
+  try {
+    await expect(toast).toHaveCount(0, { timeout: 20_000 });
+  } catch {
+    await page.addStyleTag({ content: "[data-sonner-toast]{ pointer-events: none; }" });
+  }
 }
 
 /** 「找人办事」住在人物关系页的第三个页签里；返回「这事该拜托谁」那一块。 */
