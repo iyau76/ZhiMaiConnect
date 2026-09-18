@@ -5,6 +5,7 @@ import {
   openApp,
   readIndexedDbStore,
   seedIndexedDb,
+  seedIntakeDraft,
   expandReviewFolds,
   snapshotDraftCards,
   test,
@@ -23,7 +24,7 @@ test("模型失败、切换页面和刷新后，未提交材料仍保留", async
   });
 
   const material = "这是一段模型失败后也不能丢失的合成演示材料。";
-  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
+  const intake = page.getByTestId("intake-panel");
   await intake.getByRole("textbox").fill(material);
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
   await expect(page.getByLabel("Notifications alt+T").getByText("模拟模型不可用")).toBeVisible();
@@ -33,27 +34,19 @@ test("模型失败、切换页面和刷新后，未提交材料仍保留", async
   await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
   await expect(page.getByRole("heading", { name: "人物档案" })).toBeVisible();
   await clickVisible(page, page.getByRole("button", { name: /^录入/ }));
-  await expect(
-    page
-      .getByRole("heading", { name: /随手写，AI 来整理/ })
-      .locator("..")
-      .getByRole("textbox"),
-  ).toHaveValue(material);
+  await expect(page.getByTestId("intake-panel").getByRole("textbox")).toHaveValue(material);
 
   await page.reload();
-  await expect(
-    page
-      .getByRole("heading", { name: /随手写，AI 来整理/ })
-      .locator("..")
-      .getByRole("textbox"),
-  ).toHaveValue(material);
+  await expect(page.getByTestId("intake-panel").getByRole("textbox")).toHaveValue(material);
 });
 
 test("文件解析失败不会覆盖已经在编辑的草稿", async ({ page }) => {
   await openApp(page);
-  await page.getByRole("button", { name: "离线演示草稿" }).click();
-  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
-  const before = await intake.getByRole("textbox").inputValue();
+  await seedIntakeDraft(page);
+  const intake = page.getByTestId("intake-panel");
+  // 草稿渲染后录入面板里会有几十个输入框，这里按可访问名称锁定材料框。
+  const materialInput = intake.getByRole("textbox", { name: "录入材料" });
+  const before = await materialInput.inputValue();
   await page.waitForSelector("[data-review-fold-trigger]");
   await expandReviewFolds(page);
   const beforeDraft = await snapshotDraftCards(page);
@@ -80,7 +73,7 @@ test("文件解析失败不会覆盖已经在编辑的草稿", async ({ page }) 
 
   await expect(page.getByText(/broken\.docx：/)).toBeVisible();
   await expect(page.getByRole("button", { name: "导入图片 / PDF / Word / 文本" })).toBeEnabled();
-  await expect(intake.getByRole("textbox")).toHaveValue(before);
+  await expect(materialInput).toHaveValue(before);
   await expect.poll(() => snapshotDraftCards(page)).toEqual(beforeDraft);
   await expect(page.getByRole("button", { name: "确认入库" })).toBeVisible();
 });
@@ -100,7 +93,7 @@ test("最近一次合成录入可从界面整批撤销", async ({ page }) => {
       },
     ],
   });
-  await page.getByRole("button", { name: "离线演示草稿" }).click();
+  await seedIntakeDraft(page);
   await acceptAllDraftItems(page);
   await page.getByRole("button", { name: "确认入库" }).click();
   const undo = page.getByRole("button", { name: "撤销最近一次录入" });
@@ -150,7 +143,7 @@ test("最近一次合成录入可从界面整批撤销", async ({ page }) => {
 
 test("草稿中人工修改的关系、证据与 Fact 不会被误标为 AI 来源", async ({ page }) => {
   await openApp(page);
-  await page.getByRole("button", { name: "离线演示草稿" }).click();
+  await seedIntakeDraft(page);
 
   await page.waitForSelector("[data-review-fold-trigger]");
   await expandReviewFolds(page);
@@ -282,7 +275,7 @@ test("超过 24 小时的本地录入材料仍会恢复", async ({ page }) => {
   });
   await page.reload();
   await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
-  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
+  const intake = page.getByTestId("intake-panel");
   await expect(intake.getByRole("textbox")).toHaveValue("合成离线材料，下周继续整理");
 });
 
@@ -346,7 +339,7 @@ test("51 人 91 关系的合成数据可在关系图内完成交互冒烟", asyn
 
 test("AI 批准后修改事件再刷新，撤销保留新值及其人物关联", async ({ page }) => {
   await openApp(page);
-  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
+  const intake = page.getByTestId("intake-panel");
   await intake
     .getByRole("textbox")
     .fill(

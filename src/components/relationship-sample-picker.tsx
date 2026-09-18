@@ -26,6 +26,8 @@ export function RelationshipSamplePicker({
   const [sampleId, setSampleId] = useState<RelationshipTestSampleId>(
     RELATIONSHIP_TEST_SAMPLES[0].id,
   );
+  /** 「从零开始」的提示只在用户真的展开过示例之后才出现。 */
+  const [opened, setOpened] = useState(false);
   const sample =
     RELATIONSHIP_TEST_SAMPLES.find((item) => item.id === sampleId) ?? RELATIONSHIP_TEST_SAMPLES[0];
 
@@ -34,7 +36,7 @@ export function RelationshipSamplePicker({
       className={cn("rounded-lg border border-border/80 bg-muted/25 p-3", className)}
       aria-label={t("试试这些测试材料")}
     >
-      <details>
+      <details onToggle={(event) => setOpened(event.currentTarget.open)}>
         <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] font-medium text-foreground">
           <BookOpen className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
           {t("还没想好录入什么？")}
@@ -78,20 +80,22 @@ export function RelationshipSamplePicker({
           {t("可试问")}：{sample.demoPrompts[0]}
         </p>
       </details>
-      <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
-        {t("试完想从头再来？可在")}
-        <button
-          type="button"
-          className="mx-0.5 text-primary underline-offset-2 hover:underline"
-          onClick={() => {
-            if (onOpenSettings) onOpenSettings();
-            else window.location.assign("?view=settings");
-          }}
-        >
-          {t("设置")}
-        </button>
-        {t("中格式化档案，清空全部数据回到初始状态。")}
-      </p>
+      {opened && (
+        <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+          {t("试完想从头再来？可在")}
+          <button
+            type="button"
+            className="mx-0.5 text-primary underline-offset-2 hover:underline"
+            onClick={() => {
+              if (onOpenSettings) onOpenSettings();
+              else window.location.assign("?view=settings");
+            }}
+          >
+            {t("设置")}
+          </button>
+          {t("中格式化档案，清空全部数据回到初始状态。")}
+        </p>
+      )}
     </section>
   );
 }
