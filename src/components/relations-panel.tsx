@@ -10,7 +10,6 @@ import {
   Network,
   Plus,
   Search,
-  Sparkles,
   Tag,
   Trash2,
   UserPlus,
@@ -22,6 +21,8 @@ import { toast } from "sonner";
 import peopleEmptyArt from "@/assets/art/web/people-empty.webp";
 
 import { ExportMenu } from "@/components/export-menu";
+import { HelpHint } from "@/components/help-hint";
+import { MarkdownView } from "@/components/markdown-view";
 import { PersonProfileDialog } from "@/components/person-profile-dialog";
 import { SourceBadge } from "@/components/source-badge";
 import { TagGroupDialog } from "@/components/tag-group-dialog";
@@ -122,7 +123,6 @@ import type { ProviderPreset } from "@/lib/vision-providers";
 interface Props {
   preset: ProviderPreset;
   active?: boolean;
-  onOpenIntake: () => void;
   onOpenEvent?: (eventId: string) => void;
   onOpenReminder?: (reminderId: string) => void;
   onPrepareMeeting?: (personId: string) => void;
@@ -214,10 +214,20 @@ function generationColor(generation: number) {
   return colorForHue(GENERATION_HUES[index]);
 }
 
+/** 助手把档案依据、待确认项和正文拼在一条回答里；界面只留正文，其余折进「展开」。 */
+function splitAssistantAnswer(text: string) {
+  const marker = "AI 生成内容（请注意辨别）";
+  const index = text.lastIndexOf(marker);
+  if (index < 0) return { main: text, detail: "" };
+  return {
+    detail: text.slice(0, index).trim(),
+    main: text.slice(index + marker.length).trim(),
+  };
+}
+
 export function RelationsPanel({
   preset,
   active = true,
-  onOpenIntake,
   onOpenEvent,
   onOpenReminder,
   onPrepareMeeting,
@@ -568,7 +578,7 @@ export function RelationsPanel({
         question:
           getLang() === "en"
             ? "Review the complete local archive. Summarise evidence-backed groups and key tags, identify people who bridge topology communities, and list genuinely missing information worth collecting. Do not persist computed topology communities as factual circles. Answer in English."
-            : "请梳理当前完整人物档案：概括可证实的群体结构和每个人的关键标签，指出连接不同拓扑社区的桥接人物，并列出确实缺失、值得后续补充的信息。不要把拓扑社区写回为事实圈层。",
+            : "请通读本机全部档案，用普通人看得懂的话写一份关系概览。用 Markdown 输出：用「### 」小标题分四段（整体结构 / 每个人值得记住的信息 / 谁把小圈子连起来 / 还缺什么），每段用「- 」列条目，不要把所有内容挤成一段。只依据档案里已有的内容作答，不要下没有依据的结论，也不要使用「拓扑社区」这类术语。",
         persons: people,
         relations,
         events: lifeEvents,
@@ -2002,8 +2012,14 @@ export function RelationsPanel({
 
         <TabsContent value="roster" className="space-y-4 pt-4">
           <div className="space-y-2 rounded-xl border border-border p-3">
-            <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-              {t("不用人脸也能建档")}
+            <Label className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              {t("手动建档新人物")}
+              <HelpHint
+                label={t("手动建档新人物")}
+                text={t(
+                  "手动建档后，可以在下方具体人物卡中补充昵称、联系方式、关系与共同经历。也可以让 AI 根据备注帮你整理。",
+                )}
+              />
             </Label>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
@@ -2017,16 +2033,13 @@ export function RelationsPanel({
                 value={newNote}
                 onChange={(event) => setNewNote(event.target.value)}
                 onKeyDown={(event) => event.key === "Enter" && void createPerson()}
-                placeholder={t("一句话描述，之后可以让 AI 整理")}
+                placeholder={t("备注")}
               />
               <Button onClick={() => void createPerson()} className="shrink-0 rounded-full px-4">
                 <UserPlus className="size-3.5" aria-hidden="true" />
                 {t("建档")}
               </Button>
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              {t("建档后可继续补充昵称、联系方式、关系与共同经历。")}
-            </p>
           </div>
 
           <div className="space-y-2.5 rounded-xl border border-border p-3">
@@ -2244,16 +2257,7 @@ export function RelationsPanel({
 
         <TabsContent value="graph" className="space-y-4 pt-4">
           <div className="space-y-2 rounded-xl border border-border p-3">
-            <div className="flex flex-wrap gap-2">
-              <div className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
-                {t(
-                  "自然语言、文件、截图和语音请走统一录入草稿；确认身份、字段 Diff 与来源后才会写入。",
-                )}
-              </div>
-              <Button variant="outline" onClick={onOpenIntake} className="rounded-full px-4">
-                <Sparkles className="size-3.5" aria-hidden="true" />
-                {t("前往安全录入")}
-              </Button>
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
                 onClick={() => void analyse()}
@@ -2267,10 +2271,31 @@ export function RelationsPanel({
                 )}
                 {t("AI 梳理人际关系")}
               </Button>
+              <HelpHint
+                label={t("AI 梳理人际关系")}
+                text={t(
+                  "通读本机档案后，用大白话讲清：整体结构、每个人的关键标签、谁把不同群体连起来、还缺哪些信息。",
+                )}
+              />
             </div>
             {summary && (
-              <div className="whitespace-pre-wrap rounded-xl border border-border bg-muted/30 p-3 text-xs leading-relaxed">
-                {summary}
+              <div className="space-y-2">
+                <div className="rounded-xl border border-border bg-muted/30 p-3">
+                  <p className="text-[11px] text-muted-foreground">
+                    {t("AI 生成内容（请注意辨别）")}
+                  </p>
+                  <MarkdownView text={splitAssistantAnswer(summary).main} className="mt-1.5" />
+                </div>
+                {splitAssistantAnswer(summary).detail && (
+                  <details className="rounded-xl border border-border px-3 py-2">
+                    <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
+                      {t("档案依据与待确认项（展开查看）")}
+                    </summary>
+                    <p className="mt-2 whitespace-pre-wrap text-[10px] leading-relaxed text-muted-foreground">
+                      {splitAssistantAnswer(summary).detail}
+                    </p>
+                  </details>
+                )}
               </div>
             )}
           </div>
@@ -2278,9 +2303,10 @@ export function RelationsPanel({
           <div className="space-y-2 rounded-xl border border-border bg-muted/15 p-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-medium">{t("我的集合")}</span>
-              <span className="text-[11px] text-muted-foreground">
-                {t("一个人可以属于多个圈层；关系圈层参与圈层布局，场景集合用于筛选。")}
-              </span>
+              <HelpHint
+                label={t("圈层与集合")}
+                text={t("一个人可以属于多个圈层；关系圈层参与圈层布局，场景集合用于筛选。")}
+              />
               {collectionFilterId && (
                 <button
                   type="button"
@@ -2694,11 +2720,7 @@ export function RelationsPanel({
               aria-label={t(groupBy === "circles" ? "圈层图例" : "拓扑社区图例")}
             >
               <span className="text-[11px] text-muted-foreground">
-                {t(
-                  groupBy === "circles"
-                    ? "圈层布局（仅使用已确认关系圈；一个人可以同时属于多个圈层）"
-                    : "拓扑社区（Louvain 自动计算，不写入档案）",
-                )}
+                {t(groupBy === "circles" ? "圈层布局" : "拓扑社区（Louvain 自动计算，不写入档案）")}
                 ：
               </span>
               {graph.groups.map((group) => (

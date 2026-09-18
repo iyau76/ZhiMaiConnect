@@ -843,86 +843,88 @@ export function AskForHelpPanel({
         )}
         {candidates.length > 0 && (
           <ol className="mt-3 grid gap-2 lg:grid-cols-3">
-            {candidates.map((candidate, index) => (
-              <li
-                key={candidate.person.id}
-                className="rounded-xl border border-border bg-background/60 p-3 text-xs"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <span className="font-medium">
-                    {index + 1}. {candidate.person.name}
-                  </span>
-                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
-                    {candidate.score}{" "}
-                    {t(
-                      candidate.path
-                        ? "路径分"
-                        : candidate.mode === "target_side"
-                          ? "目标侧相关分"
-                          : candidate.mode === "open" && candidateMode === "agent"
-                            ? "本地锁定分"
-                            : "本地分",
-                    )}{" "}
-                    · {t(candidate.confidence)} {t("置信度")}
-                  </span>
-                </div>
-                {candidate.mode === "open" && Boolean(candidate.capabilityMatches?.length) && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {candidate.capabilityMatches?.map((match) => (
-                      <span
-                        key={`${match.slotId}:${match.localRank ?? 1}`}
-                        className={cn(
-                          "rounded-full border px-2 py-0.5 text-[10px]",
-                          match.localRank === 1
-                            ? "border-primary/35 bg-primary/10 text-primary"
-                            : "border-border bg-muted/35 text-muted-foreground",
-                        )}
-                      >
-                        {match.localRank === 1 ? t("首选") : `${t("备选")} ${match.localRank}`} ·{" "}
-                        {match.label}
-                      </span>
+            {[...candidates]
+              .sort((left, right) => right.score - left.score)
+              .map((candidate, index) => (
+                <li
+                  key={candidate.person.id}
+                  className="rounded-xl border border-border bg-background/60 p-3 text-xs"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium">
+                      {index + 1}. {candidate.person.name}
+                    </span>
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+                      {candidate.score}{" "}
+                      {t(
+                        candidate.path
+                          ? "路径分"
+                          : candidate.mode === "target_side"
+                            ? "目标侧相关分"
+                            : candidate.mode === "open" && candidateMode === "agent"
+                              ? "本地锁定分"
+                              : "本地分",
+                      )}{" "}
+                      · {t(candidate.confidence)} {t("置信度")}
+                    </span>
+                  </div>
+                  {candidate.mode === "open" && Boolean(candidate.capabilityMatches?.length) && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {candidate.capabilityMatches?.map((match) => (
+                        <span
+                          key={`${match.slotId}:${match.localRank ?? 1}`}
+                          className={cn(
+                            "rounded-full border px-2 py-0.5 text-[10px]",
+                            match.localRank === 1
+                              ? "border-primary/35 bg-primary/10 text-primary"
+                              : "border-border bg-muted/35 text-muted-foreground",
+                          )}
+                        >
+                          {match.localRank === 1 ? t("首选") : `${t("备选")} ${match.localRank}`} ·{" "}
+                          {match.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {candidate.path && (
+                    <p className="mt-2 rounded-md bg-primary/5 px-2 py-1.5 font-medium text-primary">
+                      {candidate.path.direct
+                        ? `${t("可直接联系")} ${persons.find((person) => person.id === candidate.path?.targetId)?.name ?? t("目标人物")}`
+                        : [
+                            t("我"),
+                            ...candidate.path.personIds.map(
+                              (id) =>
+                                persons.find((person) => person.id === id)?.name ?? t("未知人物"),
+                            ),
+                          ].join(" → ")}
+                    </p>
+                  )}
+                  {candidate.mode === "target_side" && (
+                    <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 font-medium text-amber-700 dark:text-amber-300">
+                      {t("目标侧潜在入口 · 尚未验证你能联系到此人")}
+                    </p>
+                  )}
+                  <p className="mt-2 leading-relaxed">
+                    {candidate.reasons.join("；") || t("暂无直接匹配理由")}
+                  </p>
+                  <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
+                    {candidate.evidence.map((item) => (
+                      <p key={item}>
+                        {t("依据")}：{item}
+                      </p>
+                    ))}
+                    <p>
+                      {t("信息更新")}：{new Date(candidate.updatedAt).toLocaleDateString()}
+                    </p>
+                    {candidate.risks.map((risk) => (
+                      <p key={risk} className="text-amber-700 dark:text-amber-300">
+                        {t("风险")}：{risk}
+                      </p>
                     ))}
                   </div>
-                )}
-                {candidate.path && (
-                  <p className="mt-2 rounded-md bg-primary/5 px-2 py-1.5 font-medium text-primary">
-                    {candidate.path.direct
-                      ? `${t("可直接联系")} ${persons.find((person) => person.id === candidate.path?.targetId)?.name ?? t("目标人物")}`
-                      : [
-                          t("我"),
-                          ...candidate.path.personIds.map(
-                            (id) =>
-                              persons.find((person) => person.id === id)?.name ?? t("未知人物"),
-                          ),
-                        ].join(" → ")}
-                  </p>
-                )}
-                {candidate.mode === "target_side" && (
-                  <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 font-medium text-amber-700 dark:text-amber-300">
-                    {t("目标侧潜在入口 · 尚未验证你能联系到此人")}
-                  </p>
-                )}
-                <p className="mt-2 leading-relaxed">
-                  {candidate.reasons.join("；") || t("暂无直接匹配理由")}
-                </p>
-                <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
-                  {candidate.evidence.map((item) => (
-                    <p key={item}>
-                      {t("依据")}：{item}
-                    </p>
-                  ))}
-                  <p>
-                    {t("信息更新")}：{new Date(candidate.updatedAt).toLocaleDateString()}
-                  </p>
-                  {candidate.risks.map((risk) => (
-                    <p key={risk} className="text-amber-700 dark:text-amber-300">
-                      {t("风险")}：{risk}
-                    </p>
-                  ))}
-                </div>
-                <SourceBadge source={candidate.source} className="mt-2" detailed />
-              </li>
-            ))}
+                  <SourceBadge source={candidate.source} className="mt-2" detailed />
+                </li>
+              ))}
           </ol>
         )}
         {askAnswer && (
