@@ -23,6 +23,7 @@ import { PlanBoard } from "@/components/plan-board";
 import { PreflightPanel } from "@/components/preflight-panel";
 import { RemindersPanel } from "@/components/reminders-panel";
 import { TodayPanel } from "@/components/today-panel";
+import { AboutControls } from "@/components/about-controls";
 import { PwaNotice, PwaSettings } from "@/components/pwa-controls";
 
 import { RelationsPanel } from "@/components/relations-panel";
@@ -70,18 +71,18 @@ function isView(value: string | null): value is View {
  * keep them mounted while the user visits another section so navigation does
  * not erase the conversation or abort an in-flight run.
  */
-const RETAINED_AGENT_VIEWS = new Set<View>(["reminders", "plan", "models"]);
+const RETAINED_AGENT_VIEWS = new Set<View>(["today", "people", "reminders", "plan", "models"]);
 
 function getNav(): Array<{ id: View; label: string; hint: string; icon: typeof Users }> {
   return [
     { id: "today", label: t("今天"), hint: t("现在值得处理的人和事"), icon: House },
     { id: "intake", label: t("录入"), hint: t("一段话写下身边的人"), icon: PenLine },
-    { id: "people", label: t("人物关系"), hint: t("档案与关系网"), icon: Users },
+    { id: "people", label: t("人物关系"), hint: t("档案、关系网与找人办事"), icon: Users },
+    { id: "models", label: t("模型配置"), hint: t("用哪个模型、写入授权"), icon: Cpu },
     { id: "reminders", label: t("提醒"), hint: t("生日、节日与待办"), icon: Bell },
     { id: "calendar", label: t("日历"), hint: t("哪天和谁做了什么"), icon: CalendarDays },
     { id: "plan", label: t("计划"), hint: t("目标拆解与行动项"), icon: ClipboardList },
-    { id: "models", label: t("AI 助理"), hint: t("模型设置与建议"), icon: Cpu },
-    { id: "settings", label: t("设置"), hint: t("外观、数据与 Agent"), icon: Settings },
+    { id: "settings", label: t("设置"), hint: t("外观与数据"), icon: Settings },
   ];
 }
 
@@ -97,7 +98,7 @@ const HEADINGS: Record<
     points: [
       "到期提醒、近期事件和未完成任务会从原记录自动汇总。",
       "点任意一项，就能回到对应的人物卡、事件、提醒或计划。",
-      "想起新情况时，随手写一句就能继续补充。",
+      "底部的「问一问」可以带上人物库，直接问一句该怎么办。",
     ],
   },
   intake: {
@@ -115,11 +116,11 @@ const HEADINGS: Record<
     kicker: "People · Circles",
     a: "理清每一段",
     b: "关系",
-    guide: "这一页：看关系、补资料",
+    guide: "这一页：看关系、补资料、找人办事",
     points: [
       "填名字就能建人，先建人再连关系；点一行打开人物卡补职位、部门等资料。",
-      "点圆点改人物卡：生日、圈子、亲密度、喜好、送过什么礼。",
-      "双箭头 ⇄ 对等关系（朋友、夫妻），单箭头 → 有方向（父母、师徒）。",
+      "「关系网」可以按圈层、拓扑社区或家族树看，也能全屏放大。",
+      "「找人办事」写一句要办的事，就能看到该找谁、为什么找他。",
     ],
   },
   reminders: {
@@ -130,7 +131,7 @@ const HEADINGS: Record<
     points: [
       "填了生日的人会自动出现在「最近 60 天」。",
       "点「祝福 / 礼物」，AI 结合喜好和送礼记录给具体建议。",
-      "「这事该拜托谁」会从你的人脉里挑合适的人。",
+      "想找人帮忙办事，去「人物关系 · 找人办事」。",
     ],
   },
   calendar: {
@@ -158,21 +159,21 @@ const HEADINGS: Record<
     kicker: "You · Settings",
     a: "调成你顺眼的",
     b: "样子",
-    guide: "这一页：外观、数据与 Agent 高级设置",
+    guide: "这一页：外观与数据",
     points: [
       "浅色 / 深色主题各有几套，随时切换。",
       "色觉辅助可以避开红绿或蓝黄配色，还能开高对比和大字号。",
-      "Agent 的写入授权、运行预算和本机日志也在这里管理。",
+      "备份、导出、安装到手机或电脑也在这里。",
     ],
   },
   models: {
     kicker: "Assistant · Setup",
     a: "挑一个顺手的",
     b: "模型",
-    guide: "这一页：选模型、问建议",
+    guide: "这一页：选模型、管授权与预算",
     points: [
-      "OpenAI / Gemini 兼容接口需要填写 API Key。",
-      "可以带上人物和关系数据，直接问 AI 该怎么处理某段关系。",
+      "OpenAI / Gemini 兼容接口需要填写 API Key，也可以直接用「知脉免费体验」。",
+      "写入授权、运行预算和本机运行记录都在页尾的 Agent 控制中心。",
     ],
   },
 };
@@ -284,9 +285,22 @@ export function Workspace() {
     if (workspaceView === "today") {
       return (
         <TodayPanel
+          preset={activePreset}
           onOpenIntake={() => openView("intake")}
           onOpenTarget={openTodayTarget}
           onPrepareMeeting={(query) => setMeetingBriefRequest({ query, nonce: Date.now() })}
+          focusRunId={
+            workspaceFocus?.view === "today" &&
+            (workspaceFocus.recordType === "run" || workspaceFocus.recordType === "proposal")
+              ? workspaceFocus.runId
+              : undefined
+          }
+          focusProposalId={
+            workspaceFocus?.view === "today" && workspaceFocus.recordType === "proposal"
+              ? workspaceFocus.recordId
+              : undefined
+          }
+          focusNonce={workspaceFocus?.view === "today" ? workspaceFocus.nonce : undefined}
         />
       );
     }
@@ -319,12 +333,6 @@ export function Workspace() {
               ? workspaceFocus.recordId
               : undefined
           }
-          focusRunId={
-            workspaceFocus?.view === "reminders" &&
-            (workspaceFocus.recordType === "run" || workspaceFocus.recordType === "proposal")
-              ? workspaceFocus.runId
-              : undefined
-          }
           focusNonce={workspaceFocus?.view === "reminders" ? workspaceFocus.nonce : undefined}
           onOpenEvent={(eventId) =>
             openTodayTarget({ view: "calendar", recordType: "event", recordId: eventId })
@@ -336,14 +344,12 @@ export function Workspace() {
       return (
         <div className="max-w-5xl space-y-5">
           <PwaSettings />
+          <AboutControls />
           <div className="space-y-5 rounded-xl border border-border bg-card p-5">
             <AppearanceControls />
             <DemoDataControls />
             <PreflightPanel preset={activePreset} />
           </div>
-          <AgentControlCenter
-            focusRunId={workspaceFocus?.view === "settings" ? workspaceFocus.runId : undefined}
-          />
         </div>
       );
     }
@@ -403,6 +409,7 @@ export function Workspace() {
       <div className="min-w-0 space-y-5">
         <RelationsPanel
           preset={activePreset}
+          active={view === "people"}
           onOpenIntake={() => openView("intake")}
           onOpenEvent={(eventId) =>
             openTodayTarget({ view: "calendar", recordType: "event", recordId: eventId })
@@ -428,6 +435,12 @@ export function Workspace() {
           focusRelationPersonId={
             workspaceFocus?.view === "people" && workspaceFocus.recordType === "relation"
               ? workspaceFocus.personId
+              : undefined
+          }
+          focusRunId={
+            workspaceFocus?.view === "people" &&
+            (workspaceFocus.recordType === "run" || workspaceFocus.recordType === "proposal")
+              ? workspaceFocus.runId
               : undefined
           }
           focusNonce={workspaceFocus?.view === "people" ? workspaceFocus.nonce : undefined}

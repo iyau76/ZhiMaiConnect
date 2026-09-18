@@ -1,6 +1,6 @@
 {
   "name": "zhimai-connect",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -16,8 +16,8 @@
     "dev": "vite dev",
     "build:native": "vite build --config vite.native.config.ts",
     "desktop:dev": "node scripts/run-desktop.mjs",
-    "package:windows": "npm run build:native && electron-builder --win --publish never",
-    "package:android": "npm run build:native && cap sync android && node scripts/build-android.mjs",
+    "package:windows": "node scripts/sync-version.mjs --check && npm run build:native && electron-builder --win --publish never",
+    "package:android": "node scripts/sync-version.mjs --check && npm run build:native && cap sync android && node scripts/build-android.mjs",
     "build": "vite build && node scripts/configure-cloudflare-build.mjs && node scripts/build-pwa.mjs",
     "build:dev": "vite build --mode development && node scripts/configure-cloudflare-build.mjs && node scripts/build-pwa.mjs",
     "preview": "wrangler dev --config .output/server/wrangler.json --ip 127.0.0.1 --port 4173",
@@ -31,7 +31,8 @@
     "e2e:pwa": "node scripts/test-pwa.mjs",
     "e2e:desktop": "node scripts/test-native-desktop.mjs",
     "e2e:ui": "playwright test --ui",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test:run"
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test:run",
+    "version:sync": "node scripts/sync-version.mjs"
   },
   "dependencies": {
     "@capacitor/android": "8.5.1",

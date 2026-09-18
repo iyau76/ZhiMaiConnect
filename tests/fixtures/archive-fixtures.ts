@@ -1,5 +1,14 @@
 import { createArchiveV2, type ArchiveV2, type ArchiveV2Source } from "../../src/lib/archive-data";
-import { buildDemoData } from "../../src/lib/demo-data";
+import {
+  buildDemoBridges,
+  buildDemoPackData,
+  mergeDemoPackData,
+} from "../../src/lib/demo-packs/assemble";
+import { campusPack } from "../../src/lib/demo-packs/life/campus";
+import { familyPack } from "../../src/lib/demo-packs/life/family";
+import { workplacePack } from "../../src/lib/demo-packs/life/workplace";
+import { smallBusinessPack } from "../../src/lib/demo-packs/life/small-business";
+import { LIFE_BRIDGE_EVENTS, LIFE_BRIDGE_RELATIONS } from "../../src/lib/demo-packs/life/bridges";
 import { projectKinshipRelations } from "../../src/lib/kinship-projector";
 
 const FIXTURE_EXPORTED_AT = "2026-09-04T00:00:00.000Z";
@@ -29,22 +38,22 @@ export const ARCHIVE_FIXTURE_COUNTS: Record<ArchiveFixtureId, ArchiveFixtureCoun
     reminders: 0,
   },
   "demo-50": {
-    persons: 50,
-    relationAssertions: 80,
-    derivedRelations: 7,
-    collections: 6,
-    collectionMemberships: 50,
-    lifeEvents: 25,
-    reminders: 3,
+    persons: 51,
+    relationAssertions: 91,
+    derivedRelations: 12,
+    collections: 7,
+    collectionMemberships: 54,
+    lifeEvents: 42,
+    reminders: 9,
   },
   "stress-500": {
-    persons: 500,
-    relationAssertions: 809,
-    derivedRelations: 70,
-    collections: 6,
-    collectionMemberships: 500,
-    lifeEvents: 250,
-    reminders: 30,
+    persons: 510,
+    relationAssertions: 919,
+    derivedRelations: 120,
+    collections: 7,
+    collectionMemberships: 540,
+    lifeEvents: 420,
+    reminders: 90,
   },
 };
 
@@ -84,8 +93,17 @@ function archive(source: ArchiveV2Source) {
   });
 }
 
+/** 与 buildDemoData("all") 同源，但保持同步供夹具直接展开。 */
 function demoSource(): ArchiveV2Source {
-  const { people, relations, collections, memberships, events, reminders } = buildDemoData();
+  const parts = [campusPack, familyPack, workplacePack, smallBusinessPack].map(buildDemoPackData);
+  const { people, relations, collections, memberships, events, reminders } = mergeDemoPackData(
+    parts,
+    buildDemoBridges({
+      packs: parts,
+      relations: LIFE_BRIDGE_RELATIONS,
+      events: LIFE_BRIDGE_EVENTS,
+    }),
+  );
   return {
     ...emptySource(),
     persons: people,

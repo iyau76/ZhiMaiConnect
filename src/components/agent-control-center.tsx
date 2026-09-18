@@ -1,4 +1,4 @@
-import { Gauge, History, ShieldAlert, Trash2 } from "lucide-react";
+import { CircleHelp, Gauge, History, ShieldAlert, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -204,6 +204,32 @@ export function AgentControlCenter({ latestRun, focusRunId }: AgentControlCenter
     </label>
   );
 
+  const [openHelp, setOpenHelp] = useState<Record<string, boolean>>({});
+
+  /** 需要解释的说明收进「?」，避免把开发者口吻的句子摆在界面上。 */
+  const helpToggle = (key: string, label: string) => (
+    <button
+      type="button"
+      aria-label={label}
+      aria-expanded={Boolean(openHelp[key])}
+      data-testid={`agent-help-${key}`}
+      onClick={() => setOpenHelp((current) => ({ ...current, [key]: !current[key] }))}
+      className="text-muted-foreground transition-colors hover:text-foreground"
+    >
+      <CircleHelp className="size-3.5" aria-hidden />
+    </button>
+  );
+
+  const helpText = (key: string, text: string) =>
+    openHelp[key] ? (
+      <p
+        data-testid={`agent-help-text-${key}`}
+        className="rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground"
+      >
+        {t(text)}
+      </p>
+    ) : null;
+
   return (
     <details className="rounded-xl border border-border bg-card/45">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-sm font-medium">
@@ -216,8 +242,12 @@ export function AgentControlCenter({ latestRun, focusRunId }: AgentControlCenter
 
       <div className="space-y-4 border-t border-border px-3 py-3">
         <section className="space-y-2" aria-labelledby="agent-authorization-heading">
-          <h3 id="agent-authorization-heading" className="text-xs font-semibold">
+          <h3
+            id="agent-authorization-heading"
+            className="flex items-center gap-1.5 text-xs font-semibold"
+          >
             {t("档案写入授权")}
+            {helpToggle("authorization", t("档案写入授权是怎么工作的"))}
           </h3>
           <div className="grid gap-2 sm:grid-cols-3">
             <Button
@@ -246,16 +276,22 @@ export function AgentControlCenter({ latestRun, focusRunId }: AgentControlCenter
             </Button>
           </div>
           <p className="text-[11px] text-muted-foreground">
-            {t(
-              "授权只改变签字时机；全权模式会自动提交非删除提案。校验、原子事务、收据和撤销始终生效，删除人物始终单独确认。",
-            )}
+            {t("选一种你顺手的方式，三种模式写入的都是同一份档案。")}
           </p>
+          {helpText(
+            "authorization",
+            "区别只在什么时候请你签字：全权模式会把不是删除的改动直接提交。校验、原子事务、收据和撤销三种模式都一样，删除人物永远单独问过你。",
+          )}
         </section>
 
         <section className="space-y-2" aria-labelledby="agent-budget-heading">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 id="agent-budget-heading" className="text-xs font-semibold">
+            <h3
+              id="agent-budget-heading"
+              className="flex items-center gap-1.5 text-xs font-semibold"
+            >
               {t("预算上限")}
+              {helpToggle("budget", t("预算上限是怎么算的"))}
             </h3>
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-muted-foreground" role="status">
@@ -285,10 +321,12 @@ export function AgentControlCenter({ latestRun, focusRunId }: AgentControlCenter
             {numberField("maxWallTimeMs", t("总时限 ms"), 1_000)}
           </div>
           <p className="text-[11px] text-muted-foreground">
-            {t(
-              "这里设置的是整次任务的累计上限，不会扩大单轮上下文。修改任一字段会切换为 custom 并立即保存。",
-            )}
+            {t("数字越大，AI 能查得更久；改任一格都会立刻存成你自己的方案。")}
           </p>
+          {helpText(
+            "budget",
+            "这些是整次任务的累计上限，不会让单次提问塞进更多上下文。轮次是一共能来回几次；工具调用是能查多少次档案；输入和输出 token 是这一趟总共能读多少、写多少；总时限是整趟最多跑多久。",
+          )}
         </section>
 
         <section
@@ -312,23 +350,27 @@ export function AgentControlCenter({ latestRun, focusRunId }: AgentControlCenter
             </Button>
           </div>
 
-          <label className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] leading-relaxed">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={settings.savePrivatePayload}
-              onChange={(event) => togglePrivatePayload(event.target.checked)}
-            />
-            <span>
-              <span className="flex items-center gap-1 font-medium text-amber-700 dark:text-amber-300">
-                <ShieldAlert className="size-3.5" aria-hidden />
-                {t("保存档案正文（敏感）")}
-              </span>
-              {t(
-                "工具结果会作为断点记忆留在本机；启用后，运行详情还会展示已脱敏的提示词与工具输入输出。",
-              )}
-            </span>
-          </label>
+          <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] leading-relaxed">
+            <div className="flex items-start gap-2">
+              <label className="flex min-w-0 items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={settings.savePrivatePayload}
+                  onChange={(event) => togglePrivatePayload(event.target.checked)}
+                />
+                <span className="flex items-center gap-1 font-medium text-amber-700 dark:text-amber-300">
+                  <ShieldAlert className="size-3.5" aria-hidden />
+                  {t("保存档案正文（敏感）")}
+                </span>
+              </label>
+              <span className="ml-auto">{helpToggle("payload", t("保存档案正文是什么意思"))}</span>
+            </div>
+            {helpText(
+              "payload",
+              "默认只记运行步骤。打开后，本机还会保存已脱敏的提示词和工具输入输出，方便你自己回看这次做了什么；这些内容不会离开这台设备。",
+            )}
+          </div>
 
           <div className="flex gap-2 overflow-x-auto pb-1">
             {summaries.slice(0, 8).map((summary) => (

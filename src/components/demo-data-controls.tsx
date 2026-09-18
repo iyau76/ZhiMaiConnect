@@ -72,7 +72,7 @@ export function DemoDataControls() {
       <div>
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Database className="size-4 text-primary" aria-hidden="true" />
-          {t("竞赛演示数据")}
+          {t("演示数据")}
         </h2>
         <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
           {t(

@@ -178,7 +178,7 @@ describe("projectToday", () => {
       expect.objectContaining({
         id: "proposal:proposal-1",
         target: {
-          view: "models",
+          view: "today",
           recordType: "proposal",
           recordId: "proposal-1",
           runId: "run-1",

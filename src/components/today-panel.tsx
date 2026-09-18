@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TodayAssistant } from "@/components/today-assistant";
 import {
   indexedDbAgentRunLedger,
   indexedDbMutationArtifactRepository,
@@ -29,11 +30,16 @@ import {
   type TodayTarget,
 } from "@/lib/today-projection";
 import { cn } from "@/lib/utils";
+import type { ProviderPreset } from "@/lib/vision-providers";
 
 interface TodayPanelProps {
+  preset: ProviderPreset;
   onOpenIntake: () => void;
   onOpenTarget: (target: TodayTarget) => void;
   onPrepareMeeting: (query: string) => void;
+  focusRunId?: string;
+  focusProposalId?: string;
+  focusNonce?: number;
 }
 
 const EMPTY_PROJECTION: TodayProjection = { urgent: [], upcoming: [], open: [], recent: [] };
@@ -139,7 +145,15 @@ function TodaySection({
   );
 }
 
-export function TodayPanel({ onOpenIntake, onOpenTarget, onPrepareMeeting }: TodayPanelProps) {
+export function TodayPanel({
+  preset,
+  onOpenIntake,
+  onOpenTarget,
+  onPrepareMeeting,
+  focusRunId,
+  focusProposalId,
+  focusNonce,
+}: TodayPanelProps) {
   const [projection, setProjection] = useState<TodayProjection>(EMPTY_PROJECTION);
   const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -317,6 +331,13 @@ export function TodayPanel({ onOpenIntake, onOpenTarget, onPrepareMeeting }: Tod
         <History className="size-3" aria-hidden="true" />
         {t("今天页只读取现有记录；修改仍在对应的人物、日历、提醒或计划中完成。")}
       </p>
+
+      <TodayAssistant
+        preset={preset}
+        focusRunId={focusRunId}
+        focusProposalId={focusProposalId}
+        focusNonce={focusNonce}
+      />
     </div>
   );
 }

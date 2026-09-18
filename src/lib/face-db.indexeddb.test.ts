@@ -913,14 +913,14 @@ describe("facesDb life events and reminders", () => {
 });
 
 describe("competition demo data", () => {
-  it("loads exactly 50 people and 80 relations and remains idempotent", async () => {
+  it("loads exactly 51 people and 91 relations and remains idempotent", async () => {
     const { facesDb } = await import("./face-db");
     const { getDemoDataStatus, loadDemoData } = await import("./demo-data");
 
-    await expect(loadDemoData()).resolves.toMatchObject({ people: 50, relations: 80, events: 25 });
-    await expect(getDemoDataStatus()).resolves.toEqual({ people: 50, relations: 80 });
-    await expect(facesDb.listLifeEvents()).resolves.toHaveLength(25);
-    await expect(facesDb.listReminders()).resolves.toHaveLength(3);
+    await expect(loadDemoData()).resolves.toMatchObject({ people: 51, relations: 91, events: 42 });
+    await expect(getDemoDataStatus()).resolves.toEqual({ people: 51, relations: 91 });
+    await expect(facesDb.listLifeEvents()).resolves.toHaveLength(42);
+    await expect(facesDb.listReminders()).resolves.toHaveLength(9);
     const demoPeople = (await facesDb.listPersons()).filter((item) =>
       item.id.startsWith("demo-zhimai-"),
     );
@@ -936,9 +936,9 @@ describe("competition demo data", () => {
     const demoEvents = (await facesDb.listLifeEvents()).filter((item) =>
       item.id.startsWith("demo-zhimai-"),
     );
-    expect(demoPeople).toHaveLength(50);
+    expect(demoPeople).toHaveLength(51);
     expect(demoPeople.every((item) => item.profile?.circle === undefined)).toBe(true);
-    expect(demoCollections).toHaveLength(6);
+    expect(demoCollections).toHaveLength(7);
     expect(demoCollections.map((item) => [item.name, item.kind])).toEqual(
       expect.arrayContaining([
         ["大学同学", "relationship_circle"],
@@ -947,9 +947,10 @@ describe("competition demo data", () => {
         ["亲戚", "relationship_circle"],
         ["校园摄影社", "relationship_circle"],
         ["校友社群", "relationship_circle"],
+        ["课外项目组", "relationship_circle"],
       ]),
     );
-    expect(demoMemberships).toHaveLength(50);
+    expect(demoMemberships).toHaveLength(54);
     expect(new Set(demoMemberships.map((item) => item.personId))).toEqual(
       new Set(demoPeople.map((item) => item.id)),
     );
@@ -963,7 +964,7 @@ describe("competition demo data", () => {
           .map((item) => item.personId),
       ),
     ).toEqual(new Set(demoPeople.map((item) => item.id)));
-    expect(demoRelations).toHaveLength(80);
+    expect(demoRelations).toHaveLength(91);
     expect(demoRelations.map((item) => item.label)).not.toContain("同圈伙伴");
     expect([...new Set(demoRelations.map((item) => item.predicate))]).toEqual(
       expect.arrayContaining([
@@ -978,26 +979,26 @@ describe("competition demo data", () => {
         "collaborates_with",
       ]),
     );
-    expect(demoRelations.filter((item) => item.confirmationStatus === "pending")).toEqual([
-      expect.objectContaining({ label: "可能认识", confidence: 0.62 }),
-    ]);
+    const pendingRelations = demoRelations.filter((item) => item.confirmationStatus === "pending");
+    expect(pendingRelations).toHaveLength(5);
+    expect(pendingRelations.every((item) => item.confidence === 0.62)).toBe(true);
     expect(demoRelations).toContainEqual(
       expect.objectContaining({
         label: "前室友",
         validity: expect.objectContaining({ status: "ended" }),
       }),
     );
-    expect(demoEvents).toHaveLength(25);
+    expect(demoEvents).toHaveLength(42);
     expect(new Set(demoEvents.map((item) => item.precision ?? "day"))).toEqual(
       new Set(["day", "month", "year", "range"]),
     );
 
     await loadDemoData();
-    await expect(getDemoDataStatus()).resolves.toEqual({ people: 50, relations: 80 });
-    await expect(facesDb.listLifeEvents()).resolves.toHaveLength(25);
-    await expect(facesDb.listReminders()).resolves.toHaveLength(3);
-    await expect(facesDb.listCollections()).resolves.toHaveLength(6);
-    await expect(facesDb.listCollectionMemberships()).resolves.toHaveLength(50);
+    await expect(getDemoDataStatus()).resolves.toEqual({ people: 51, relations: 91 });
+    await expect(facesDb.listLifeEvents()).resolves.toHaveLength(42);
+    await expect(facesDb.listReminders()).resolves.toHaveLength(9);
+    await expect(facesDb.listCollections()).resolves.toHaveLength(7);
+    await expect(facesDb.listCollectionMemberships()).resolves.toHaveLength(54);
   });
 
   it("clears only demo records and preserves user-owned records", async () => {

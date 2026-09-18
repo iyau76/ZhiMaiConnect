@@ -509,8 +509,12 @@ export async function openApp(page: Page, options: { initialView?: "today" | "in
 }
 
 /** 展开核对页全部默认收起的折叠分区（核对页默认只展示需要决定的内容）。
- * 草稿渲染期间可能出现迟挂载或点击被重渲染吞掉，循环到一整轮无关闭项为止。 */
+ * 草稿渲染期间可能出现迟挂载或点击被重渲染吞掉，循环到一整轮无关闭项为止。
+ * 先等第一个分区出现：草稿还在渲染时立刻调用会什么也点不到就返回，后面的断言会白等。 */
 export async function expandReviewFolds(page: Page) {
+  await page
+    .waitForSelector("[data-review-fold-trigger]", { state: "attached", timeout: 15_000 })
+    .catch(() => undefined);
   for (let attempt = 0; attempt < 6; attempt++) {
     const triggers = page.locator("[data-review-fold-trigger]");
     let opened = 0;
@@ -534,6 +538,13 @@ export async function clickVisible(page: Page, locator: ReturnType<Page["getByRo
     }
   }
   throw new Error(`没有找到可见元素：${await locator.allTextContents()}`);
+}
+
+/** 「找人办事」住在人物关系页的第三个页签里；返回「这事该拜托谁」那一块。 */
+export async function openAskForHelp(page: Page) {
+  await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
+  await page.getByRole("tab", { name: "找人办事" }).click();
+  return page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
 }
 
 export async function acceptAllDraftItems(page: Page) {

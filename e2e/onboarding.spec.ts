@@ -21,11 +21,11 @@ test("首次进入可在演示库、粘贴材料和空库之间选择，并载�
   await expect(page.getByRole("heading", { name: /今天先看/ })).toBeVisible();
   await expect
     .poll(async () => (await readIndexedDbStore<{ name: string }>(page, "persons")).length)
-    .toBe(10);
+    .toBe(11);
   const names = (await readIndexedDbStore<{ name: string }>(page, "persons")).map(
     (person) => person.name,
   );
   expect(names).toContain("苏琴");
   expect(names).not.toContain("唐悦");
-  expect(await readIndexedDbStore(page, "relationAssertions")).toHaveLength(12);
+  expect(await readIndexedDbStore(page, "relationAssertions")).toHaveLength(23);
 });

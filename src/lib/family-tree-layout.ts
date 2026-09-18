@@ -226,31 +226,65 @@ export function buildFamilyTreeLayout(input: {
   const verticalGap = 180;
   const horizontalPadding = 100;
   const verticalPadding = 96;
-  const widestRow = Math.max(1, ...[...rowOrders.values()].map((row) => row.length));
-  const width = Math.max(760, horizontalPadding * 2 + (widestRow - 1) * horizontalGap);
+  /** 估算名字的占位宽度：同一行里挨得太近，文字就会互相压住。 */
+  const labelWidthOf = (id: string) => {
+    const name = nameById.get(id) ?? id;
+    return Math.max(72, name.length * 15 + 24);
+  };
+  /** 相邻两个人的最小间距：长名字按半宽相加再留一点白，短名字用基准间距。 */
+  const gapBetween = (leftId: string, rightId: string) =>
+    Math.max(horizontalGap, (labelWidthOf(leftId) + labelWidthOf(rightId)) / 2 + 22);
+
+  const rowPlacements: Array<{ generation: number; offsets: number[]; width: number }> = [];
+  for (const [generation, row] of [...rowOrders.entries()].sort(
+    ([left], [right]) => left - right,
+  )) {
+    const offsets: number[] = [];
+    row.forEach((id, index) => {
+      offsets.push(index === 0 ? 0 : offsets[index - 1] + gapBetween(row[index - 1], id ?? ""));
+    });
+    const leftEdge = -(row.length ? labelWidthOf(row[0]) : 0) / 2;
+    const rightEdge = row.length
+      ? offsets[row.length - 1] + labelWidthOf(row[row.length - 1]) / 2
+      : 0;
+    rowPlacements.push({
+      generation,
+      offsets: offsets.map((value) => value - leftEdge),
+      width: rightEdge - leftEdge,
+    });
+  }
+
+  const widestRowWidth = Math.max(0, ...rowPlacements.map((row) => row.width));
+  const width = Math.max(760, horizontalPadding * 2, widestRowWidth + horizontalPadding * 2);
   const height = Math.max(
     520,
     verticalPadding * 2 + Math.max(0, generationCount - 1) * verticalGap,
   );
   const size = Math.max(width, height);
   const yOffset = (size - height) / 2;
-  const nodes: FamilyTreeLayoutNode[] = [];
+  const positions = new Map<string, { x: number; y: number }>();
 
-  for (const [generation, row] of [...rowOrders.entries()].sort(
-    ([left], [right]) => left - right,
-  )) {
-    const rowWidth = (row.length - 1) * horizontalGap;
-    const startX = (size - rowWidth) / 2;
-    row.forEach((id, index) => {
-      nodes.push({
-        id,
-        name: nameById.get(id) ?? id,
-        generation,
-        x: startX + index * horizontalGap,
-        y: yOffset + verticalPadding + generation * verticalGap,
+  for (const row of rowPlacements) {
+    const startX = (size - row.width) / 2;
+    const rowIds = rowOrders.get(row.generation) ?? [];
+    rowIds.forEach((id, index) => {
+      positions.set(id, {
+        x: startX + (row.offsets[index] ?? 0),
+        y: yOffset + verticalPadding + row.generation * verticalGap,
       });
     });
   }
+
+  const nodes: FamilyTreeLayoutNode[] = [...ids].sort().map((id) => {
+    const point = positions.get(id) ?? { x: size / 2, y: yOffset + verticalPadding };
+    return {
+      id,
+      name: nameById.get(id) ?? id,
+      generation: generationById.get(id) ?? 0,
+      x: point.x,
+      y: point.y,
+    };
+  });
 
   return {
     nodes: nodes.sort((left, right) => left.id.localeCompare(right.id)),

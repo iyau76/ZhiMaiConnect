@@ -286,16 +286,16 @@ test("超过 24 小时的本地录入材料仍会恢复", async ({ page }) => {
   await expect(intake.getByRole("textbox")).toHaveValue("合成离线材料，下周继续整理");
 });
 
-test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", async ({ page }) => {
+test("51 人 91 关系的合成数据可在关系图内完成交互冒烟", async ({ page }) => {
   await openApp(page);
   await clickVisible(page, page.getByRole("button", { name: /^设置/ }));
-  await page.getByRole("button", { name: "载入完整 50 人演示库" }).click();
-  await expect(page.getByText("当前已载入：50 人 · 80 条关系")).toBeVisible();
+  await page.getByRole("button", { name: "载入完整 51 人演示库" }).click();
+  await expect(page.getByText("当前已载入：51 人 · 91 条关系")).toBeVisible();
 
   await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
   await page.getByRole("tab", { name: "关系网" }).click();
   const graph = page.locator("svg").filter({ has: page.locator("#relation-arrow") });
-  await expect(graph.getByRole("button", { name: /单击聚焦/ })).toHaveCount(50);
+  await expect(graph.getByRole("button", { name: /单击聚焦/ })).toHaveCount(51);
   const overviewEdges = graph.getByRole("button", { name: /查看关系详情/ });
   await expect(overviewEdges).not.toHaveCount(80);
   await expect(page.getByText(/当前视图显示 \d+ 条关系，隐藏 \d+ 条/)).toBeVisible();
@@ -307,7 +307,8 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
     .toBeGreaterThanOrEqual(80);
 
   await graph.scrollIntoViewIfNeeded();
-  const transformBeforeWheel = await graph.locator(":scope > g").getAttribute("transform");
+  const world = graph.locator('[data-graph-layer="world"]');
+  const transformBeforeWheel = await world.getAttribute("transform");
   const scrollBeforeWheel = await page.evaluate(() => window.scrollY);
   const wheelWasPrevented = await graph.evaluate(
     (element) =>
@@ -316,9 +317,7 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
       ),
   );
   expect(wheelWasPrevented).toBe(true);
-  await expect
-    .poll(() => graph.locator(":scope > g").getAttribute("transform"))
-    .not.toBe(transformBeforeWheel);
+  await expect.poll(() => world.getAttribute("transform")).not.toBe(transformBeforeWheel);
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scrollBeforeWheel);
 
   await page.getByRole("button", { name: "全屏查看关系图" }).click();
@@ -331,6 +330,12 @@ test("50 人 80 关系的合成数据可在关系图内完成交互冒烟", asyn
     .toBe("true");
   await page.getByRole("button", { name: "退出全屏" }).click();
   await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+
+  // 上面按过缩放，画面会停在放大后的位置；先复位再点节点，
+  // 否则最靠边的那个节点可能整块落在画布外，点不到。
+  // 「适应」重算镜头：相对倍率回到 100%，内容重新铺满画布。
+  await page.getByRole("button", { name: "适应", exact: true }).click();
+  await expect(page.locator('[data-graph-zoom-label="true"]')).toHaveText("100%");
 
   await graph
     .getByRole("button", { name: /单击聚焦/ })

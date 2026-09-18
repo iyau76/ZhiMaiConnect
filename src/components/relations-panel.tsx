@@ -2,6 +2,7 @@ import {
   ArrowLeftRight,
   ArrowRight,
   Check,
+  CircleHelp,
   Loader2,
   Maximize2,
   Minimize2,
@@ -48,12 +49,46 @@ import {
   relationCommunityMap,
 } from "@/lib/relation-community";
 import {
-  buildCircleLayoutProjection,
   DEFAULT_RELATION_GRAPH_GROUPING,
   loadRelationGraphGrouping,
   saveRelationGraphGrouping,
   type RelationGraphGroupingMode,
 } from "@/lib/relation-graph-grouping";
+import { buildCircleMembershipProjection } from "@/lib/circle-membership-projection";
+import {
+  DEFAULT_GRAPH_LAYOUT_VERSION,
+  loadGraphLayoutVersion,
+  saveGraphLayoutVersion,
+  type GraphLayoutVersion,
+} from "@/lib/graph-layout-version";
+import {
+  blobPathFor,
+  buildCircleLayoutProjection,
+  layoutRingGraph,
+} from "@/lib/relation-graph-legacy";
+import { buildSetContours, CONTOUR_PADDING } from "@/lib/set-contours";
+import {
+  GRAPH_ASPECT_BY_CLASS,
+  applyGraphPins,
+  graphAspectClass,
+  layoutRelationGraph,
+  type GraphAspectClass,
+} from "@/lib/relation-graph-layout";
+import {
+  DEFAULT_FIT_PADDING,
+  absoluteZoomLimits,
+  boundsOfPoints,
+  fitCamera,
+  panCamera,
+  screenPoint,
+  screenToWorldLength,
+  unionBounds,
+  worldPoint,
+  zoomCamera,
+  type GraphBounds,
+  type GraphCamera,
+} from "@/lib/graph-camera";
+import { createTextMeasurer, placeScreenLabels, type ScreenRect } from "@/lib/graph-labels";
 import {
   buildFamilyTreeLayout,
   familyTreeEdgeKind,
@@ -78,13 +113,15 @@ import {
   type RelationRecord,
   type ReminderRecord,
 } from "@/lib/face-db";
-import { getLang, t } from "@/lib/i18n";
+import { getLang, t, tFormat } from "@/lib/i18n";
 import { PersonAvatar } from "@/components/person-avatar";
+import { AskForHelpPanel } from "@/components/ask-for-help-panel";
 import { cn } from "@/lib/utils";
 import type { ProviderPreset } from "@/lib/vision-providers";
 
 interface Props {
   preset: ProviderPreset;
+  active?: boolean;
   onOpenIntake: () => void;
   onOpenEvent?: (eventId: string) => void;
   onOpenReminder?: (reminderId: string) => void;
@@ -92,6 +129,8 @@ interface Props {
   focusPersonId?: string;
   focusRelationId?: string;
   focusRelationPersonId?: string;
+  /** 「找人办事」里最近一次 AI 分析运行的定位。 */
+  focusRunId?: string;
   focusNonce?: number;
 }
 
@@ -102,20 +141,82 @@ type GraphDrill =
 
 type GraphLayoutMode = "auto" | "network" | "family";
 
+/**
+ * 用户看到一个「布局」下拉框，背后仍是两个互斥状态：
+ * 自动/不分组/家族树管整体画法，圈层和拓扑社区是分组方式。
+ * 单独保留它们是为了让「自动布局」在纯亲属数据上还能自己切家族树。
+ */
+type GraphLayoutChoice = "auto" | "none" | "circles" | "communities" | "family";
+
 const DEFAULT_RELATION_LABELS = ["朋友", "同事", "同学", "亲属", "夫妻", "合作伙伴"];
+
+/** 图上要画的一个成员集合（圈层或拓扑社区） */
+interface GraphGroupShape {
+  id: string;
+  name: string;
+  color: ReturnType<typeof graphColor>;
+  memberIds: string[];
+  fragments: Array<{ path: string; kind: string; memberIds: string[] }>;
+  /** 包络是否通过「成员在内、非成员在外」的校验 */
+  valid: boolean;
+  /** 集合标题的落点（成员里最靠上的那个） */
+  labelX: number;
+  labelY: number;
+  /** 轮廓顶端的编号徽标位置：标题放不下时，靠它和「真实交集」列表对照 */
+  badgeX: number;
+  badgeY: number;
+  /** 图例里的编号 */
+  index: number;
+  /** legacy = 原版的流动外形；contour = 新版校验过的成员包络 */
+  variant: "legacy" | "contour";
+}
+
+/** 屏幕标签的字体栈，和画布本身的字体保持一致，测量才准。 */
+const GRAPH_LABEL_FONT =
+  'system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif';
+
+/** 节点圆的屏幕半径范围：缩得再小也留有可点面积，放得再大也不会压过名字。 */
+const NODE_SCREEN_RADIUS_RANGE = { min: 7, max: 26 } as const;
+const NODE_WORLD_RADIUS = 16;
+/** 包络的扩张半径：等于「去掉成员符号后留出的余量」 */
+const CONTOUR_STROKE_PADDING = NODE_WORLD_RADIUS + CONTOUR_PADDING;
 
 function graphColor(key: string) {
   let hash = 0;
   for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) % 360;
+  return colorForHue(hash);
+}
+
+function colorForHue(hue: number) {
   return {
-    node: `hsl(${hash} 62% 48%)`,
-    fill: `hsl(${hash} 62% 48% / 0.09)`,
-    stroke: `hsl(${hash} 62% 48% / 0.42)`,
+    node: `hsl(${hue} 62% 48%)`,
+    fill: `hsl(${hue} 62% 48% / 0.09)`,
+    stroke: `hsl(${hue} 62% 48% / 0.42)`,
   };
+}
+
+/** 家族树按世代换色。相邻世代至少差 40° 色相，看颜色就知道谁跟谁同辈。 */
+const GENERATION_HUES = [212, 268, 152, 32, 318, 96, 186, 6];
+
+/**
+ * 圈层配色按稳定顺序取色相。用 ID 哈希会在相邻 ID 上撞成一色，
+ * 而圈层正是最需要一眼分开的一组。
+ */
+const GROUP_HUES = [28, 208, 168, 340, 262, 88, 12, 190, 310];
+
+function groupColor(index: number) {
+  return colorForHue(GROUP_HUES[index % GROUP_HUES.length]);
+}
+
+function generationColor(generation: number) {
+  const index =
+    ((generation % GENERATION_HUES.length) + GENERATION_HUES.length) % GENERATION_HUES.length;
+  return colorForHue(GENERATION_HUES[index]);
 }
 
 export function RelationsPanel({
   preset,
+  active = true,
   onOpenIntake,
   onOpenEvent,
   onOpenReminder,
@@ -123,6 +224,7 @@ export function RelationsPanel({
   focusPersonId,
   focusRelationId,
   focusRelationPersonId,
+  focusRunId,
   focusNonce,
 }: Props) {
   const [people, setPeople] = useState<PersonRecord[]>([]);
@@ -167,6 +269,7 @@ export function RelationsPanel({
   >("all");
   const [graphViewMode, setGraphViewMode] = useState<GraphViewMode>("overview");
   const [graphLayoutMode, setGraphLayoutMode] = useState<GraphLayoutMode>("auto");
+  const [layoutHelpOpen, setLayoutHelpOpen] = useState(false);
   const [focusDepth, setFocusDepth] = useState<1 | 2>(1);
   const [showEdgeLabels, setShowEdgeLabels] = useState(false);
   /** 档案页：搜索词、标签筛选、批量选中 */
@@ -185,8 +288,21 @@ export function RelationsPanel({
   const [selectedRelationId, setSelectedRelationId] = useState<string | null>(null);
   /** 只有点击圈层图例中的“只看”才缩小范围；普通节点选择不会改变图的数据范围。 */
   const [drill, setDrill] = useState<GraphDrill>({ mode: "blocks" });
-  /** 画布缩放 / 平移 */
-  const [viewport, setViewport] = useState({ scale: 1, tx: 0, ty: 0 });
+  /**
+   * 画布相机：世界坐标 → 屏幕坐标。viewBox 直接用容器的 CSS 像素尺寸，
+   * 于是画布单位就是屏幕单位，文字用固定 CSS px 绘制，不再跟着世界缩放变小。
+   */
+  const [viewport, setViewport] = useState<GraphCamera>({ scale: 1, x: 0, y: 0 });
+  /** 容器尺寸（CSS px），由 ResizeObserver 维护 */
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const viewportSizeRef = useRef(viewportSize);
+  viewportSizeRef.current = viewportSize;
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+  /** 上一次「适应内容」的倍率，用于把缩放显示成相对百分比并约束 0.4×–4× */
+  const fitScaleRef = useRef(1);
+  /** 上一次每个名字命中的候选位置，用于平移缩放时的位置延续 */
+  const labelCandidatesRef = useRef<Record<string, number>>({});
   const [labelScale, setLabelScale] = useState(() => {
     try {
       const stored = Number(window.localStorage.getItem("zhimai:graph-label-scale"));
@@ -196,6 +312,30 @@ export function RelationsPanel({
     }
   });
   const [graphFullscreen, setGraphFullscreen] = useState(false);
+  /**
+   * 布局版本：默认原版（组合簇 + 环套环），新版还在验证阶段，开关放在图工具栏里。
+   */
+  const [layoutVersion, setLayoutVersion] = useState<GraphLayoutVersion>(() => {
+    try {
+      return loadGraphLayoutVersion(window.localStorage);
+    } catch {
+      return DEFAULT_GRAPH_LAYOUT_VERSION;
+    }
+  });
+  useEffect(() => {
+    try {
+      saveGraphLayoutVersion(window.localStorage, layoutVersion);
+    } catch {
+      // 无痕模式下不记忆选择，本次会话照常生效。
+    }
+  }, [layoutVersion]);
+  /**
+   * 横屏 / 竖屏是两套确定的布局类别：首次测量时定下来，之后旋转窗口只调整镜头，
+   * 由用户主动「重新布局」才切换几何。
+   */
+  const [layoutAspectClass, setLayoutAspectClass] = useState<GraphAspectClass>("wide");
+  const layoutAspectClassRef = useRef<GraphAspectClass | null>(null);
+  const layoutAspect = GRAPH_ASPECT_BY_CLASS[layoutAspectClass];
   const graphFrameRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const wheelListenerRef = useRef<((event: WheelEvent) => void) | null>(null);
@@ -223,6 +363,7 @@ export function RelationsPanel({
     moved: number;
   } | null>(null);
   const pendingNodeClickRef = useRef<{ id: string; timer: number } | null>(null);
+  const measureTextWidth = useRef(createTextMeasurer(GRAPH_LABEL_FONT)).current;
 
   const refresh = useCallback(async () => {
     await facesDb.pruneOrphanRelations();
@@ -246,8 +387,8 @@ export function RelationsPanel({
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (active) void refresh();
+  }, [active, refresh]);
 
   useEffect(() => {
     if (!focusPersonId) return;
@@ -563,18 +704,22 @@ export function RelationsPanel({
       ),
     [people, relationCommunities],
   );
-  const circleLayout = useMemo(
+  /**
+   * 圈层成员投影：一个人可以属于多个圈层，交集直接查成员表。
+   * 这是关系网布局、包络和图例的唯一事实入口，不写回档案。
+   */
+  const circleProjection = useMemo(
+    () => buildCircleMembershipProjection(people, collections, collectionMemberships),
+    [people, collections, collectionMemberships],
+  );
+  /** 原版显示链路用的组合簇投影（一个人多归属时合成一个稳定组合） */
+  const legacyCircleProjection = useMemo(
     () => buildCircleLayoutProjection(people, collections, collectionMemberships, t("未分圈层")),
     [people, collections, collectionMemberships],
   );
+  /** 拓扑社区是互斥分区，只在“按拓扑社区”这一档里当成员集合用 */
   const layoutGroupOf = useCallback(
     (person: PersonRecord) => {
-      if (groupBy === "circles") {
-        const circle = circleLayout.groupByPersonId.get(person.id);
-        return circle
-          ? { key: circle.key, label: circle.label }
-          : { key: "circles:none", label: t("未分圈层") };
-      }
       if (groupBy === "communities") {
         const communityId = communityByPersonId.get(person.id) ?? `community:person:${person.id}`;
         return {
@@ -584,7 +729,7 @@ export function RelationsPanel({
       }
       return { key: "", label: "" };
     },
-    [circleLayout, communityByPersonId, communityNames, groupBy],
+    [communityByPersonId, communityNames, groupBy],
   );
 
   const openCollection = collections.find((collection) => collection.id === tagOpen) ?? null;
@@ -763,8 +908,75 @@ export function RelationsPanel({
     const edges = communityOverview.edges
       .map((edge) => ({ ...edge, a: nodeById.get(edge.fromId), b: nodeById.get(edge.toId) }))
       .filter((edge) => edge.a && edge.b);
-    return { size, nodes, edges };
+    const bounds = unionBounds(
+      nodes.map((node) => ({
+        x: node.x - node.r,
+        y: node.y - node.r,
+        width: node.r * 2,
+        height: node.r * 2,
+      })),
+    );
+    return { size, nodes, edges, bounds };
   }, [communityOverview, people]);
+
+  /**
+   * 当前要画的成员集合：圈层用真实的多重成员，拓扑社区是互斥分区，不分组时为空。
+   * 一个人可以同时出现在多个集合里，但永远只有一个节点。
+   */
+  const graphPeople = useMemo(
+    () => (aggregateOverview ? [] : visiblePeople),
+    [aggregateOverview, visiblePeople],
+  );
+  const graphGroups = useMemo(() => {
+    const visibleIds = new Set(graphPeople.map((person) => person.id));
+    return (
+      groupBy === "circles"
+        ? circleProjection.circles.map((circle) => ({
+            id: circle.id,
+            name: circle.name,
+            memberIds: circle.memberIds,
+          }))
+        : groupBy === "communities"
+          ? relationCommunities.map((community) => ({
+              id: community.id,
+              name: communityNames.get(community.id) ?? t("未连接"),
+              memberIds: community.memberIds,
+            }))
+          : []
+    )
+      .map((group) => ({
+        ...group,
+        memberIds: group.memberIds.filter((personId) => visibleIds.has(personId)),
+      }))
+      .filter((group) => group.memberIds.length > 0)
+      .map((group, index) => ({ ...group, color: groupColor(index) }));
+  }, [circleProjection.circles, communityNames, graphPeople, groupBy, relationCommunities]);
+
+  /**
+   * 几何弹簧用的连接：用过滤后的关系，不用「当前可见」的关系。
+   * 否则点一个节点就会改变可见集合，整个图跟着重排。
+   */
+  const graphSprings = useMemo(
+    () =>
+      policyFilteredRelations.map(
+        (relation) => [relation.fromId, relation.toId] as [string, string],
+      ),
+    [policyFilteredRelations],
+  );
+
+  /** 自动几何：只在数据、成员集合、关系和布局类别变化时重算；拖动不走这里。 */
+  const baseLayout = useMemo(
+    () =>
+      layoutRelationGraph(
+        graphPeople.map((person) => ({ id: person.id })),
+        {
+          groups: graphGroups.map((group) => ({ id: group.id, memberIds: group.memberIds })),
+          links: graphSprings,
+          aspect: layoutAspect,
+        },
+      ),
+    [graphGroups, graphPeople, graphSprings, layoutAspect],
+  );
 
   /** 关系网布局：默认一个大圆；按标签分组时每个圈层自成一簇。 */
   const graph = useMemo(() => {
@@ -773,7 +985,10 @@ export function RelationsPanel({
         ...node,
         ...(positions[node.id] ?? {}),
         group: "",
-        color: graphColor(`generation:${node.generation}`),
+        groupIds: [] as string[],
+        ringColors: [] as string[],
+        color: generationColor(node.generation),
+        variant: "legacy" as const,
       }));
       // Nodes, edges and labels must all use the same final drag coordinates.
       const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -804,138 +1019,203 @@ export function RelationsPanel({
           };
         })
         .filter((edge): edge is NonNullable<typeof edge> => Boolean(edge));
-      return { size: familyTree.size, nodes, edges, clusters: [] };
+      return {
+        size: familyTree.size,
+        nodes,
+        edges,
+        groups: [] as GraphGroupShape[],
+        bounds: boundsOfPoints(nodes, 46),
+      };
     }
 
     // In aggregate overview mode the community projection below is the only
     // graph we need. Avoid the quadratic edge-label placement work for a dense
     // 200-person graph that will not be rendered.
-    const people = aggregateOverview ? [] : visiblePeople;
-    /** 两个人之间的最短距离（保证关系词写得下） */
-    const MIN_EDGE = 150;
+    const people = graphPeople;
+    const activeGroups = graphGroups;
+    const colorByGroupId = new Map(activeGroups.map((group) => [group.id, group]));
+    const personById = new Map(people.map((person) => [person.id, person]));
+
     type Node = {
       id: string;
       x: number;
       y: number;
       name: string;
+      /** 第一个所属集合，用于连线判断与降级配色 */
       group: string;
+      /** 这个人所属的全部集合；圈层可以重叠，所以这里是一个数组 */
+      groupIds: string[];
       color: ReturnType<typeof graphColor>;
-    };
-    const nodes: Node[] = [];
-    const clusters: { key: string; name: string; x: number; y: number; r: number }[] = [];
-
-    /** 环形排布时，为了让相邻两点至少隔开 MIN_EDGE 所需的半径 */
-    const ringFor = (count: number) =>
-      count <= 1 ? 0 : Math.max(90, MIN_EDGE / (2 * Math.sin(Math.PI / count)));
-
-    /** Large sets use concentric rings instead of one ever-growing circumference. */
-    const layeredRing = (count: number) => {
-      if (count <= 24) {
-        const radius = ringFor(count);
-        return {
-          radius,
-          points: Array.from({ length: count }, (_, index) => {
-            const angle = (index / Math.max(count, 1)) * Math.PI * 2 - Math.PI / 2;
-            return count === 1
-              ? { x: 0, y: 0 }
-              : { x: radius * Math.cos(angle), y: radius * Math.sin(angle) };
-          }),
-        };
-      }
-      const points: Array<{ x: number; y: number }> = [];
-      let ring = 1;
-      while (points.length < count) {
-        const radius = ring * 170;
-        const capacity = Math.max(8, Math.floor((Math.PI * 2 * radius) / MIN_EDGE));
-        const take = Math.min(capacity, count - points.length);
-        for (let index = 0; index < take; index += 1) {
-          const angle =
-            (index / take) * Math.PI * 2 - Math.PI / 2 + (ring % 2 ? 0 : Math.PI / take);
-          points.push({ x: radius * Math.cos(angle), y: radius * Math.sin(angle) });
-        }
-        ring += 1;
-      }
-      return { radius: (ring - 1) * 170, points };
+      /** 多归属时按所属集合画出的环形色段 */
+      ringColors: string[];
+      /** legacy = 原版的实心点；contour = 新版的多归属色环 + 校验过的包络 */
+      variant: "legacy" | "contour";
     };
 
-    let size = 640;
+    /** 新版：多重成员 + 确定性紧凑布局 + 校验过的包络 */
+    const buildCompactGeometry = () => {
+      const groupIdsByPersonId = new Map(
+        people.map((person) => [
+          person.id,
+          activeGroups
+            .filter((group) => group.memberIds.includes(person.id))
+            .map((group) => group.id),
+        ]),
+      );
 
-    if (groupBy !== "none") {
-      const buckets = new Map<string, { name: string; members: PersonRecord[] }>();
-      for (const person of people) {
-        const group = layoutGroupOf(person);
-        const bucket = buckets.get(group.key);
-        if (bucket) bucket.members.push(person);
-        else buckets.set(group.key, { name: group.label, members: [person] });
-      }
-      const groups = [...buckets.entries()].map(([key, bucket]) => {
-        const layout = layeredRing(bucket.members.length);
-        return { key, ...bucket, inner: layout.radius, points: layout.points };
-      });
-      const maxR = Math.max(...groups.map((group) => group.inner + 52), 120);
-      // 多个圈层时，各簇均匀分布在一个更大的环上，彼此不重叠
-      const ringRadius =
-        groups.length > 1
-          ? Math.max(maxR * 1.6, (maxR + 30) / Math.sin(Math.PI / groups.length))
-          : 0;
-      size = 2 * (ringRadius + maxR + 56);
-      const center = size / 2;
+      // 拖动只覆盖坐标：自动几何在 baseLayout 里已经算完，不必重跑迭代。
+      const layout = applyGraphPins(baseLayout, positions);
 
-      groups.forEach((group, groupIndex) => {
-        const angle = (groupIndex / groups.length) * Math.PI * 2 - Math.PI / 2;
-        const cx = center + ringRadius * Math.cos(angle);
-        const cy = center + ringRadius * Math.sin(angle);
-        clusters.push({ key: group.key, name: group.name, x: cx, y: cy, r: group.inner + 52 });
-        group.members.forEach((person, index) => {
-          const point = group.points[index] ?? { x: 0, y: 0 };
-          nodes.push({
-            id: person.id,
-            name: person.name,
-            group: group.key,
-            color: graphColor(group.key),
-            x: cx + point.x,
-            y: cy + point.y,
-          });
-        });
-      });
-    } else {
-      const layout = layeredRing(people.length);
-      const radius = layout.radius;
-      size = 2 * (radius + 74);
-      const center = size / 2;
-      people.forEach((person, index) => {
-        const point = layout.points[index] ?? { x: 0, y: 0 };
-        nodes.push({
+      const compactNodes: Node[] = [];
+      for (const placement of layout.nodes) {
+        const person = personById.get(placement.id);
+        if (!person) continue;
+        const groupIds = groupIdsByPersonId.get(placement.id) ?? [];
+        compactNodes.push({
           id: person.id,
           name: person.name,
-          group: "",
-          color: graphColor("all"),
-          x: center + point.x,
-          y: center + point.y,
+          x: placement.x,
+          y: placement.y,
+          group: groupIds[0] ?? "",
+          groupIds,
+          color: colorByGroupId.get(groupIds[0])?.color ?? graphColor("all"),
+          ringColors: groupIds
+            .map((groupId) => colorByGroupId.get(groupId)?.color.node)
+            .filter((color): color is string => Boolean(color)),
+          variant: "contour",
         });
-      });
-    }
+      }
 
-    // 手动拖过的点，用拖拽后的位置（并保证还在画布里）
-    for (const node of nodes) {
-      const moved = positions[node.id];
-      if (!moved) continue;
-      node.x = Math.max(28, Math.min(size - 28, moved.x));
-      node.y = Math.max(28, Math.min(size - 40, moved.y));
-    }
+      // 包络只由「成员是谁」和「当前坐标」决定；拖动任何一个人都会重新校验。
+      const contourById = new Map(
+        buildSetContours(
+          activeGroups.map((group) => ({ id: group.id, memberIds: group.memberIds })),
+          compactNodes.map((node) => ({ id: node.id, x: node.x, y: node.y })),
+          { nodeRadius: NODE_WORLD_RADIUS },
+        ).map((contour) => [contour.id, contour]),
+      );
+      const compactNodeById = new Map(compactNodes.map((node) => [node.id, node]));
+      const compactGroups: GraphGroupShape[] = activeGroups.map((group, index) => {
+        const members = group.memberIds
+          .map((personId) => compactNodeById.get(personId))
+          .filter((node): node is Node => Boolean(node));
+        const top = members.reduce<Node | null>(
+          (highest, node) => (!highest || node.y < highest.y ? node : highest),
+          null,
+        );
+        return {
+          id: group.id,
+          name: group.name,
+          color: group.color,
+          memberIds: group.memberIds,
+          fragments: contourById.get(group.id)?.fragments ?? [],
+          valid: contourById.get(group.id)?.valid ?? true,
+          labelX: top?.x ?? 0,
+          labelY: (top?.y ?? 0) - NODE_WORLD_RADIUS - 10,
+          badgeX: top?.x ?? 0,
+          badgeY: (top?.y ?? 0) - CONTOUR_STROKE_PADDING - 4,
+          index: index + 1,
+          variant: "contour",
+        };
+      });
+      return { nodes: compactNodes, groups: compactGroups, bounds: baseLayout.bounds };
+    };
+
+    /** 原版：成员组合分区 + 环套环 + 跟着成员流动的不规则外形 */
+    const buildLegacyGeometry = () => {
+      const groupOf = (person: PersonRecord) => {
+        if (groupBy === "circles") {
+          const group = legacyCircleProjection.groupByPersonId.get(person.id);
+          return group ?? { key: "circles:none", label: t("未分圈层") };
+        }
+        return layoutGroupOf(person);
+      };
+      const groupBuckets =
+        groupBy === "none"
+          ? []
+          : [
+              ...new Map(
+                people.map((person) => {
+                  const group = groupOf(person);
+                  return [group.key, { key: group.key, label: group.label }] as const;
+                }),
+              ).values(),
+            ];
+      const ring = layoutRingGraph(
+        people.map((person) => ({
+          id: person.id,
+          groupKey: groupBy === "none" ? "" : groupOf(person).key,
+        })),
+        groupBuckets,
+      );
+
+      const legacyNodes: Node[] = [];
+      for (const placement of ring.nodes) {
+        const person = personById.get(placement.id);
+        if (!person) continue;
+        const moved = positions[placement.id];
+        legacyNodes.push({
+          id: person.id,
+          name: person.name,
+          x: moved?.x ?? placement.x,
+          y: moved?.y ?? placement.y,
+          group: placement.groupKey,
+          groupIds: placement.groupKey ? [placement.groupKey] : [],
+          color: graphColor(placement.groupKey || "all"),
+          ringColors: [],
+          variant: "legacy",
+        });
+      }
+
+      // 原版把簇心重新按成员实际落点算过，拖动之后外形跟着走。
+      const legacyNodeById = new Map(legacyNodes.map((node) => [node.id, node]));
+      const legacyGroups: GraphGroupShape[] = ring.clusters.map((cluster, index) => {
+        const members = legacyNodes.filter((node) => node.group === cluster.key);
+        const cx = members.reduce((sum, node) => sum + node.x, 0) / Math.max(1, members.length);
+        const cy = members.reduce((sum, node) => sum + node.y, 0) / Math.max(1, members.length);
+        const radius = Math.max(
+          86,
+          ...members.map((node) => Math.hypot(node.x - cx, node.y - cy) + 52),
+        );
+        const top = members.reduce<Node | null>(
+          (highest, node) => (!highest || node.y < highest.y ? node : highest),
+          null,
+        );
+        const memberIds = members.map((node) => node.id);
+        return {
+          id: cluster.key,
+          name: cluster.label,
+          color: graphColor(cluster.key),
+          memberIds,
+          fragments: [
+            {
+              path: blobPathFor(cx, cy, radius * 1.08, cluster.key, members),
+              kind: "hull" as const,
+              memberIds,
+              points: members.map((node) => ({ x: node.x, y: node.y })),
+            },
+          ],
+          valid: true,
+          labelX: top?.x ?? cx,
+          labelY: (top?.y ?? cy) - NODE_WORLD_RADIUS - 10,
+          badgeX: top?.x ?? cx,
+          badgeY: (top?.y ?? cy) - CONTOUR_STROKE_PADDING - 4,
+          index: index + 1,
+          variant: "legacy",
+        };
+      });
+      return {
+        nodes: legacyNodes,
+        groups: legacyGroups,
+        bounds: boundsOfPoints(legacyNodes, 74),
+      };
+    };
+
+    const geometry = layoutVersion === "legacy" ? buildLegacyGeometry() : buildCompactGeometry();
+    const nodes = geometry.nodes;
+    const groups = geometry.groups;
 
     const map = new Map(nodes.map((node) => [node.id, node]));
-
-    // 圈层跟着点走：用该圈层所有点的实际位置重新算圆心和半径
-    for (const cluster of clusters) {
-      const members = nodes.filter((node) => node.group === cluster.key);
-      if (!members.length) continue;
-      const cx = members.reduce((sum, node) => sum + node.x, 0) / members.length;
-      const cy = members.reduce((sum, node) => sum + node.y, 0) / members.length;
-      cluster.x = cx;
-      cluster.y = cy;
-      cluster.r = Math.max(86, ...members.map((node) => Math.hypot(node.x - cx, node.y - cy) + 52));
-    }
 
     // 只折叠完全相同方向、标签与方向性的重复记录；不同标签必须分别保留。
     const seen = new Set<string>();
@@ -960,8 +1240,13 @@ export function RelationsPanel({
             relation.supportingRelationIds ?? relation.derivedFromRelationIds ?? [],
           confirmationStatus: relation.confirmationStatus ?? "confirmed",
           visibility: relation.visibility ?? "auto",
-          /** 跨圈层的连线用虚线标出来 */
-          cross: !!a && !!b && !!a.group && !!b.group && a.group !== b.group,
+          /** 跨集合的连线用虚线标出来：两端没有共同归属才算跨 */
+          cross:
+            !!a &&
+            !!b &&
+            !!a.groupIds.length &&
+            !!b.groupIds.length &&
+            !a.groupIds.some((groupId) => b.groupIds.includes(groupId)),
           pair: [relation.fromId, relation.toId].sort().join("|"),
           a,
           b,
@@ -1033,75 +1318,21 @@ export function RelationsPanel({
       return { ...edge, lx: best.x, ly: best.y, lw: w };
     });
 
-    // 圈层范围画成不规则的平滑外形，形状跟着圈层成员的实际位置流动变形
-    const blob = (
-      cx: number,
-      cy: number,
-      r: number,
-      seedText: string,
-      members: { x: number; y: number }[],
-    ) => {
-      let seed = 0;
-      for (const ch of seedText) seed = (seed * 31 + ch.charCodeAt(0)) % 100000;
-      const steps = 14;
-      const pts: Array<[number, number]> = [];
-      const offsets = members.map((m) => {
-        const dx = m.x - cx;
-        const dy = m.y - cy;
-        return { dist: Math.hypot(dx, dy), angle: Math.atan2(dy, dx) };
-      });
-      for (let i = 0; i < steps; i += 1) {
-        seed = (seed * 1103515245 + 12345) % 2147483648;
-        const wobble = 0.88 + (seed / 2147483648) * 0.2;
-        const angle = (i / steps) * Math.PI * 2;
-        // 该方向上离得最远的成员把边界"顶"出去，形成随节点流动的形状
-        let reach = r * 0.62;
-        for (const off of offsets) {
-          let diff = Math.abs(angle - off.angle) % (Math.PI * 2);
-          if (diff > Math.PI) diff = Math.PI * 2 - diff;
-          const pull = Math.exp(-((diff / 0.95) ** 2));
-          reach = Math.max(reach, (off.dist + 56) * pull + r * 0.5 * (1 - pull));
-        }
-        const rad = reach * wobble;
-        pts.push([cx + rad * Math.cos(angle), cy + rad * Math.sin(angle)]);
-      }
-      // Catmull-Rom → 三次贝塞尔，得到闭合的平滑曲线
-      let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-      for (let i = 0; i < steps; i += 1) {
-        const p0 = pts[(i - 1 + steps) % steps];
-        const p1 = pts[i];
-        const p2 = pts[(i + 1) % steps];
-        const p3 = pts[(i + 2) % steps];
-        const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
-        const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
-        d += ` C ${c1[0].toFixed(1)} ${c1[1].toFixed(1)}, ${c2[0].toFixed(1)} ${c2[1].toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
-      }
-      return `${d} Z`;
-    };
-
-    const shaped = clusters.map((cluster) => ({
-      ...cluster,
-      color: graphColor(cluster.key),
-      path: blob(
-        cluster.x,
-        cluster.y,
-        cluster.r * 1.08,
-        cluster.key,
-        nodes.filter((node) => node.group === cluster.key),
-      ),
-    }));
-
-    return { size, nodes, edges: labelled, clusters: shaped };
+    return { size: 0, nodes, edges: labelled, groups, bounds: geometry.bounds };
   }, [
     aggregateOverview,
+    baseLayout,
     familyTree,
     familyTreeRelations,
-    showFamilyTree,
-    visiblePeople,
+    graphGroups,
+    graphPeople,
     graphVisibility.visible,
     groupBy,
     layoutGroupOf,
+    layoutVersion,
+    legacyCircleProjection,
     positions,
+    showFamilyTree,
   ]);
 
   const relationLabels = useMemo(
@@ -1154,9 +1385,278 @@ export function RelationsPanel({
     [evidence, selectedRelation?.sourceId],
   );
 
-  const viewSize = aggregateOverview ? overviewGraph.size : graph.size;
-  const viewSizeRef = useRef(viewSize);
-  viewSizeRef.current = viewSize;
+  /** 当前要显示的内容边界：自动适应用；概览图有自己的矩形。 */
+  const contentBounds = aggregateOverview ? overviewGraph.bounds : graph.bounds;
+
+  /** 容器尺寸变化时重新测量；viewBox 用 CSS 像素，画布单位就等于屏幕单位。
+   * 用回调 ref 而不是 useEffect：关系网所在的页签是按下才挂载的，effect 的依赖不会变。 */
+  const frameObserverRef = useRef<ResizeObserver | null>(null);
+  const bindGraphFrameRef = useCallback((node: HTMLDivElement | null) => {
+    graphFrameRef.current = node;
+    frameObserverRef.current?.disconnect();
+    frameObserverRef.current = null;
+    if (!node) return;
+    const measure = () => {
+      const width = node.clientWidth;
+      const height = node.clientHeight;
+      if (width <= 0 || height <= 0) return;
+      setViewportSize((prev) =>
+        prev.width === width && prev.height === height ? prev : { width, height },
+      );
+      // 只在第一次测量时决定布局类别，避免拉一下窗口就全体重排。
+      if (layoutAspectClassRef.current === null) {
+        const next = graphAspectClass(width, height);
+        layoutAspectClassRef.current = next;
+        setLayoutAspectClass(next);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    frameObserverRef.current = observer;
+  }, []);
+
+  const fitToContent = useCallback(
+    (bounds: GraphBounds = contentBounds) => {
+      const { width, height } = viewportSizeRef.current;
+      const camera = fitCamera(bounds, width, height, DEFAULT_FIT_PADDING);
+      if (!camera) return;
+      fitScaleRef.current = camera.scale;
+      setViewport(camera);
+    },
+    [contentBounds],
+  );
+
+  // 布局（数据、筛选、布局模式）变化后自动适应内容，与旧版“viewBox 就是整张世界”的行为对齐。
+  const layoutBoundsKey = `${Math.round(contentBounds.x)}:${Math.round(contentBounds.y)}:${Math.round(
+    contentBounds.width,
+  )}:${Math.round(contentBounds.height)}`;
+  useEffect(() => {
+    if (!viewportSize.width || !viewportSize.height) return;
+    fitToContent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutBoundsKey, viewportSize.width, viewportSize.height]);
+
+  const zoomBy = (factor: number, anchor?: { x: number; y: number }) => {
+    const { width, height } = viewportSizeRef.current;
+    const limits = absoluteZoomLimits(fitScaleRef.current);
+    setViewport((prev) =>
+      zoomCamera(prev, factor, anchor ?? { x: width / 2, y: height / 2 }, limits),
+    );
+  };
+
+  /** 相机逆变换：屏幕增量 → 世界增量 */
+  const toWorldLength = (screenLength: number) =>
+    screenToWorldLength(screenLength, viewportRef.current);
+
+  const resetView = useCallback(() => fitToContent(), [fitToContent]);
+
+  /**
+   * 节点圆的屏幕半径被限制在一个区间里：缩得太小会点不中，放得太大就会压住名字。
+   * 世界半径随之反推，几何仍然只有一个权威来源。
+   */
+  const nodeScreenRadius = Math.min(
+    NODE_SCREEN_RADIUS_RANGE.max,
+    Math.max(NODE_SCREEN_RADIUS_RANGE.min, NODE_WORLD_RADIUS * viewport.scale),
+  );
+  const nodeWorldRadius = nodeScreenRadius / viewport.scale;
+
+  /**
+   * 文字层：世界层只画几何（包络、连线、节点圆），名字与标题在屏幕空间绘制。
+   * 因此缩放改变的是名字之间的距离，而不是名字本身的大小。
+   */
+  const screenLabels = useMemo(() => {
+    const { width, height } = viewportSize;
+    const nodeFontSize = 12 * labelScale;
+    const clusterFontSize = 11 * labelScale;
+    const placesLabel = (fontSize: number) => (text: string) => measureTextWidth(text, fontSize);
+    if (!width || !height) {
+      return {
+        nodeLabels: [],
+        clusterLabels: [],
+        countLabels: [],
+        badges: [],
+        hiddenNodeLabels: 0,
+      };
+    }
+
+    if (aggregateOverview) {
+      const obstacles: ScreenRect[] = [];
+      const countLabels: Array<{ id: string; x: number; y: number; text: string }> = [];
+      const items = overviewGraph.nodes.map((node) => {
+        const point = screenPoint(node, viewport);
+        const radius = Math.max(9, node.r * viewport.scale);
+        obstacles.push({
+          x: point.x - radius,
+          y: point.y - radius,
+          width: radius * 2,
+          height: radius * 2,
+        });
+        countLabels.push({
+          id: node.id,
+          x: point.x,
+          y: point.y,
+          text: String(node.memberIds.length),
+        });
+        return {
+          id: node.id,
+          x: point.x,
+          y: point.y,
+          text: node.label,
+          offset: radius + 6,
+        };
+      });
+      const placed = placeScreenLabels({
+        items,
+        width,
+        height,
+        fontSize: nodeFontSize,
+        measure: placesLabel(nodeFontSize),
+        obstacles,
+        previous: labelCandidatesRef.current,
+      });
+      labelCandidatesRef.current = placed.candidates;
+      return {
+        nodeLabels: placed.placed,
+        clusterLabels: [],
+        countLabels,
+        badges: [],
+        hiddenNodeLabels: 0,
+      };
+    }
+
+    const nodeItems = graph.nodes.map((node) => {
+      const point = screenPoint(node, viewport);
+      return {
+        id: node.id,
+        x: point.x,
+        y: point.y,
+        text: node.name,
+        offset: nodeScreenRadius + 5,
+        priority: node.id === selectedId ? -100 : 0,
+        groupKey: node.group,
+      };
+    });
+
+    /**
+     * 屏幕上的邻居间距太小时，名字按圈层隔一个显示一个：密的地方自动留白，
+     * 放大以后间距变大，采样关闭，全部名字回来。采样只看位置，不看重要程度。
+     */
+    const nearestDistances = nodeItems
+      .map((item, index) =>
+        Math.min(
+          ...nodeItems
+            .filter((_, other) => other !== index)
+            .map((other) => Math.hypot(other.x - item.x, other.y - item.y)),
+        ),
+      )
+      .sort((left, right) => left - right);
+    const medianNearest = nearestDistances.length
+      ? nearestDistances[Math.floor(nearestDistances.length / 2)]
+      : Number.POSITIVE_INFINITY;
+    const thinLabels = nodeItems.length > 30 && medianNearest < 68;
+    const visibleNodeItems = thinLabels
+      ? (() => {
+          const byGroup = new Map<string, typeof nodeItems>();
+          for (const item of nodeItems) {
+            const key = item.groupKey || `solo:${item.id}`;
+            byGroup.set(key, [...(byGroup.get(key) ?? []), item]);
+          }
+          const keep = new Set<string>();
+          for (const items of byGroup.values()) {
+            if (items.length < 3) {
+              for (const item of items) keep.add(item.id);
+              continue;
+            }
+            [...items]
+              .sort(
+                (left, right) =>
+                  left.y - right.y || left.x - right.x || (left.id < right.id ? -1 : 1),
+              )
+              .forEach((item, index) => {
+                if (index % 2 === 0) keep.add(item.id);
+              });
+          }
+          return nodeItems.filter((item) => keep.has(item.id) || item.priority < 0);
+        })()
+      : nodeItems;
+    const nodeObstacles: ScreenRect[] = graph.nodes.map((node) => {
+      const point = screenPoint(node, viewport);
+      return {
+        x: point.x - nodeScreenRadius,
+        y: point.y - nodeScreenRadius,
+        width: nodeScreenRadius * 2,
+        height: nodeScreenRadius * 2,
+      };
+    });
+    const nodeLabels = placeScreenLabels({
+      items: visibleNodeItems,
+      width,
+      height,
+      fontSize: nodeFontSize,
+      measure: placesLabel(nodeFontSize),
+      obstacles: nodeObstacles,
+      previous: labelCandidatesRef.current,
+      // 人多时只接受紧挨着节点的位置：名字宁可少显示，也不甩到离人很远的地方。
+      maxCandidateIndex: graph.nodes.length > 30 ? 3 : 7,
+    });
+
+    const clusterItems = graph.groups.map((group) => {
+      const point = screenPoint({ x: group.labelX, y: group.labelY }, viewport);
+      return {
+        id: group.id,
+        x: point.x,
+        y: Math.max(point.y - 10, 12),
+        text: group.name,
+        offset: clusterFontSize + 4,
+        // 圈层标题先占位：一张没有圈层名字的图等于没画
+        priority: -50,
+      };
+    });
+    const clusterLabels = placeScreenLabels({
+      items: clusterItems,
+      width,
+      height,
+      fontSize: clusterFontSize,
+      measure: placesLabel(clusterFontSize),
+      obstacles: [...nodeObstacles, ...nodeLabels.placed],
+      previous: labelCandidatesRef.current,
+    });
+    labelCandidatesRef.current = { ...nodeLabels.candidates, ...clusterLabels.candidates };
+
+    // 编号徽标始终画：圈层标题放不下时，至少还能和图例、交集列表对上号。
+    const badges = graph.groups.map((group) => {
+      const point = screenPoint({ x: group.badgeX, y: group.badgeY }, viewport);
+      return {
+        id: group.id,
+        x: point.x,
+        y: point.y,
+        index: group.index,
+        color: group.color.node,
+      };
+    });
+
+    return {
+      nodeLabels: nodeLabels.placed,
+      clusterLabels: clusterLabels.placed,
+      countLabels: [],
+      badges,
+      // 概览时被抽掉的名字数量：界面上要说明白，不能让人以为漏了人
+      hiddenNodeLabels: nodeItems.length - visibleNodeItems.length,
+    };
+  }, [
+    aggregateOverview,
+    graph.nodes,
+    graph.groups,
+    overviewGraph.nodes,
+    viewport,
+    viewportSize,
+    labelScale,
+    selectedId,
+    nodeScreenRadius,
+    measureTextWidth,
+  ]);
 
   const graphEdgePath = (edge: (typeof graph.edges)[number]) => {
     if (showFamilyTree && "familyKind" in edge) {
@@ -1164,11 +1664,11 @@ export function RelationsPanel({
       const b = edge.b!;
       if (edge.familyKind === "sibling") {
         const lift = Math.min(a.y, b.y) + 38;
-        return `M ${a.x} ${a.y + 18} C ${a.x} ${lift}, ${b.x} ${lift}, ${b.x} ${b.y + 18}`;
+        return `M ${a.x} ${a.y + nodeWorldRadius + 2} C ${a.x} ${lift}, ${b.x} ${lift}, ${b.x} ${b.y + nodeWorldRadius + 2}`;
       }
       if (edge.familyKind === "parent") {
         const midY = a.y + (b.y - a.y) * 0.52;
-        return `M ${a.x} ${a.y + 20} V ${midY} H ${b.x} V ${b.y - 24}`;
+        return `M ${a.x} ${a.y + nodeWorldRadius + 4} V ${midY} H ${b.x} V ${b.y - nodeWorldRadius - 8}`;
       }
       // Other kinship and spouse edges use the common endpoint-aware path below.
       // In particular, a dragged spouse may no longer share the other node's y.
@@ -1180,7 +1680,7 @@ export function RelationsPanel({
     const dx = bx - ax;
     const dy = by - ay;
     const len = Math.hypot(dx, dy) || 1;
-    const gap = 20;
+    const gap = nodeWorldRadius + 4;
     const ux = dx / len;
     const uy = dy / len;
     const x1 = ax + ux * gap;
@@ -1193,26 +1693,22 @@ export function RelationsPanel({
     return `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
   };
 
-  /** 屏幕坐标 → SVG 画布坐标的比例（含缩放） */
-  const svgScale = () => {
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect || !rect.width) return 1;
-    return viewSize / rect.width / viewport.scale;
+  const layoutChoice: GraphLayoutChoice =
+    graphLayoutMode === "family"
+      ? "family"
+      : groupBy === "circles" || groupBy === "communities"
+        ? groupBy
+        : graphLayoutMode === "auto"
+          ? "auto"
+          : "none";
+
+  const applyLayoutChoice = (choice: GraphLayoutChoice) => {
+    setGraphLayoutMode(choice === "family" ? "family" : choice === "auto" ? "auto" : "network");
+    setGroupBy(choice === "circles" || choice === "communities" ? choice : ("none" as const));
+    setDrill({ mode: "blocks" });
+    setPositions({});
+    resetView();
   };
-
-  const zoomBy = (factor: number) =>
-    setViewport((prev) => {
-      const scale = Math.min(4, Math.max(0.4, prev.scale * factor));
-      const c = viewSize / 2;
-      // 以画布中心为锚点缩放
-      return {
-        scale,
-        tx: c - (c - prev.tx) * (scale / prev.scale),
-        ty: c - (c - prev.ty) * (scale / prev.scale),
-      };
-    });
-
-  const resetView = () => setViewport({ scale: 1, tx: 0, ty: 0 });
 
   const changeLabelScale = (factor: number) =>
     setLabelScale((prev) => {
@@ -1243,15 +1739,11 @@ export function RelationsPanel({
       event.preventDefault();
       event.stopPropagation();
       const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-      setViewport((prev) => {
-        const scale = Math.min(4, Math.max(0.4, prev.scale * factor));
-        const center = viewSizeRef.current / 2;
-        return {
-          scale,
-          tx: center - (center - prev.tx) * (scale / prev.scale),
-          ty: center - (center - prev.ty) * (scale / prev.scale),
-        };
-      });
+      const rect = node.getBoundingClientRect();
+      const anchor = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      setViewport((prev) =>
+        zoomCamera(prev, factor, anchor, absoluteZoomLimits(fitScaleRef.current)),
+      );
     };
     node.addEventListener("wheel", listener, { passive: false });
     wheelListenerRef.current = listener;
@@ -1287,7 +1779,7 @@ export function RelationsPanel({
     setSelectedId(null);
     resetView();
     setDrill({ mode: "blocks" });
-  }, []);
+  }, [resetView]);
 
   /** Esc 依次退出建关系、人物聚焦或圈层钻取。 */
   useEffect(() => {
@@ -1341,8 +1833,8 @@ export function RelationsPanel({
         pointers,
         startDistance: 0,
         startScale: viewport.scale,
-        startTx: viewport.tx,
-        startTy: viewport.ty,
+        startTx: viewport.x,
+        startTy: viewport.y,
       };
       panRef.current = null;
       return;
@@ -1357,8 +1849,8 @@ export function RelationsPanel({
     panRef.current = {
       x: event.clientX,
       y: event.clientY,
-      tx: viewport.tx,
-      ty: viewport.ty,
+      tx: viewport.x,
+      ty: viewport.y,
       moved: 0,
     };
   };
@@ -1371,32 +1863,33 @@ export function RelationsPanel({
       if (!second) return;
       const rect = svgRef.current?.getBoundingClientRect();
       if (!rect?.width) return;
-      const ratio = viewSize / rect.width;
       const distance = Math.hypot(second.x - first.x, second.y - first.y);
       if (!pinch.startDistance) {
         pinch.startDistance = distance || 1;
         return;
       }
-      const scale = Math.min(4, Math.max(0.4, (pinch.startScale * distance) / pinch.startDistance));
-      // 以双指中点为锚缩放：先换算成画布坐标，再按新比例放回。
-      const midX = ((first.x + second.x) / 2 - rect.left) * ratio;
-      const midY = ((first.y + second.y) / 2 - rect.top) * ratio;
+      const limits = absoluteZoomLimits(fitScaleRef.current);
+      const scale = Math.min(
+        limits.maxScale,
+        Math.max(limits.minScale, (pinch.startScale * distance) / pinch.startDistance),
+      );
+      // 以双指中点为锚缩放；viewBox 用 CSS 像素，屏幕坐标可以直接当画布坐标。
+      const midX = (first.x + second.x) / 2 - rect.left;
+      const midY = (first.y + second.y) / 2 - rect.top;
       setViewport({
         scale,
-        tx: midX - ((midX - pinch.startTx) / pinch.startScale) * scale,
-        ty: midY - ((midY - pinch.startTy) / pinch.startScale) * scale,
+        x: midX - ((midX - pinch.startTx) / pinch.startScale) * scale,
+        y: midY - ((midY - pinch.startTy) / pinch.startScale) * scale,
       });
       return;
     }
     const pan = panRef.current;
     if (!pan || dragRef.current) return;
-    const rect = svgRef.current?.getBoundingClientRect();
-    const ratio = rect && rect.width ? viewSize / rect.width : 1;
     pan.moved = Math.max(pan.moved, Math.hypot(event.clientX - pan.x, event.clientY - pan.y));
     setViewport((prev) => ({
-      ...prev,
-      tx: pan.tx + (event.clientX - pan.x) * ratio,
-      ty: pan.ty + (event.clientY - pan.y) * ratio,
+      scale: prev.scale,
+      x: pan.tx + (event.clientX - pan.x),
+      y: pan.ty + (event.clientY - pan.y),
     }));
   };
   const onPanPointerUp = (event?: React.PointerEvent<SVGSVGElement>) => {
@@ -1437,10 +1930,9 @@ export function RelationsPanel({
   const onNodePointerMove = (event: React.PointerEvent<SVGGElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
-    const scale = svgScale();
-    const dx = (event.clientX - drag.x) * scale;
-    const dy = (event.clientY - drag.y) * scale;
-    drag.moved = Math.max(drag.moved, Math.hypot(dx, dy));
+    const dx = toWorldLength(event.clientX - drag.x);
+    const dy = toWorldLength(event.clientY - drag.y);
+    drag.moved = Math.max(drag.moved, Math.hypot(event.clientX - drag.x, event.clientY - drag.y));
     if (drag.moved < 3) return;
     setPositions((prev) => ({ ...prev, [drag.id]: { x: drag.ox + dx, y: drag.oy + dy } }));
   };
@@ -1505,6 +1997,7 @@ export function RelationsPanel({
         <TabsList>
           <TabsTrigger value="roster">{t("档案")}</TabsTrigger>
           <TabsTrigger value="graph">{t("关系网")}</TabsTrigger>
+          <TabsTrigger value="help">{t("找人办事")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="roster" className="space-y-4 pt-4">
@@ -1865,37 +2358,28 @@ export function RelationsPanel({
               {t("新建关系")}
             </Button>
             <select
-              value={graphLayoutMode}
-              onChange={(event) => {
-                setGraphLayoutMode(event.target.value as GraphLayoutMode);
-                setPositions({});
-                resetView();
-              }}
+              value={layoutChoice}
+              onChange={(event) => applyLayoutChoice(event.target.value as GraphLayoutChoice)}
               className="h-9 rounded-md border border-border bg-background px-2 text-sm"
               aria-label={t("图形布局")}
               title={t("图形布局")}
             >
               <option value="auto">{t("自动布局")}</option>
-              <option value="network">{t("关系网")}</option>
-              <option value="family">{t("家族树")}</option>
-            </select>
-            <select
-              value={groupBy}
-              onChange={(event) => {
-                setGroupBy(event.target.value as RelationGraphGroupingMode);
-                setDrill({ mode: "blocks" });
-                setPositions({});
-                resetView();
-              }}
-              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
-              aria-label={t("分组布局")}
-              title={t("布局")}
-              disabled={showFamilyTree}
-            >
               <option value="none">{t("不分组")}</option>
               <option value="circles">{t("按圈层布局")}</option>
               <option value="communities">{t("按拓扑社区布局")}</option>
+              <option value="family">{t("家族树")}</option>
             </select>
+            <button
+              type="button"
+              aria-label={t("布局说明")}
+              aria-expanded={layoutHelpOpen}
+              data-testid="graph-layout-help"
+              className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:text-foreground"
+              onClick={() => setLayoutHelpOpen((value) => !value)}
+            >
+              <CircleHelp className="size-4" aria-hidden="true" />
+            </button>
             <select
               value={graphViewMode}
               onChange={(event) => setGraphViewMode(event.target.value as GraphViewMode)}
@@ -1983,6 +2467,32 @@ export function RelationsPanel({
             </label>
           </div>
 
+          {layoutHelpOpen && (
+            <div
+              data-testid="graph-layout-help-panel"
+              className="space-y-1.5 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground"
+            >
+              <p>
+                <span className="font-medium text-foreground">{t("自动布局")}</span>：
+                {t("关系全是亲属时自动按家族树画，其余情况画成一张关系网，省得你自己挑。")}
+              </p>
+              <p>
+                <span className="font-medium text-foreground">{t("按圈层布局")}</span>：
+                {t("同一个圈层的人聚成一簇，只使用你已经确认的关系圈，标签和场景集合不参与。")}
+              </p>
+              <p data-testid="graph-layout-help-communities">
+                <span className="font-medium text-foreground">{t("按拓扑社区布局")}</span>：
+                {t(
+                  "拓扑社区是算法自己算出来的「谁和谁来往更密」，不需要你事先分组；同一个社区的人会聚成一簇，跨社区的连线用虚线标出。它只是看一眼的结构，不会写回档案，也不会变成圈层。",
+                )}
+              </p>
+              <p>
+                <span className="font-medium text-foreground">{t("家族树")}</span>：
+                {t("按世代分层排列，配偶同层、子女在父母下一层，同一代人用同一种颜色。")}
+              </p>
+            </div>
+          )}
+
           {graphVisibility.hidden.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/25 px-3 py-2 text-[11px] text-muted-foreground">
               <span>
@@ -2003,6 +2513,23 @@ export function RelationsPanel({
           {showFamilyTree && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 text-[11px] text-muted-foreground">
               <span>{t("家族树按世代排列；配偶同层，子女位于父母下一层。")}</span>
+              {familyTree.generationCount > 1 && (
+                <span
+                  data-testid="family-generation-legend"
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  {Array.from({ length: familyTree.generationCount }, (_, generation) => (
+                    <span key={generation} className="flex items-center gap-1">
+                      <span
+                        className="size-2.5 rounded-full"
+                        style={{ background: generationColor(generation).node }}
+                        aria-hidden="true"
+                      />
+                      {tFormat("第 {n} 代", { n: generation + 1 })}
+                    </span>
+                  ))}
+                </span>
+              )}
               {graphVisibility.visible.length > familyTreeRelations.length && (
                 <span>
                   {t("当前仅显示")} {familyTreeRelations.length} {t("条亲属关系，隐藏")}{" "}
@@ -2161,7 +2688,7 @@ export function RelationsPanel({
             </div>
           )}
 
-          {groupBy !== "none" && graph.clusters.length > 0 && (
+          {groupBy !== "none" && graph.groups.length > 0 && (
             <div
               className="flex flex-wrap items-center gap-2"
               aria-label={t(groupBy === "circles" ? "圈层图例" : "拓扑社区图例")}
@@ -2169,39 +2696,38 @@ export function RelationsPanel({
               <span className="text-[11px] text-muted-foreground">
                 {t(
                   groupBy === "circles"
-                    ? "圈层布局（仅使用已确认关系圈；标签与场景集合不参与）"
+                    ? "圈层布局（仅使用已确认关系圈；一个人可以同时属于多个圈层）"
                     : "拓扑社区（Louvain 自动计算，不写入档案）",
                 )}
                 ：
               </span>
-              {graph.clusters.map((cluster) => (
+              {graph.groups.map((group) => (
                 <div
-                  key={cluster.key}
+                  key={group.id}
                   className="inline-flex overflow-hidden rounded-full border border-border bg-background text-[11px]"
                 >
                   <span className="flex min-h-8 items-center gap-1.5 px-2.5">
                     <span
                       className="size-2.5 rounded-full"
-                      style={{ backgroundColor: cluster.color.node }}
+                      style={{ backgroundColor: group.color.node }}
                       aria-hidden="true"
                     />
-                    <span>{cluster.name}</span>
+                    <span>{group.name}</span>
+                    <span className="text-muted-foreground">{group.memberIds.length}</span>
                   </span>
                   <button
                     type="button"
                     className="min-h-8 border-l border-border px-2.5 text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     aria-label={`${t(
                       groupBy === "circles" ? "只看圈层" : "只看拓扑社区",
-                    )}：${cluster.name}`}
+                    )}：${group.name}`}
                     onClick={() => {
                       setSelectedId(null);
                       setGraphViewMode("overview");
                       setDrill({
                         mode: "members",
-                        key: cluster.name,
-                        memberIds: graph.nodes
-                          .filter((node) => node.group === cluster.key)
-                          .map((node) => node.id),
+                        key: group.name,
+                        memberIds: group.memberIds,
                       });
                     }}
                   >
@@ -2209,6 +2735,40 @@ export function RelationsPanel({
                   </button>
                 </div>
               ))}
+            </div>
+          )}
+
+          {groupBy === "circles" && circleProjection.intersections.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2" aria-label={t("圈层交集")}>
+              <span className="text-[11px] text-muted-foreground">{t("真实交集")}：</span>
+              {circleProjection.intersections.map((intersection) => {
+                const names = intersection.circleIds.map(
+                  (id) => circleProjection.circles.find((circle) => circle.id === id)?.name ?? id,
+                );
+                const memberNames = intersection.memberIds
+                  .map((id) => people.find((person) => person.id === id)?.name)
+                  .filter((name): name is string => Boolean(name));
+                return (
+                  <button
+                    key={intersection.circleIds.join("|")}
+                    type="button"
+                    className="min-h-8 rounded-full border border-border bg-background px-2.5 text-[11px] hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    aria-label={`${t("只看交集")}：${names.join(" ∩ ")}`}
+                    onClick={() => {
+                      setSelectedId(null);
+                      setGraphViewMode("overview");
+                      setDrill({
+                        mode: "members",
+                        key: names.join(" ∩ "),
+                        memberIds: intersection.memberIds,
+                      });
+                    }}
+                  >
+                    {names.join(" ∩ ")}
+                    <span className="ml-1 text-muted-foreground">{memberNames.join("、")}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -2244,8 +2804,8 @@ export function RelationsPanel({
               >
                 −
               </button>
-              <span className="w-10 text-center tabular-nums">
-                {Math.round(viewport.scale * 100)}%
+              <span className="w-10 text-center tabular-nums" data-graph-zoom-label="true">
+                {Math.round((viewport.scale / Math.max(fitScaleRef.current, 1e-6)) * 100)}%
               </span>
               <button
                 type="button"
@@ -2281,6 +2841,48 @@ export function RelationsPanel({
                 </button>
               </span>
             </span>
+            <span
+              className="ml-1 flex items-center gap-1 rounded-full border border-border p-0.5"
+              role="group"
+              aria-label={t("关系网布局版本")}
+              data-testid="graph-layout-version"
+            >
+              {(
+                [
+                  ["legacy", t("原版")],
+                  ["compact", t("新版（测试）")],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={layoutVersion === value}
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[11px]",
+                    layoutVersion === value ? "bg-accent font-medium" : "hover:bg-accent/60",
+                  )}
+                  onClick={() => {
+                    setLayoutVersion(value);
+                    setPositions({});
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </span>
+            {screenLabels.hiddenNodeLabels > 0 && (
+              <button
+                type="button"
+                className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent"
+                aria-label={t("名字没有全部显示，放大后会自动出现；点这里放大一级")}
+                onClick={() => zoomBy(1.5)}
+              >
+                {tFormat("名字 {shown}/{total} · 点这里放大", {
+                  shown: screenLabels.nodeLabels.length,
+                  total: screenLabels.nodeLabels.length + screenLabels.hiddenNodeLabels,
+                })}
+              </button>
+            )}
             {Object.keys(positions).length > 0 && (
               <button
                 type="button"
@@ -2562,14 +3164,14 @@ export function RelationsPanel({
           )}
 
           <div
-            ref={graphFrameRef}
+            ref={bindGraphFrameRef}
             data-relation-graph-frame="true"
             data-graph-layout={showFamilyTree ? "family" : "network"}
             className={cn(
               "relative overflow-hidden rounded-xl border border-border bg-muted/20",
               graphFullscreen
                 ? "flex h-screen w-screen items-center rounded-none border-0 bg-background p-4"
-                : "h-[clamp(20rem,46vh,32rem)]",
+                : "h-[clamp(22rem,54vh,38rem)]",
             )}
           >
             {relationComposerOpen && (
@@ -2601,7 +3203,8 @@ export function RelationsPanel({
             </Button>
             <svg
               ref={bindSvgRef}
-              viewBox={`0 0 ${viewSize} ${viewSize}`}
+              data-relation-graph-svg="true"
+              viewBox={`0 0 ${Math.max(1, viewportSize.width)} ${Math.max(1, viewportSize.height)}`}
               preserveAspectRatio="xMidYMid meet"
               className={cn(
                 "h-full w-full touch-none select-none",
@@ -2643,12 +3246,15 @@ export function RelationsPanel({
                 data-graph-background="true"
                 x="0"
                 y="0"
-                width={viewSize}
-                height={viewSize}
+                width={Math.max(1, viewportSize.width)}
+                height={Math.max(1, viewportSize.height)}
                 fill="transparent"
                 pointerEvents="all"
               />
-              <g transform={`translate(${viewport.tx} ${viewport.ty}) scale(${viewport.scale})`}>
+              <g
+                data-graph-layer="world"
+                transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}
+              >
                 {aggregateOverview &&
                   overviewGraph.edges.map((edge) => (
                     <g key={edge.id} pointerEvents="none">
@@ -2661,14 +3267,6 @@ export function RelationsPanel({
                         strokeWidth={Math.min(8, 1.5 + Math.log2(edge.relationCount + 1))}
                         strokeDasharray={edge.explicitCount === 0 ? "5 5" : undefined}
                       />
-                      <text
-                        x={(edge.a!.x + edge.b!.x) / 2}
-                        y={(edge.a!.y + edge.b!.y) / 2 - 7}
-                        textAnchor="middle"
-                        className="fill-muted-foreground text-[11px]"
-                      >
-                        {edge.relationCount} {t("条跨社区关系")}
-                      </text>
                     </g>
                   ))}
 
@@ -2716,80 +3314,52 @@ export function RelationsPanel({
                         style={{ fill: node.color.node }}
                         className="transition-opacity group-hover:opacity-80 group-focus-visible:stroke-foreground"
                       />
-                      <text
-                        x={node.x}
-                        y={node.y + 4}
-                        textAnchor="middle"
-                        className="fill-white text-[13px] font-semibold"
-                      >
-                        {node.memberIds.length}
-                      </text>
-                      <text
-                        x={node.x}
-                        y={node.y + node.r + 22}
-                        textAnchor="middle"
-                        style={{ fontSize: `${12 * labelScale}px` }}
-                        className="fill-foreground"
-                      >
-                        {node.label}
-                      </text>
                     </g>
                   ))}
 
                 {!aggregateOverview &&
-                  graph.clusters.map((cluster) => (
-                    <g key={cluster.key}>
-                      <path
-                        d={cluster.path}
-                        pointerEvents="none"
-                        strokeWidth={1}
-                        strokeDasharray="4 4"
-                        style={{
-                          fill: cluster.color.fill,
-                          stroke: cluster.color.stroke,
-                          transition: "d 260ms ease-out",
-                        }}
-                      />
-
-                      <text
-                        x={cluster.x}
-                        y={cluster.y - cluster.r - 8}
-                        textAnchor="middle"
-                        role="button"
-                        tabIndex={0}
-                        className="cursor-pointer fill-primary text-[11px] font-medium underline-offset-2 hover:underline"
-                        aria-label={`${t(
-                          groupBy === "circles" ? "只看圈层" : "只看拓扑社区",
-                        )}：${cluster.name}`}
-                        onClick={() =>
-                          setDrill({
-                            mode: "members",
-                            key: cluster.name,
-                            memberIds: graph.nodes
-                              .filter((node) => node.group === cluster.key)
-                              .map((node) => node.id),
-                          })
-                        }
-                        onKeyDown={(event) => {
-                          if (event.key !== "Enter" && event.key !== " ") return;
-                          event.preventDefault();
-                          setDrill({
-                            mode: "members",
-                            key: cluster.name,
-                            memberIds: graph.nodes
-                              .filter((node) => node.group === cluster.key)
-                              .map((node) => node.id),
-                          });
-                        }}
-                      >
+                  graph.groups.map((group) => {
+                    // 钻取到某个交集时，只高亮仍包含这批人的圈层
+                    const highlighted = selectedId
+                      ? group.memberIds.includes(selectedId)
+                      : drill.mode !== "members" ||
+                        drill.memberIds.every((id) => group.memberIds.includes(id));
+                    return (
+                      <g key={group.id} data-graph-group={group.id} pointerEvents="none">
                         <title>
-                          {t(groupBy === "circles" ? "点击只看这个圈层" : "点击只看这个拓扑社区")}
+                          {`${group.index}. ${group.name} · ${group.memberIds.length} ${t("人")}`}
                         </title>
-
-                        {cluster.name}
-                      </text>
-                    </g>
-                  ))}
+                        {group.fragments.map((fragment, index) =>
+                          group.variant === "legacy" ? (
+                            <path
+                              key={`${group.id}-${index}`}
+                              d={fragment.path}
+                              style={{
+                                fill: group.color.fill,
+                                stroke: group.color.stroke,
+                                transition: "d 260ms ease-out",
+                              }}
+                              strokeWidth={1}
+                              strokeDasharray="4 4"
+                            />
+                          ) : (
+                            <path
+                              key={`${group.id}-${index}`}
+                              d={fragment.path}
+                              fill={group.color.node}
+                              fillOpacity={highlighted ? 0.1 : 0.035}
+                              stroke={group.color.node}
+                              strokeOpacity={highlighted ? 0.34 : 0.1}
+                              strokeWidth={CONTOUR_STROKE_PADDING * 2}
+                              strokeLinejoin="round"
+                              strokeLinecap="round"
+                              strokeDasharray={group.valid ? undefined : "5 4"}
+                            />
+                          ),
+                        )}
+                      </g>
+                    );
+                  })}
 
                 {!aggregateOverview &&
                   relationComposerOpen &&
@@ -2881,33 +3451,19 @@ export function RelationsPanel({
                                 ? "5 4"
                                 : undefined
                           }
-                          markerEnd="url(#relation-arrow)"
-                          markerStart={edge.mutual ? "url(#relation-arrow-start)" : undefined}
+                          // 方向仍然可读：只在选中或聚焦时才画箭头，避免上百个箭头把图糊满。
+                          markerEnd={
+                            selectedRelationId === edge.id || (selectedId && active)
+                              ? "url(#relation-arrow)"
+                              : undefined
+                          }
+                          markerStart={
+                            edge.mutual &&
+                            (selectedRelationId === edge.id || (selectedId && active))
+                              ? "url(#relation-arrow-start)"
+                              : undefined
+                          }
                         />
-
-                        {(showEdgeLabels ||
-                          selectedRelationId === edge.id ||
-                          (selectedId && active)) && (
-                          <>
-                            <rect
-                              x={edge.lx - edge.lw / 2}
-                              y={edge.ly - 9}
-                              width={edge.lw}
-                              height={17}
-                              rx={5}
-                              className="fill-background/90"
-                            />
-                            <text
-                              x={edge.lx}
-                              y={edge.ly + 3}
-                              textAnchor="middle"
-                              style={{ fontSize: `${11 * labelScale}px` }}
-                              className="fill-muted-foreground"
-                            >
-                              {edge.label}
-                            </text>
-                          </>
-                        )}
                       </g>
                     );
                   })}
@@ -2957,12 +3513,17 @@ export function RelationsPanel({
                             ? "点击选择为关系起点或终点"
                             : "单击聚焦，拖动可移动，双击开人物卡",
                         )}`}</title>
-                        <circle cx={node.x} cy={node.y} r={22} className="fill-transparent" />
+                        <circle
+                          cx={node.x}
+                          cy={node.y}
+                          r={nodeWorldRadius + 6}
+                          className="fill-transparent"
+                        />
                         {(isRelationFrom || isRelationTo) && (
                           <circle
                             cx={node.x}
                             cy={node.y}
-                            r={24}
+                            r={nodeWorldRadius + 8}
                             fill="none"
                             className="stroke-primary"
                             strokeWidth={2.5}
@@ -2972,38 +3533,223 @@ export function RelationsPanel({
                         <circle
                           cx={node.x}
                           cy={node.y}
-                          r={visuallySelected ? 19 : 16}
+                          r={visuallySelected ? nodeWorldRadius * 1.2 : nodeWorldRadius}
                           className={cn(
                             "transition-opacity group-hover:opacity-80 group-focus-visible:stroke-foreground",
                             visuallySelected && "stroke-foreground",
                           )}
-                          style={{ fill: node.color.node }}
-                          strokeWidth={visuallySelected ? 2.5 : 2}
+                          fill={node.variant === "legacy" ? node.color.node : "white"}
+                          stroke={node.variant === "legacy" ? "white" : node.color.node}
+                          strokeWidth={visuallySelected ? 2.5 : 1.5}
                         />
-
-                        <text
-                          x={node.x}
-                          y={node.y + 34}
-                          textAnchor="middle"
-                          style={{ fontSize: `${12 * labelScale}px` }}
-                          className="fill-foreground"
-                        >
-                          {node.name}
-                        </text>
+                        {node.variant === "contour" && node.ringColors.length === 1 && (
+                          <circle
+                            cx={node.x}
+                            cy={node.y}
+                            r={nodeWorldRadius * 0.62}
+                            style={{ fill: node.ringColors[0] }}
+                          />
+                        )}
+                        {node.variant === "contour" &&
+                          node.ringColors.length > 1 &&
+                          node.ringColors.map((color, index) => {
+                            const total = node.ringColors.length;
+                            const start = -Math.PI / 2 + (2 * Math.PI * index) / total;
+                            const end = -Math.PI / 2 + (2 * Math.PI * (index + 1)) / total;
+                            const inner = nodeWorldRadius * 0.62;
+                            const x1 = node.x + inner * Math.cos(start);
+                            const y1 = node.y + inner * Math.sin(start);
+                            const x2 = node.x + inner * Math.cos(end);
+                            const y2 = node.y + inner * Math.sin(end);
+                            return (
+                              <path
+                                key={`${node.id}-ring-${index}`}
+                                d={`M ${node.x} ${node.y} L ${x1} ${y1} A ${inner} ${inner} 0 ${
+                                  end - start > Math.PI ? 1 : 0
+                                } 1 ${x2} ${y2} Z`}
+                                fill={color}
+                                stroke="white"
+                                strokeWidth={0.8}
+                              />
+                            );
+                          })}
                       </g>
                     );
                   })}
-
-                {!aggregateOverview && !graph.nodes.length && (
+              </g>
+              <g pointerEvents="none">
+                {!aggregateOverview && !graph.nodes.length && !contentBounds.height && (
                   <text
-                    x={viewSize / 2}
-                    y={viewSize / 2}
+                    x={Math.max(1, viewportSize.width) / 2}
+                    y={Math.max(1, viewportSize.height) / 2}
                     textAnchor="middle"
                     className="fill-muted-foreground text-xs"
                   >
                     {t("还没有任何人物档案")}
                   </text>
                 )}
+              </g>
+              {/* 屏幕空间的文字层：字号是 CSS px，不随世界缩放变小 */}
+              <g data-graph-labels="true">
+                {screenLabels.countLabels.map((label) => (
+                  <text
+                    key={label.id}
+                    x={label.x}
+                    y={label.y + 4}
+                    textAnchor="middle"
+                    fontSize={13}
+                    className="pointer-events-none fill-white font-semibold"
+                  >
+                    {label.text}
+                  </text>
+                ))}
+                {layoutVersion === "compact" &&
+                  screenLabels.badges.map((badge) => (
+                    <g
+                      key={badge.id}
+                      className="pointer-events-none"
+                      transform={`translate(${badge.x} ${badge.y})`}
+                    >
+                      <circle r={9} fill={badge.color} />
+                      <text
+                        y={4}
+                        textAnchor="middle"
+                        fontSize={11}
+                        className="fill-white font-semibold"
+                      >
+                        {badge.index}
+                      </text>
+                    </g>
+                  ))}{" "}
+                {screenLabels.nodeLabels.map((label) => (
+                  <g
+                    key={label.id}
+                    className="pointer-events-none"
+                    data-person-label={label.id}
+                    transform={`translate(${label.x} ${label.y})`}
+                  >
+                    <rect
+                      width={label.width}
+                      height={label.height}
+                      rx={4}
+                      className="fill-background/85"
+                    />
+                    <text
+                      x={label.width / 2}
+                      y={label.height / 2 + 12 * labelScale * 0.35}
+                      textAnchor="middle"
+                      fontSize={12 * labelScale}
+                      className="fill-foreground"
+                    >
+                      {label.text}
+                    </text>
+                  </g>
+                ))}
+                {screenLabels.clusterLabels.map((label) => (
+                  <text
+                    key={label.id}
+                    x={label.x + label.width / 2}
+                    y={label.y + label.height / 2 + 11 * labelScale * 0.35}
+                    textAnchor="middle"
+                    role="button"
+                    tabIndex={0}
+                    fontSize={11 * labelScale}
+                    data-cluster-label={label.id}
+                    className="cursor-pointer fill-primary font-medium underline-offset-2 hover:underline"
+                    aria-label={`${t(
+                      groupBy === "circles" ? "只看圈层" : "只看拓扑社区",
+                    )}：${label.text}`}
+                    pointerEvents="auto"
+                    onClick={() => {
+                      const group = graph.groups.find((item) => item.id === label.id);
+                      if (!group) return;
+                      setDrill({
+                        mode: "members",
+                        key: group.name,
+                        memberIds: group.memberIds,
+                      });
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      const group = graph.groups.find((item) => item.id === label.id);
+                      if (!group) return;
+                      setDrill({
+                        mode: "members",
+                        key: group.name,
+                        memberIds: group.memberIds,
+                      });
+                    }}
+                  >
+                    <title>
+                      {t(groupBy === "circles" ? "点击只看这个圈层" : "点击只看这个拓扑社区")}
+                    </title>
+                    {label.text}
+                  </text>
+                ))}
+                {aggregateOverview &&
+                  overviewGraph.edges.map((edge) => {
+                    const mid = screenPoint(
+                      {
+                        x: (edge.a!.x + edge.b!.x) / 2,
+                        y: (edge.a!.y + edge.b!.y) / 2,
+                      },
+                      viewport,
+                    );
+                    return (
+                      <text
+                        key={edge.id}
+                        x={mid.x}
+                        y={mid.y - 7}
+                        textAnchor="middle"
+                        fontSize={11 * labelScale}
+                        className="pointer-events-none fill-muted-foreground"
+                      >
+                        {edge.relationCount} {t("条跨社区关系")}
+                      </text>
+                    );
+                  })}
+                {!aggregateOverview &&
+                  graph.edges.map((edge) => {
+                    const active =
+                      !selectedId ||
+                      (graphVisibility.focusNodeIds.has(edge.a!.id) &&
+                        graphVisibility.focusNodeIds.has(edge.b!.id));
+                    if (
+                      !showEdgeLabels &&
+                      selectedRelationId !== edge.id &&
+                      !(selectedId && active)
+                    ) {
+                      return null;
+                    }
+                    const point = screenPoint({ x: edge.lx, y: edge.ly }, viewport);
+                    const fontSize = 11 * labelScale;
+                    const boxWidth = measureTextWidth(edge.label, fontSize) + 10;
+                    const boxHeight = fontSize + 6;
+                    return (
+                      <g
+                        key={edge.id}
+                        className="pointer-events-none"
+                        transform={`translate(${point.x - boxWidth / 2} ${point.y - boxHeight / 2})`}
+                      >
+                        <rect
+                          width={boxWidth}
+                          height={boxHeight}
+                          rx={5}
+                          className="fill-background/90"
+                        />
+                        <text
+                          x={boxWidth / 2}
+                          y={boxHeight / 2 + fontSize * 0.35}
+                          textAnchor="middle"
+                          fontSize={fontSize}
+                          className="fill-muted-foreground"
+                        >
+                          {edge.label}
+                        </text>
+                      </g>
+                    );
+                  })}
               </g>
             </svg>
           </div>
@@ -3135,6 +3881,20 @@ export function RelationsPanel({
               </ul>
             </details>
           )}
+        </TabsContent>
+
+        {/* 找 AI 办事可能跑好几分钟，切页签不能把它卸载掉。 */}
+        <TabsContent
+          value="help"
+          forceMount
+          className="space-y-4 pt-4 data-[state=inactive]:hidden"
+        >
+          <AskForHelpPanel
+            preset={preset}
+            active={active}
+            focusRunId={focusRunId}
+            focusNonce={focusNonce}
+          />
         </TabsContent>
       </Tabs>
 
