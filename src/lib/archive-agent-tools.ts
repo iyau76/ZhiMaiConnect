@@ -853,11 +853,19 @@ archiveAgentToolRegistry
           maxHops: z.number().int().min(1).max(5).optional(),
           limit: z.number().int().min(1).max(20).optional(),
           includeInferred: z.boolean().optional(),
+          includePending: z.boolean().optional(),
         })
         .strict(),
       permission: "private_read",
       handler: (
-        { targetPersonRef, task = "", maxHops, limit = 5, includeInferred = false },
+        {
+          targetPersonRef,
+          task = "",
+          maxHops,
+          limit = 5,
+          includeInferred = false,
+          includePending = false,
+        },
         { services, runId },
       ) => {
         const session = referenceSessionFor(services, runId);
@@ -869,7 +877,7 @@ archiveAgentToolRegistry
           maxHops,
           limit,
           includeInferred,
-          includePending: false,
+          includePending,
         }).map((candidate) => visibleRecommendationCandidate(candidate, session));
         return {
           targetPersonRef,
@@ -895,11 +903,12 @@ archiveAgentToolRegistry
           task: z.string().max(800).optional(),
           limit: z.number().int().min(1).max(20).optional(),
           includeInferred: z.boolean().optional(),
+          includePending: z.boolean().optional(),
         })
         .strict(),
       permission: "private_read",
       handler: (
-        { targetPersonRef, task = "", limit = 5, includeInferred = false },
+        { targetPersonRef, task = "", limit = 5, includeInferred = false, includePending = false },
         { services, runId },
       ) => {
         const session = referenceSessionFor(services, runId);
@@ -914,7 +923,7 @@ archiveAgentToolRegistry
             task,
             limit,
             includeInferred,
-            includePending: false,
+            includePending,
           }).map((candidate) => visibleRecommendationCandidate(candidate, session)),
           note: "这些人只在目标侧有关系证据；不得声称用户已有联系渠道或把分数解释为可达概率。",
         };

@@ -10,7 +10,7 @@ export type TodayTarget =
   | { view: "reminders"; recordType: "reminder"; recordId: string }
   | { view: "plan"; recordType: "task"; recordId: string }
   | {
-      view: "intake" | "reminders" | "plan" | "models" | "settings";
+      view: "intake" | "reminders" | "plan" | "models" | "people" | "today" | "settings";
       recordType: "run" | "proposal";
       recordId: string;
       runId?: string;
@@ -88,19 +88,20 @@ function timingFor(distance: number): TodayProjectionItem["timing"] {
   return "upcoming";
 }
 
-type AgentWorkspaceView = "intake" | "reminders" | "plan" | "models" | "settings";
+type AgentWorkspaceView =
+  "intake" | "reminders" | "plan" | "models" | "people" | "today" | "settings";
 
 function viewForEntrypoint(entrypoint?: string): AgentWorkspaceView {
   if (entrypoint?.startsWith("intake.")) return "intake";
-  if (entrypoint?.startsWith("reminders.")) return "reminders";
+  if (entrypoint?.startsWith("reminders.")) return "people";
   if (entrypoint?.startsWith("plan.")) return "plan";
-  if (entrypoint?.startsWith("models.")) return "models";
+  if (entrypoint?.startsWith("models.")) return "today";
   return "settings";
 }
 
 function viewForProposal(proposal: PersistedMutationProposalRecord, run?: AgentRunRecord) {
   if (proposal.scope === "intake") return "intake" as const;
-  if (proposal.scope === "assistant") return "models" as const;
+  if (proposal.scope === "assistant") return "today" as const;
   if (proposal.scope === "planning") return "plan" as const;
   return viewForEntrypoint(run?.entrypoint);
 }

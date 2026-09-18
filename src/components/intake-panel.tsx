@@ -16,7 +16,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import intakeArt from "@/assets/art/web/intake.webp";
@@ -117,6 +117,7 @@ import { makeSource } from "@/lib/provenance";
 import { browserAgentRunOwnerId } from "@/lib/agent-run-owner";
 import { cn } from "@/lib/utils";
 import { compileIntakeCollections } from "@/lib/intake-collections";
+import { buildDraftGraphProjection } from "@/lib/draft-graph-projection";
 import {
   createInitialIntakeAgentCheckpoint,
   IntakeAgentSuspendedError,
@@ -171,6 +172,57 @@ function missingOf(person: DraftPerson) {
     if (Array.isArray(value)) return value.length === 0;
     return !value || (typeof value === "string" && !value.trim());
   });
+}
+
+/** 「详细字段」里逐项列出的字段；徽标显示已填条数，用户一眼能看出这份档案有多少内容。 */
+type DetailFieldKey =
+  | "relation"
+  | "birthday"
+  | "contact"
+  | "age"
+  | "gender"
+  | "address"
+  | "department"
+  | "org"
+  | "reportsTo"
+  | "employeeId"
+  | "metAt"
+  | "title"
+  | "closeness"
+  | "projects"
+  | "likes"
+  | "tags"
+  | "dislikes"
+  | "gifts";
+
+const DETAIL_FIELD_KEYS: DetailFieldKey[] = [
+  "relation",
+  "birthday",
+  "contact",
+  "age",
+  "gender",
+  "address",
+  "department",
+  "org",
+  "reportsTo",
+  "employeeId",
+  "metAt",
+  "title",
+  "closeness",
+  "projects",
+  "likes",
+  "tags",
+  "dislikes",
+  "gifts",
+];
+
+function filledDetailCount(person: DraftPerson) {
+  return DETAIL_FIELD_KEYS.filter((key) => {
+    const value = person[key];
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === "number") return true;
+    return Boolean(value && value.trim());
+  }).length;
 }
 
 const CREATE_NEW_PERSON = "__create_new_person__";
@@ -340,6 +392,9 @@ function buildPrompt(text: string, known: string[]) {
 
 /** 未提交的录入内容随状态变化写入本地，切换页签后可以继续。 */
 const DRAFT_KEY = "zhimai.intake.draft.v1";
+
+/** 长句提示要留够读完的时间，让用户能看清「这次接受了什么、还差什么」。 */
+const LONG_TOAST_MS = 15000;
 
 interface StashShape {
   raw: string;
@@ -691,6 +746,8 @@ export function IntakePanel({
   const [captureRevision, setCaptureRevision] = useState(0);
   const { online } = usePwaState();
   const [acceptAllOpen, setAcceptAllOpen] = useState(false);
+  /** 第一次点击「一键接受待确认」只接受来源对得上的条目，第二次才带上来源对不上的关系。 */
+  const [acceptUnresolvedStage, setAcceptUnresolvedStage] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
@@ -2344,11 +2401,19 @@ export function IntakePanel({
     setAcceptAllOpen(true);
   };
 
-  const confirmAcceptAllPendingItems = () => {
-    if (!draft) return;
-    const unresolvedRelationCount = (draft.relations ?? []).filter(
+  const countUnresolvedRelations = () =>
+    (draft?.relations ?? []).filter(
       (item) => item._audit?.confirmationStatus !== "accepted" && item._relationChecked === false,
     ).length;
+
+  /**
+   * 分两步：第一次只接受来源对得上的条目，来源对不上的关系留到第二次点击。
+   * 用户可能一屏都看不完提示，所以每次点击后都给出下一步该怎么做。
+   */
+  const confirmAcceptAllPendingItems = () => {
+    if (!draft) return;
+    const unresolvedRelationCount = countUnresolvedRelations();
+    const releaseUnresolved = acceptUnresolvedStage || unresolvedRelationCount === 0;
     const accept = <T extends DraftAuditFields>(item: T): T => ({
       ...item,
       _audit: acceptedAudit(item._audit),
@@ -2360,7 +2425,7 @@ export function IntakePanel({
             people: (previous.people ?? []).map(accept),
             facts: (previous.facts ?? []).map(accept),
             relations: (previous.relations ?? []).map((item) =>
-              item._relationChecked === false ? item : accept(item),
+              item._relationChecked === false && !releaseUnresolved ? item : accept(item),
             ),
             events: (previous.events ?? []).map(accept),
             reminders: (previous.reminders ?? []).map(accept),
@@ -2369,11 +2434,19 @@ export function IntakePanel({
           }
         : previous,
     );
-    toast.success(
-      unresolvedRelationCount > 0
-        ? `${t("已接受来源对齐的待确认条目")}；${unresolvedRelationCount} ${t("条证据未对齐关系仍待确认，可逐条查看或接受；确认入库时会一并保存并保留待核验标记")}`
-        : t("已接受全部来源对齐的待确认条目"),
-    );
+    if (releaseUnresolved) {
+      setAcceptUnresolvedStage(false);
+      toast.success(t("已接受全部待确认条目"));
+    } else {
+      setAcceptUnresolvedStage(true);
+      toast.success(
+        tFormat(
+          "这里接受的是来源能对齐的待确认条目；仍有 {count} 条关系信息属于待确认条目，再次点击「一键接受待确认」可接受它们",
+          { count: unresolvedRelationCount },
+        ),
+        { duration: LONG_TOAST_MS },
+      );
+    }
     setAcceptAllOpen(false);
   };
 
@@ -3204,6 +3277,42 @@ export function IntakePanel({
     (item) => item._audit?.confirmationStatus !== "accepted",
   ).length;
   const lowRiskBatchCount = (draft?.events ?? []).filter(isLowRiskBatchEvent).length;
+  /** 录入草稿 + 已入库档案 → 一张用于预览的关系网，DraftGraph 自己不读数据库。 */
+  const draftGraphArchive = useMemo(
+    () =>
+      buildDraftGraphProjection({
+        draftPeople: draft?.people ?? [],
+        draftRelations: draft?.relations ?? [],
+        archivePeople: existingPeople,
+        archiveRelations: existingRelations,
+        circles: [
+          ...existingCollections.map((collection) => ({
+            id: collection.id,
+            name: collection.name,
+          })),
+          ...(draft?.collections ?? []).map((collection) => ({
+            id: collection.targetCollectionId,
+            name: collection.name,
+          })),
+        ],
+        memberships: [
+          ...existingCollectionMemberships.map((membership) => ({
+            collectionId: membership.collectionId,
+            personId: membership.personId,
+            source: membership.source,
+          })),
+          ...(draft?.collections ?? []).flatMap((collection) =>
+            collection.memberships
+              .filter((member) => member.action === "add")
+              .map((member) => ({
+                collectionId: collection.targetCollectionId,
+                personId: member.personId ?? member.personDraftId ?? member.person,
+              })),
+          ),
+        ],
+      }),
+    [draft, existingCollectionMemberships, existingCollections, existingPeople, existingRelations],
+  );
   const existingById = new Map(existingPeople.map((person) => [person.id, person]));
   const newPeople = (draft?.people ?? []).filter(
     (person) => person.targetPersonId === CREATE_NEW_PERSON,
@@ -3266,9 +3375,21 @@ export function IntakePanel({
       <AlertDialog open={acceptAllOpen} onOpenChange={setAcceptAllOpen}>
         <AlertDialogContent data-testid="intake-accept-all-dialog">
           <AlertDialogHeader>
-            <AlertDialogTitle>{t("接受已对齐项")}</AlertDialogTitle>
+            <AlertDialogTitle>
+              {acceptUnresolvedStage && countUnresolvedRelations() > 0
+                ? t("连来源对不上的关系一起接受")
+                : t("接受待确认条目")}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {t("接受来源已对齐的条目。证据未对齐的关系继续留在待确认。")}
+              {acceptUnresolvedStage && countUnresolvedRelations() > 0
+                ? t(
+                    "再把来源对不上的关系一起接受吗？它们在档案里会保留待核验标记，之后随时可以改。",
+                  )
+                : countUnresolvedRelations() > 0
+                  ? t(
+                      "来源对得上的条目这次会被接受；来源对不上的关系先留着，你再看一眼，它们不会丢，点「确认入库」同样能保存。",
+                    )
+                  : t("待确认条目都会被接受，AI 生成的内容仍会保留待核验标记。")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -3875,7 +3996,9 @@ export function IntakePanel({
             )}
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
               <span>
-                {t("待确认是软提醒；可逐条接受，也可直接入库，AI 内容会保留待核验标记。")}
+                {t(
+                  "待确认是软提醒，你可以直接以待确认形态入库，也可以一键接受它们，也可以仔细审核并拒绝一部分。",
+                )}
               </span>
               <span className="rounded-full border border-border px-2 py-0.5">
                 {t("待确认")} {pendingReviewCount}
@@ -3902,7 +4025,7 @@ export function IntakePanel({
                     onClick={acceptAllPendingItems}
                   >
                     <Check className="size-3" aria-hidden="true" />
-                    {t("一键接受已对齐项")} · {pendingReviewCount}
+                    {t("一键接受待确认")} · {pendingReviewCount}
                   </Button>
                 )}
               </span>
@@ -4048,300 +4171,311 @@ export function IntakePanel({
             </ReviewFold>
           )}
 
-          <div className="space-y-3">
-            {(draft.people ?? []).map((person, index) => (
-              <div
-                key={person._draftId ?? `${person.name}-${index}`}
-                className="rounded-xl border border-border p-3"
-                data-draft-kind="person"
-                data-draft-index={index}
-              >
-                <DraftAuditLine
-                  audit={person._audit}
-                  onAccept={() => patchPerson(index, { _audit: acceptedAudit(person._audit) })}
-                  onReject={() => removePerson(index)}
-                />
-                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-2">
-                  <span className="text-[10px] text-muted-foreground">
-                    {t("身份处理")} · {person._identityReason ?? t("正在比对本地档案")}
-                  </span>
-                  <select
-                    value={person.targetPersonId ?? ""}
-                    onChange={(event) =>
-                      patchPerson(index, { targetPersonId: event.target.value || undefined })
-                    }
-                    className={`ml-auto h-8 max-w-full rounded-md border bg-background px-2 text-xs ${
-                      person.targetPersonId ? "border-input" : "border-amber-500"
-                    }`}
-                    aria-label={t("选择新建人物或更新已有档案")}
-                  >
-                    {!person.targetPersonId && <option value="">{t("请选择身份处理方式")}</option>}
-                    <option value={CREATE_NEW_PERSON}>{t("新建独立人物档案")}</option>
-                    {(person._identityCandidateIds ?? []).map((id) => {
-                      const candidate = existingPeople.find((record) => record.id === id);
-                      if (!candidate) return null;
-                      const detail = candidate.profile?.contact || candidate.id.slice(0, 8);
-                      return (
-                        <option key={candidate.id} value={candidate.id}>
-                          {t("更新已有")}：{candidate.name} · {detail}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    value={person.name ?? ""}
-                    onChange={(event) => patchPerson(index, { name: event.target.value })}
-                    className="h-8 w-40 text-sm"
-                    placeholder={t("姓名")}
+          <ReviewFold title={t("人物卡片")} count={(draft.people ?? []).length}>
+            <div className="space-y-3">
+              {(draft.people ?? []).map((person, index) => (
+                <div
+                  key={person._draftId ?? `${person.name}-${index}`}
+                  className="rounded-xl border border-border p-3"
+                  data-draft-kind="person"
+                  data-draft-index={index}
+                >
+                  <DraftAuditLine
+                    audit={person._audit}
+                    onAccept={() => patchPerson(index, { _audit: acceptedAudit(person._audit) })}
+                    onReject={() => removePerson(index)}
                   />
-                  <button
-                    type="button"
-                    className="order-last ml-auto text-muted-foreground transition-colors hover:text-destructive"
-                    onClick={() => removePerson(index)}
-                  >
-                    <Trash2 className="size-3.5" aria-hidden="true" />
-                  </button>
-                  {missingOf(person).map((field) => (
-                    <span
-                      key={String(field.key)}
-                      className="rounded-full border border-primary/50 px-2 py-0.5 text-[10px] text-primary"
-                    >
-                      {t("缺")} {getLang() === "en" ? field.en : field.zh}
+                  <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-2">
+                    <span className="text-[10px] text-muted-foreground">
+                      {t("身份处理")} · {person._identityReason ?? t("正在比对本地档案")}
                     </span>
-                  ))}
-                </div>
-                {(() => {
-                  const missingCount = missingOf(person).length;
-                  return (
-                    <ReviewFold
-                      title={t("详细字段")}
-                      stateKey={`person-detail:${person._draftId ?? index}`}
-                      count={missingCount || undefined}
+                    <select
+                      value={person.targetPersonId ?? ""}
+                      onChange={(event) =>
+                        patchPerson(index, { targetPersonId: event.target.value || undefined })
+                      }
+                      className={`ml-auto h-8 max-w-full rounded-md border bg-background px-2 text-xs ${
+                        person.targetPersonId ? "border-input" : "border-amber-500"
+                      }`}
+                      aria-label={t("选择新建人物或更新已有档案")}
                     >
-                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                        {(
-                          [
-                            ["relation", t("和我的关系")],
-                            ["birthday", t("生日")],
-                            ["contact", t("联系方式")],
-                          ] as Array<[keyof DraftPerson, string]>
-                        ).map(([key, label]) => (
-                          <Input
-                            key={String(key)}
-                            value={(person[key] as string) ?? ""}
-                            onChange={(event) => patchPerson(index, { [key]: event.target.value })}
-                            className="h-8 text-xs"
-                            placeholder={label}
-                          />
-                        ))}
-                      </div>
-                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                        {(
-                          [
-                            ["age", t("年龄")],
-                            ["gender", t("性别")],
-                            ["address", t("办公地点")],
-                            ["department", t("部门 / 科室")],
-                            ["org", t("单位 / 公司")],
-                            ["reportsTo", t("汇报对象")],
-                            ["employeeId", t("工号 / 编号")],
-                            ["metAt", t("相识场景")],
-                          ] as Array<[keyof DraftPerson, string]>
-                        ).map(([key, label]) => (
-                          <Input
-                            key={String(key)}
-                            value={(person[key] as string) ?? ""}
-                            onChange={(event) => patchPerson(index, { [key]: event.target.value })}
-                            className="h-8 text-xs"
-                            aria-label={label}
-                            placeholder={label}
-                          />
-                        ))}
-                      </div>
-                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                        <Input
-                          value={person.title ?? ""}
-                          onChange={(event) => patchPerson(index, { title: event.target.value })}
-                          className="h-8 text-xs"
-                          aria-label={t("职务/技能")}
-                          placeholder={t("职务/技能")}
-                        />
-                        <select
-                          value={person.closeness ?? ""}
-                          onChange={(event) =>
-                            patchPerson(index, {
-                              closeness: event.target.value
-                                ? Number(event.target.value)
-                                : undefined,
-                            })
-                          }
-                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                          aria-label={t("亲密度")}
-                        >
-                          <option value="">{t("亲密度（未填写）")}</option>
-                          {[1, 2, 3, 4, 5].map((value) => (
-                            <option key={value} value={value}>
-                              {t("亲密度")} {value}/5
-                            </option>
-                          ))}
-                        </select>
-                        <Input
-                          value={(person.projects ?? []).join("、")}
-                          onChange={(event) =>
-                            patchPerson(index, { projects: splitDraftList(event.target.value) })
-                          }
-                          className="h-8 text-xs"
-                          aria-label={t("项目/技能")}
-                          placeholder={t("项目/技能（用逗号分隔）")}
-                        />
-                        <Input
-                          value={(person.likes ?? []).join("、")}
-                          onChange={(event) =>
-                            patchPerson(index, { likes: splitDraftList(event.target.value) })
-                          }
-                          className="h-8 text-xs"
-                          aria-label={t("喜好/技能关键词")}
-                          placeholder={t("喜好/技能关键词（用逗号分隔）")}
-                        />
-                        <Input
-                          value={(person.tags ?? []).join("、")}
-                          onChange={(event) =>
-                            patchPerson(index, { tags: splitDraftList(event.target.value) })
-                          }
-                          className="h-8 text-xs sm:col-span-2"
-                          aria-label={t("标签/技能")}
-                          placeholder={t("标签/技能（用逗号分隔）")}
-                        />
-                        <Input
-                          value={(person.dislikes ?? []).join("、")}
-                          onChange={(event) =>
-                            patchPerson(index, { dislikes: splitDraftList(event.target.value) })
-                          }
-                          className="h-8 text-xs"
-                          aria-label={t("忌口 / 不喜欢")}
-                          placeholder={t("忌口 / 不喜欢（用逗号分隔）")}
-                        />
-                        <Input
-                          value={(person.gifts ?? []).join("、")}
-                          onChange={(event) =>
-                            patchPerson(index, { gifts: splitDraftList(event.target.value) })
-                          }
-                          className="h-8 text-xs"
-                          aria-label={t("送礼记录")}
-                          placeholder={t("送礼记录（用逗号分隔）")}
-                        />
-                      </div>
-                      {Object.keys(person._fieldGrounding ?? {}).length > 0 && (
-                        <div className="mt-2 space-y-1 rounded-lg bg-muted/40 px-2.5 py-2 text-[10px] text-muted-foreground">
-                          {Object.entries(person._fieldGrounding ?? {}).map(([field, detail]) => (
-                            <p key={field}>
-                              <span className="font-medium text-foreground">
-                                {sensitiveFieldLabel(field as SensitivePersonField)}
-                              </span>{" "}
-                              ·{" "}
-                              {detail?.status === "manual"
-                                ? t("人工填写")
-                                : detail?.status === "unverified"
-                                  ? `! ${t("AI 推断，待核验")}`
-                                  : t("应用侧原文匹配")}
-                              {detail?.evidenceQuote ? `：${detail.evidenceQuote}` : ""}
-                            </p>
+                      {!person.targetPersonId && (
+                        <option value="">{t("请选择身份处理方式")}</option>
+                      )}
+                      <option value={CREATE_NEW_PERSON}>{t("新建独立人物档案")}</option>
+                      {(person._identityCandidateIds ?? []).map((id) => {
+                        const candidate = existingPeople.find((record) => record.id === id);
+                        if (!candidate) return null;
+                        const detail = candidate.profile?.contact || candidate.id.slice(0, 8);
+                        return (
+                          <option key={candidate.id} value={candidate.id}>
+                            {t("更新已有")}：{candidate.name} · {detail}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      value={person.name ?? ""}
+                      onChange={(event) => patchPerson(index, { name: event.target.value })}
+                      className="h-8 w-40 text-sm"
+                      placeholder={t("姓名")}
+                    />
+                    <button
+                      type="button"
+                      className="order-last ml-auto text-muted-foreground transition-colors hover:text-destructive"
+                      onClick={() => removePerson(index)}
+                    >
+                      <Trash2 className="size-3.5" aria-hidden="true" />
+                    </button>
+                    {missingOf(person).map((field) => (
+                      <span
+                        key={String(field.key)}
+                        className="rounded-full border border-primary/50 px-2 py-0.5 text-[10px] text-primary"
+                      >
+                        {t("缺")} {getLang() === "en" ? field.en : field.zh}
+                      </span>
+                    ))}
+                  </div>
+                  {(() => {
+                    const filledCount = filledDetailCount(person);
+                    return (
+                      <ReviewFold
+                        title={t("详细字段")}
+                        stateKey={`person-detail:${person._draftId ?? index}`}
+                        count={filledCount}
+                      >
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          {(
+                            [
+                              ["relation", t("和我的关系")],
+                              ["birthday", t("生日")],
+                              ["contact", t("联系方式")],
+                            ] as Array<[keyof DraftPerson, string]>
+                          ).map(([key, label]) => (
+                            <Input
+                              key={String(key)}
+                              value={(person[key] as string) ?? ""}
+                              onChange={(event) =>
+                                patchPerson(index, { [key]: event.target.value })
+                              }
+                              className="h-8 text-xs"
+                              placeholder={label}
+                            />
                           ))}
                         </div>
-                      )}
-                      <div className="mt-2 space-y-2 rounded-lg border border-dashed border-border p-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-muted-foreground">
-                            {t("平台账号与历史昵称（仅保留材料明确写出的内容）")}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="ml-auto h-6 px-2 text-[10px]"
-                            onClick={() =>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          {(
+                            [
+                              ["age", t("年龄")],
+                              ["gender", t("性别")],
+                              ["address", t("办公地点")],
+                              ["department", t("部门 / 科室")],
+                              ["org", t("单位 / 公司")],
+                              ["reportsTo", t("汇报对象")],
+                              ["employeeId", t("工号 / 编号")],
+                              ["metAt", t("相识场景")],
+                            ] as Array<[keyof DraftPerson, string]>
+                          ).map(([key, label]) => (
+                            <Input
+                              key={String(key)}
+                              value={(person[key] as string) ?? ""}
+                              onChange={(event) =>
+                                patchPerson(index, { [key]: event.target.value })
+                              }
+                              className="h-8 text-xs"
+                              aria-label={label}
+                              placeholder={label}
+                            />
+                          ))}
+                        </div>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          <Input
+                            value={person.title ?? ""}
+                            onChange={(event) => patchPerson(index, { title: event.target.value })}
+                            className="h-8 text-xs"
+                            aria-label={t("职务/技能")}
+                            placeholder={t("职务/技能")}
+                          />
+                          <select
+                            value={person.closeness ?? ""}
+                            onChange={(event) =>
                               patchPerson(index, {
-                                identities: [
-                                  ...(person.identities ?? []),
-                                  {
-                                    platform: "",
-                                    account: "",
-                                    alias: "",
-                                    validFrom: "",
-                                    validTo: "",
-                                  },
-                                ],
+                                closeness: event.target.value
+                                  ? Number(event.target.value)
+                                  : undefined,
                               })
                             }
+                            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                            aria-label={t("亲密度")}
                           >
-                            <Plus className="size-3" aria-hidden="true" />
-                            {t("添加")}
-                          </Button>
-                        </div>
-                        {(person.identities ?? []).map((identity, identityIndex) => (
-                          <div
-                            key={identityIndex}
-                            className="grid items-center gap-1.5 sm:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto]"
-                          >
-                            {(
-                              [
-                                ["platform", t("平台")],
-                                ["account", t("账号")],
-                                ["alias", t("当时昵称")],
-                                ["validFrom", t("生效日期")],
-                                ["validTo", t("失效日期")],
-                              ] as Array<
-                                ["platform" | "account" | "alias" | "validFrom" | "validTo", string]
-                              >
-                            ).map(([key, label]) => (
-                              <Input
-                                key={key}
-                                value={identity[key] ?? ""}
-                                onChange={(event) =>
-                                  patchPerson(index, {
-                                    identities: (person.identities ?? []).map((row, rowIndex) =>
-                                      rowIndex === identityIndex
-                                        ? { ...row, [key]: event.target.value }
-                                        : row,
-                                    ),
-                                  })
-                                }
-                                className="h-7 text-[11px]"
-                                placeholder={label}
-                              />
+                            <option value="">{t("亲密度（未填写）")}</option>
+                            {[1, 2, 3, 4, 5].map((value) => (
+                              <option key={value} value={value}>
+                                {t("亲密度")} {value}/5
+                              </option>
                             ))}
-                            <button
+                          </select>
+                          <Input
+                            value={(person.projects ?? []).join("、")}
+                            onChange={(event) =>
+                              patchPerson(index, { projects: splitDraftList(event.target.value) })
+                            }
+                            className="h-8 text-xs"
+                            aria-label={t("项目/技能")}
+                            placeholder={t("项目/技能（用逗号分隔）")}
+                          />
+                          <Input
+                            value={(person.likes ?? []).join("、")}
+                            onChange={(event) =>
+                              patchPerson(index, { likes: splitDraftList(event.target.value) })
+                            }
+                            className="h-8 text-xs"
+                            aria-label={t("喜好/技能关键词")}
+                            placeholder={t("喜好/技能关键词（用逗号分隔）")}
+                          />
+                          <Input
+                            value={(person.tags ?? []).join("、")}
+                            onChange={(event) =>
+                              patchPerson(index, { tags: splitDraftList(event.target.value) })
+                            }
+                            className="h-8 text-xs sm:col-span-2"
+                            aria-label={t("标签/技能")}
+                            placeholder={t("标签/技能（用逗号分隔）")}
+                          />
+                          <Input
+                            value={(person.dislikes ?? []).join("、")}
+                            onChange={(event) =>
+                              patchPerson(index, { dislikes: splitDraftList(event.target.value) })
+                            }
+                            className="h-8 text-xs"
+                            aria-label={t("忌口 / 不喜欢")}
+                            placeholder={t("忌口 / 不喜欢（用逗号分隔）")}
+                          />
+                          <Input
+                            value={(person.gifts ?? []).join("、")}
+                            onChange={(event) =>
+                              patchPerson(index, { gifts: splitDraftList(event.target.value) })
+                            }
+                            className="h-8 text-xs"
+                            aria-label={t("送礼记录")}
+                            placeholder={t("送礼记录（用逗号分隔）")}
+                          />
+                        </div>
+                        {Object.keys(person._fieldGrounding ?? {}).length > 0 && (
+                          <div className="mt-2 space-y-1 rounded-lg bg-muted/40 px-2.5 py-2 text-[10px] text-muted-foreground">
+                            {Object.entries(person._fieldGrounding ?? {}).map(([field, detail]) => (
+                              <p key={field}>
+                                <span className="font-medium text-foreground">
+                                  {sensitiveFieldLabel(field as SensitivePersonField)}
+                                </span>{" "}
+                                ·{" "}
+                                {detail?.status === "manual"
+                                  ? t("人工填写")
+                                  : detail?.status === "unverified"
+                                    ? `! ${t("AI 推断，待核验")}`
+                                    : t("应用侧原文匹配")}
+                                {detail?.evidenceQuote ? `：${detail.evidenceQuote}` : ""}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                        <div className="mt-2 space-y-2 rounded-lg border border-dashed border-border p-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-muted-foreground">
+                              {t("平台账号与历史昵称（仅保留材料明确写出的内容）")}
+                            </span>
+                            <Button
                               type="button"
-                              aria-label={t("删除平台身份")}
-                              className="p-1 text-muted-foreground hover:text-destructive"
+                              variant="ghost"
+                              size="sm"
+                              className="ml-auto h-6 px-2 text-[10px]"
                               onClick={() =>
                                 patchPerson(index, {
-                                  identities: (person.identities ?? []).filter(
-                                    (_, rowIndex) => rowIndex !== identityIndex,
-                                  ),
+                                  identities: [
+                                    ...(person.identities ?? []),
+                                    {
+                                      platform: "",
+                                      account: "",
+                                      alias: "",
+                                      validFrom: "",
+                                      validTo: "",
+                                    },
+                                  ],
                                 })
                               }
                             >
-                              <Trash2 className="size-3.5" aria-hidden="true" />
-                            </button>
+                              <Plus className="size-3" aria-hidden="true" />
+                              {t("添加")}
+                            </Button>
                           </div>
-                        ))}
-                      </div>
-                      <Textarea
-                        value={person.note ?? ""}
-                        onChange={(event) => patchPerson(index, { note: event.target.value })}
-                        rows={2}
-                        className="mt-2 text-xs"
-                        placeholder={t("备注")}
-                      />
-                    </ReviewFold>
-                  );
-                })()}
-              </div>
-            ))}
-          </div>
+                          {(person.identities ?? []).map((identity, identityIndex) => (
+                            <div
+                              key={identityIndex}
+                              className="grid items-center gap-1.5 sm:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto]"
+                            >
+                              {(
+                                [
+                                  ["platform", t("平台")],
+                                  ["account", t("账号")],
+                                  ["alias", t("当时昵称")],
+                                  ["validFrom", t("生效日期")],
+                                  ["validTo", t("失效日期")],
+                                ] as Array<
+                                  [
+                                    "platform" | "account" | "alias" | "validFrom" | "validTo",
+                                    string,
+                                  ]
+                                >
+                              ).map(([key, label]) => (
+                                <Input
+                                  key={key}
+                                  value={identity[key] ?? ""}
+                                  onChange={(event) =>
+                                    patchPerson(index, {
+                                      identities: (person.identities ?? []).map((row, rowIndex) =>
+                                        rowIndex === identityIndex
+                                          ? { ...row, [key]: event.target.value }
+                                          : row,
+                                      ),
+                                    })
+                                  }
+                                  className="h-7 text-[11px]"
+                                  placeholder={label}
+                                />
+                              ))}
+                              <button
+                                type="button"
+                                aria-label={t("删除平台身份")}
+                                className="p-1 text-muted-foreground hover:text-destructive"
+                                onClick={() =>
+                                  patchPerson(index, {
+                                    identities: (person.identities ?? []).filter(
+                                      (_, rowIndex) => rowIndex !== identityIndex,
+                                    ),
+                                  })
+                                }
+                              >
+                                <Trash2 className="size-3.5" aria-hidden="true" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <Textarea
+                          value={person.note ?? ""}
+                          onChange={(event) => patchPerson(index, { note: event.target.value })}
+                          rows={2}
+                          className="mt-2 text-xs"
+                          placeholder={t("备注")}
+                        />
+                      </ReviewFold>
+                    );
+                  })()}
+                </div>
+              ))}
+            </div>
+          </ReviewFold>
 
           <ReviewFold title={t("事实草稿")} count={(draft.facts ?? []).length}>
             <div className="flex items-center gap-2">
@@ -4427,11 +4561,8 @@ export function IntakePanel({
           <ReviewFold title={t("关系网预览")}>
             <DraftGraph
               people={draft.people ?? []}
-              relations={(draft.relations ?? []).map((r) => ({
-                from: r.from ?? "",
-                to: r.to ?? "",
-                label: r.label ?? "",
-              }))}
+              relations={draft.relations ?? []}
+              archive={draftGraphArchive}
               onAddPerson={(name) =>
                 setDraft((prev) => {
                   const person = withIdentityDecision(
@@ -4563,7 +4694,7 @@ export function IntakePanel({
                         <p className="text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
                           {relation._relationReason}
                           {relation._audit?.confirmationStatus !== "accepted" &&
-                            ` ${t("「一键接受」不会自动接受这条；点「确认入库」会一并保存并保留待核验标记，不会丢。")}`}
+                            ` ${t("这条的来源对不上，第一次「一键接受待确认」会跳过它；再点一次就会连它一起接受。点「确认入库」也会保存，并保留待核验标记。")}`}
                         </p>
                       )}
                       <Input

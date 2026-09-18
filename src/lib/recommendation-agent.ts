@@ -163,6 +163,8 @@ export interface RecommendationAgentCheckpoint {
   task: string;
   archiveVersion: string;
   includeInferredPaths: boolean;
+  /** 更早的检查点没有这个字段，缺省按「待确认关系不参与」处理。 */
+  includePendingPaths?: boolean;
   candidateLimit: number;
   requestedTargetPersonId?: string;
   phase: "planning" | "analysis";
@@ -193,6 +195,7 @@ export function createInitialRecommendationCheckpoint(input: {
   task: string;
   archiveVersion: string;
   includeInferredPaths: boolean;
+  includePendingPaths?: boolean;
   candidateLimit: number;
   targetPersonId?: string;
   maxRounds: number;
@@ -203,6 +206,7 @@ export function createInitialRecommendationCheckpoint(input: {
     task: input.task,
     archiveVersion: input.archiveVersion,
     includeInferredPaths: input.includeInferredPaths,
+    includePendingPaths: input.includePendingPaths === true,
     candidateLimit: input.candidateLimit,
     requestedTargetPersonId: input.targetPersonId,
     phase: "planning",
@@ -332,15 +336,15 @@ function localCandidateFrom(
 }
 
 function capabilityPlanFrom(value: unknown, session: ArchiveAgentReferenceSession) {
-  if (!Array.isArray(value)) throw new Error("开放任务缺少能力槽计划");
+  if (!Array.isArray(value)) throw new Error("这件事还没有拆出可以分工的部分");
   if (value.length < 1 || value.length > 6) {
-    throw new Error("能力槽必须在 1 到 6 个之间");
+    throw new Error("一件事最多拆成 6 部分，至少要拆出 1 部分");
   }
   const labels = new Set<string>();
   const semanticCandidates: RecommendationSemanticCandidateClaim[] = [];
   const slots = value.map((raw, index) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new Error(`第 ${index + 1} 个能力槽不是对象`);
+      throw new Error(`第 ${index + 1} 部分的任务描述格式不对`);
     }
     const item = raw as Record<string, unknown>;
     const label = clipped(item.label, 60);
@@ -350,9 +354,9 @@ function capabilityPlanFrom(value: unknown, session: ArchiveAgentReferenceSessio
       ...new Set(rawTerms.map((term) => clipped(term, 40)).filter((term) => term.length > 0)),
     ].slice(0, 10);
     if (!label || !deliverable || !searchTerms.length) {
-      throw new Error(`第 ${index + 1} 个能力槽缺少 label、deliverable 或 searchTerms`);
+      throw new Error(`第 ${index + 1} 部分缺少名称、交付物或检索词`);
     }
-    if (labels.has(label)) throw new Error(`能力槽名称重复：${label}`);
+    if (labels.has(label)) throw new Error(`有两部分的名称重复了：${label}`);
     labels.add(label);
     const id = `capability-${index + 1}`;
     const candidates = Array.isArray(item.candidates) ? item.candidates.slice(0, 12) : [];
@@ -578,7 +582,7 @@ async function requestRecommendationPlan(options: {
         ? "已识别为指定人物的联系任务"
         : plan.mode === "ambiguous"
           ? "目标人物存在歧义，需要用户选择"
-          : `已识别为开放任务，并拆成 ${plan.slots.length} 个能力槽`,
+          : `这件事需要 ${plan.slots.length} 种能力，正在按这些方向查档案`,
   });
   return plan;
 }
@@ -593,10 +597,10 @@ function capabilityCoverageText(
     const personId = assignedBySlot.get(slot.id);
     const person = personId ? candidateById.get(personId)?.person : undefined;
     return person
-      ? `- ${slot.label}：${person.name}（${slot.deliverable}）`
-      : `- ${slot.label}：尚无档案能力证据（${slot.deliverable}）`;
+      ? `- **${slot.label}**：可以找 **${person.name}**（要交付的是：${slot.deliverable}）`
+      : `- **${slot.label}**：档案里还没有谁能做这件事的记录（要交付的是：${slot.deliverable}）`;
   });
-  return `能力覆盖账单\n${rows.join("\n")}`;
+  return [`## 这件事可以拆成 ${plan.slots.length} 块，分别能找谁`, ...rows].join("\n");
 }
 
 export function planArchiveDisclosure(
@@ -802,6 +806,8 @@ export async function runRecommendationAgent(options: {
   events: LifeEventRecord[];
   targetPersonId?: string;
   includeInferredPaths?: boolean;
+  /** 待确认的关系是否参与引荐；缺省不参与。 */
+  includePendingPaths?: boolean;
   candidateLimit?: number;
   signal?: AbortSignal;
   onTrace?: (event: AgentTraceEvent) => void;
@@ -830,6 +836,9 @@ export async function runRecommendationAgent(options: {
     if (resume.archiveVersion !== archiveVersion) throw new Error("人物档案已经变化，请重新分析");
     if (resume.includeInferredPaths !== (options.includeInferredPaths === true)) {
       throw new Error("推导关系设置已经变化，请重新分析");
+    }
+    if ((resume.includePendingPaths === true) !== (options.includePendingPaths === true)) {
+      throw new Error("待确认关系的设置已经变化，请重新分析");
     }
     if (resume.candidateLimit !== candidateLimit) {
       throw new Error("推荐人数上限已经变化，请重新分析");
@@ -893,6 +902,7 @@ export async function runRecommendationAgent(options: {
       task: options.task,
       archiveVersion,
       includeInferredPaths: options.includeInferredPaths === true,
+      includePendingPaths: options.includePendingPaths === true,
       candidateLimit,
       targetPersonId: options.targetPersonId,
       maxRounds: fullBudget.maxRounds,
@@ -1016,6 +1026,7 @@ export async function runRecommendationAgent(options: {
         maxHops,
         limit: candidateLimit,
         includeInferred: options.includeInferredPaths === true,
+        includePending: options.includePendingPaths === true,
       };
       const rankingDecision = await runtime.executeTool("find_connection_paths", rankingArgs);
       if (rankingDecision.status === "finalize") {
@@ -1046,6 +1057,7 @@ export async function runRecommendationAgent(options: {
           task: options.task,
           limit: candidateLimit,
           includeInferred: options.includeInferredPaths === true,
+          includePending: options.includePendingPaths === true,
         });
         if (targetSideDecision.status === "finalize") {
           throw new Error(`Agent 在检查目标侧入口时达到预算上限：${targetSideDecision.reason}`);
@@ -1064,7 +1076,7 @@ export async function runRecommendationAgent(options: {
       );
     } else if (resume?.phase !== "analysis") {
       const slots = plannedSlots;
-      if (!slots) throw new Error("开放任务缺少模型生成的能力槽");
+      if (!slots) throw new Error("这件事还没有拆出可以分工的部分");
       const assignments: Array<{ slotId: string; personId: string }> = [];
       const uncoveredSlotIds: string[] = [];
       const selectedByPerson = new Map<string, CandidateRecommendation>();
@@ -1091,14 +1103,12 @@ export async function runRecommendationAgent(options: {
           limit: 10,
         });
         if (slotDecision.status === "finalize") {
-          throw new Error(
-            `Agent 在能力槽“${slot.label}”检索时达到预算上限：${slotDecision.reason}`,
-          );
+          throw new Error(`查“${slot.label}”时用完了本次运行预算：${slotDecision.reason}`);
         }
         if (slotDecision.status === "failed") {
           throw slotDecision.error instanceof Error
             ? slotDecision.error
-            : new Error(`能力槽“${slot.label}”候选检索失败`);
+            : new Error(`查“${slot.label}”时没有拿到结果`);
         }
         const slotResult = slotDecision.value as { rows?: RankingRow[] };
         const verified = (slotResult.rows ?? [])
@@ -1124,18 +1134,19 @@ export async function runRecommendationAgent(options: {
       for (const { slot, candidates: slotCandidates } of rankedBySlot) {
         for (const candidate of slotCandidates) {
           const current = selectedByPerson.get(candidate.person.id);
-          const role = candidate.match.localRank === 1 ? "首选" : "备选";
-          const slotReason = `${role}能力槽“${slot.label}”：${slot.deliverable}`;
+          const role =
+            candidate.match.localRank === 1 ? "第一人选" : `第 ${candidate.match.localRank} 人选`;
+          const slotReason = `${slot.label}这件事的${role}（要交付的是：${slot.deliverable}）`;
           const matchReasons = [
             candidate.match.discovery !== "lexical"
-              ? "模型识别到语义关联，本地已核对所引档案事实"
+              ? "档案里没写同样的词，但内容对得上，已逐条核对原文"
               : "",
             candidate.match.matchedTerms.length
-              ? `词面证据：${candidate.match.matchedTerms.join("、")}`
+              ? `档案里明确写到：${candidate.match.matchedTerms.join("、")}`
               : "",
           ].filter(Boolean);
           const slotEvidence = candidate.match.evidence.map(
-            (item) => `“${slot.label}”档案证据：${item}`,
+            (item) => `“${slot.label}”能对上的记录：${item}`,
           );
           if (current) {
             const previousCount = current.capabilityMatches?.length ?? 1;
@@ -1203,8 +1214,8 @@ export async function runRecommendationAgent(options: {
       trace({
         kind: "tool",
         text: uncoveredSlotIds.length
-          ? `已按能力槽锁定 ${assignments.length} 项分工，${uncoveredSlotIds.length} 项缺少档案证据`
-          : `已按能力槽锁定全部 ${slots.length} 项分工`,
+          ? `已定下 ${assignments.length} 项分工，还有 ${uncoveredSlotIds.length} 项在档案里找不到人`
+          : `全部 ${slots.length} 项分工都在档案里找到了人`,
       });
     }
 
@@ -1216,6 +1227,7 @@ export async function runRecommendationAgent(options: {
             args: {
               targetPersonRef: personRefFor(referenceSession, detectedTarget),
               includeInferred: options.includeInferredPaths === true,
+              includePending: options.includePendingPaths === true,
             },
           },
           result: {
@@ -1239,6 +1251,7 @@ export async function runRecommendationAgent(options: {
               targetPersonRef: personRefFor(referenceSession, detectedTarget),
               maxHops: automaticConnectionHopLimit(options.persons.length),
               includeInferred: options.includeInferredPaths === true,
+              includePending: options.includePendingPaths === true,
             },
           },
           result: {

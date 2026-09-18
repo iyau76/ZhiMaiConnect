@@ -1,4 +1,4 @@
-import { clickVisible, expect, openApp, test } from "./fixtures";
+import { clickVisible, expect, openApp, openAskForHelp, test } from "./fixtures";
 
 for (const width of [390, 768, 1440]) {
   test(`${width}px 下七项核心操作可完成且页面无整体横向溢出`, async ({ page }) => {
@@ -12,8 +12,8 @@ for (const width of [390, 768, 1440]) {
 
     if (width < 768) await page.getByRole("button", { name: "更多", exact: true }).click();
     await clickVisible(page, page.getByRole("button", { name: /^设置/ }));
-    await page.getByRole("button", { name: "载入完整 50 人演示库" }).click();
-    await expect(page.getByText("当前已载入：50 人 · 80 条关系")).toBeVisible();
+    await page.getByRole("button", { name: "载入完整 51 人演示库" }).click();
+    await expect(page.getByText("当前已载入：51 人 · 91 条关系")).toBeVisible();
 
     await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
     await page.getByRole("tab", { name: "关系网" }).click();
@@ -24,9 +24,8 @@ for (const width of [390, 768, 1440]) {
       .click();
     await expect(page.getByRole("button", { name: "打开人物卡" })).toBeVisible();
 
-    await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
+    const recommendation = await openAskForHelp(page);
     await page.getByRole("button", { name: "离线演示问题（合成数据）" }).click();
-    const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
     await expect(recommendation.getByRole("textbox")).toHaveValue(
       "我要组织校园记忆展开幕活动，找谁负责拍照比较合适？",
     );
@@ -52,8 +51,8 @@ for (const width of [390, 768, 1440]) {
     await expect(page.getByPlaceholder("目标，例如：筹备校园记忆展开幕活动")).toBeVisible();
 
     if (width < 768) await page.getByRole("button", { name: "更多", exact: true }).click();
-    await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-    await expect(page.getByText("模型配置", { exact: true })).toBeVisible();
+    await clickVisible(page, page.getByRole("button", { name: /^模型配置/ }));
+    await expect(page.getByTestId("model-config-panel")).toBeVisible();
     await page.getByRole("button", { name: "测试连接" }).click();
     await expect(page.getByText(/连接正常/)).toBeVisible();
 

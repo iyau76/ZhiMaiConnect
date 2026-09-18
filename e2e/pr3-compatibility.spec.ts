@@ -274,7 +274,7 @@ for (const { personId, edgeId, dx, dy } of [
       .poll(async () => Number(await circle.getAttribute("cy")))
       .toBeGreaterThan(Number(initialY));
     await expect(edge).not.toHaveAttribute("d", initialPath!);
-    await page.getByLabel("图形布局").selectOption("network");
+    await page.getByLabel("图形布局").selectOption("none");
     await page.getByLabel("图形布局").selectOption("family");
     await expect(circle).toHaveAttribute("cy", initialY!);
   });

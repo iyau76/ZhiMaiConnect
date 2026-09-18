@@ -258,22 +258,24 @@ const EN: Record<string, string> = {
   清除本地录入材料: "Clear local intake material",
   "每个顶层草稿条目都要接受或拒绝；编辑已接受条目后会重新变为待确认。":
     "Accept or reject every top-level draft item. Editing an accepted item returns it to pending review.",
-  "待确认是软提醒；可逐条接受，也可直接入库，AI 内容会保留待核验标记。":
-    "Pending review is advisory: accept items individually or save directly; AI content keeps a needs-review marker.",
+  "待确认是软提醒，你可以直接以待确认形态入库，也可以一键接受它们，也可以仔细审核并拒绝一部分。":
+    "Pending review is a soft nudge: save them as they are, accept them all in one tap, or read them carefully and reject the ones you don't want.",
   "条 AI 内容已带待核验标记": "AI-generated items were saved with a needs-review marker",
   条关系缺少依据并保持待确认: "relationships have no source basis and remain pending",
   批量接受低风险高置信事件: "Batch-accept low-risk, high-confidence events",
-  一键接受已对齐项: "Accept all aligned items",
-  接受已对齐项: "Accept aligned items",
-  "接受来源已对齐的条目。证据未对齐的关系继续留在待确认。":
-    "Accept source-aligned items. Relations with unmatched evidence stay pending.",
+  一键接受待确认: "Accept all pending",
+  接受待确认条目: "Accept pending items",
+  连来源对不上的关系一起接受: "Also accept relations whose source does not line up",
+  "待确认条目都会被接受，AI 生成的内容仍会保留待核验标记。":
+    "Every pending item will be accepted. AI-generated content keeps a needs-review marker.",
+  "来源对得上的条目这次会被接受；来源对不上的关系先留着，你再看一眼，它们不会丢，点「确认入库」同样能保存。":
+    "This pass accepts the items whose source lines up. Relations whose source does not line up are left for you to look at; nothing is dropped, and “Confirm and save” stores them too.",
+  "再把来源对不上的关系一起接受吗？它们在档案里会保留待核验标记，之后随时可以改。":
+    "Also accept the relations whose source does not line up? They keep a needs-review marker in your archive and can be changed later.",
   确认接受: "Accept",
-  "确定批量接受已对齐条目吗？证据未对齐的关系会保留待确认，可单独接受。":
-    "Accept all source-aligned items? Relations whose evidence is not aligned will remain pending and can be accepted individually.",
-  已接受来源对齐的待确认条目: "Accepted the source-aligned pending items",
-  "条证据未对齐关系仍待确认，可逐条查看或接受":
-    "source-unaligned relations remain pending; review or accept them individually",
-  已接受全部来源对齐的待确认条目: "Accepted all source-aligned pending items",
+  "这里接受的是来源能对齐的待确认条目；仍有 {count} 条关系信息属于待确认条目，再次点击「一键接受待确认」可接受它们":
+    "This pass accepted the pending items whose source lines up. {count} relation(s) are still pending — tap “Accept all pending” again to accept them too.",
+  已接受全部待确认条目: "Accepted every pending item",
   "已批量接受未编辑、日期有效的高置信度本地事件；其余顶层条目仍需逐条确认":
     "Accepted unedited, high-confidence local events with valid dates; every other top-level item still requires individual review",
   已拦截缺少原文证据的敏感值: "Blocked sensitive values without source evidence",
@@ -1139,15 +1141,31 @@ const EN: Record<string, string> = {
   "还没有待办，可以从上面的生日 / 节日一键加入。":
     "No to-dos yet — add one from a birthday or festival above.",
   这事该拜托谁: "Who should I ask?",
+  找人办事: "Ask someone",
   "例如：我想找人帮忙看一下租房合同，谁比较合适？":
     "e.g. Who could help me review a rental contract?",
   选择目标人物: "Choose target person",
   请选择目标人物: "Choose a target person",
   "AI 全库分析": "AI archive analysis",
-  "小档案一次提交；档案较多时由 AI 多轮按需读取人物、关系与事件":
-    "Small archives are sent once; large archives are disclosed to AI over multiple on-demand rounds.",
-  "不提交照片、人脸特征、联系方式原文；天气与资讯查询不携带人物档案":
-    "Photos, face features and raw contact details are excluded; weather/news queries carry no profile data.",
+  档案写入授权是怎么工作的: "How archive write authorisation works",
+  "选一种你顺手的方式，三种模式写入的都是同一份档案。":
+    "Pick whichever suits you — all three modes write to the same archive.",
+  "区别只在什么时候请你签字：全权模式会把不是删除的改动直接提交。校验、原子事务、收据和撤销三种模式都一样，删除人物永远单独问过你。":
+    "The only difference is when you are asked to sign: full mode commits non-deletion changes straight away. Validation, atomic transactions, receipts and undo work the same in all three modes, and deleting a person always asks you separately.",
+  预算上限是怎么算的: "How the budget limits work",
+  "数字越大，AI 能查得更久；改任一格都会立刻存成你自己的方案。":
+    "Larger numbers let the AI search for longer. Changing any field is saved immediately as your own profile.",
+  "这些是整次任务的累计上限，不会让单次提问塞进更多上下文。轮次是一共能来回几次；工具调用是能查多少次档案；输入和输出 token 是这一趟总共能读多少、写多少；总时限是整趟最多跑多久。":
+    "These are cumulative limits for one whole task and do not cram more context into a single question. Rounds is how many back-and-forths are allowed, tool calls is how many archive lookups, input and output tokens cap how much may be read and written in total, and the time limit caps how long the whole run may take.",
+  保存档案正文是什么意思: "What saving archive text means",
+  "默认只记运行步骤。打开后，本机还会保存已脱敏的提示词和工具输入输出，方便你自己回看这次做了什么；这些内容不会离开这台设备。":
+    "By default only the run steps are recorded. When enabled, this device also keeps the scrubbed prompts and tool inputs/outputs so you can look back at what happened. That content never leaves this device.",
+  "AI 全库分析是怎么工作的": "How full-archive analysis works",
+  "档案不多时，一次性把人物、关系与事件交给 AI；档案多时，AI 会分几轮按需读取，不必一次看完。照片、人脸特征和联系方式原文不会提交，天气与资讯类问题也不携带人物档案。":
+    "With a small archive the AI receives people, relations and events in one go; with a large one it reads them across several rounds on demand instead of everything at once. Photos, face features and raw contact details are never submitted, and weather or news questions carry no personal archive.",
+  允许待确认的关系参与引荐: "Include unconfirmed relations",
+  "这条推荐用到了尚未确认的关系，请先核对再联系。":
+    "This suggestion uses a relation you have not confirmed yet — check it before you reach out.",
   允许已确认的推导关系参与引荐: "Allow confirmed inferred relations in referrals",
   "离线演示问题（合成数据）": "Offline demo question (synthetic data)",
   本地筛选候选: "Run local ranking",
@@ -1180,10 +1198,12 @@ const EN: Record<string, string> = {
     "Demo candidates generated locally; both people and results must use synthetic demo data.",
   请先在设置中载入合成演示数据: "Load synthetic demo data in Settings first",
   "人物库还是空的，请先录入人物资料": "No people yet; add profiles first",
-  "目标模式：候选、分数和路径由本地确定性工具锁定，AI 只负责解释与措辞。":
-    "Target mode: candidates, scores and paths are locked by local deterministic logic; AI only explains and drafts wording.",
-  "开放求助模式：AI 已按需读取档案，候选仍需人工复核。":
-    "Open-help mode: AI read profiles on demand; candidates still require human review.",
+  "顺序和依据都是本地按档案算出来的，AI 只负责把话说明白。":
+    "The order and the evidence come from your own archive; the AI only puts it into words.",
+  "档案里没有你和目标之间的直接路径；下面只是目标身边的人，AI 已经核对过档案。":
+    "Your archive holds no direct path between you and the target. These people are simply near the target; the AI has already checked the records.",
+  "AI 已经按需读过档案；下面这几位还需要你自己核实。":
+    "The AI has read your archive as needed; please confirm these people yourself.",
   "长期未联系提醒，请先确认对方近况再发送消息。":
     "Long-time-no-contact reminder; check their current situation before messaging.",
   识别失败: "Recognition failed",
@@ -1267,7 +1287,7 @@ const EN: Record<string, string> = {
   "默认只保存轮次、工具名、耗时和 token；启用后才保存已脱敏的提示词与工具输入输出。":
     "By default, only rounds, tool names, duration and token counts are saved. Enable this to retain redacted prompts and tool input/output.",
   还没有持久化运行日志: "No persisted run logs yet",
-  竞赛演示数据: "Competition demo data",
+  演示数据: "Demo data",
   校园生活: "Campus life",
   "同学、社团、展览与两位同名人物":
     "Classmates, student clubs, an exhibition, and two people with the same name",
@@ -1286,8 +1306,26 @@ const EN: Record<string, string> = {
   "创业、市场、招聘、技术与内容交付":
     "Entrepreneurship, marketing, hiring, technology, and content delivery",
   在有限团队之外找到可靠的合作伙伴: "Find dependable collaborators beyond a small core team",
+  生活场景: "Life scenarios",
+  世界剧场: "World theater",
+  红楼梦: "Dream of the Red Chamber",
+  "贾府宗族、四大家族与称谓推导": "The Jia clan, four great families, and kinship reasoning",
+  从贾母看清贾府三代的亲缘网络:
+    "Trace three generations of the Jia household through Grandmother Jia",
+  魔法学院: "Academy of Magic",
+  "学院、社团与师生协作网": "Houses, societies, and a student-teacher network",
+  "想学一项新咒语，该找谁请教？": "Want to learn a new spell — who should you ask?",
+  元素大陆: "Continent of Elements",
+  七国城邦与跨城协作: "Seven city-states and cross-city collaboration",
+  "要在璃月办一场灯会，找谁统筹？": "Planning a lantern fair in the harbor city — who leads it?",
+  矿石病都市: "Orium City",
+  "干员、阵营与跨阵营合作": "Operators, factions, and cross-faction teamwork",
+  "突发聚集感染，该找谁处理？": "A sudden cluster infection — who handles it?",
+  黑暗森林: "Dark Forest",
+  跨越世纪的协作与抉择: "Cooperation and choices across centuries",
+  "末日之战前，该找谁了解敌人？": "Before the final battle — who can explain the enemy?",
   载入演示数据失败: "Failed to load demo data",
-  "载入完整 50 人演示库": "Load the complete 50-person demo",
+  "载入完整 51 人演示库": "Load the complete 51-person demo",
   "选择校园、家庭、职场或小企业场景，也可以载入完整关系库。切换场景会替换上一套合成资料，不影响你自己录入的内容。":
     "Choose a campus, family, workplace, or small-business scenario, or load the complete relationship library. Switching scenarios replaces the previous synthetic records without affecting your own data.",
   先从你手边的生活开始: "Start with the life already around you",
@@ -1302,8 +1340,8 @@ const EN: Record<string, string> = {
   从空库开始: "Start with an empty library",
   保留一张干净的个人工作台: "Keep a clean personal workspace",
   稍后再说: "Maybe later",
-  "一键载入 50 位虚构人物、80 条关系及配套事件。所有邮箱使用 example.invalid，界面和来源均标注为合成数据，不对应真实个人。":
-    "Load 50 fictional people, 80 relationships and matching events. Email addresses use example.invalid, and every record is marked synthetic rather than representing a real person.",
+  "一键载入 51 位虚构人物、91 条关系及配套事件。所有邮箱使用 example.invalid，界面和来源均标注为合成数据，不对应真实个人。":
+    "Load 51 fictional people, 91 relationships and matching events. Email addresses use example.invalid, and every record is marked synthetic rather than representing a real person.",
   当前已载入: "Currently loaded",
   只清除合成数据: "Clear synthetic data only",
   "只会删除带“合成演示数据”标识的记录，不影响你自己录入的资料。继续？":
@@ -1353,6 +1391,28 @@ const EN: Record<string, string> = {
   离线资源尚未就绪: "Offline resources are not ready yet",
   已安装: "Installed",
   检查应用更新: "Check for updates",
+  关于与更新: "About and updates",
+  "Windows 应用": "Windows app",
+  "Android 应用": "Android app",
+  网页版: "Web app",
+  当前版本: "Current version",
+  "新版本发布在 GitHub Releases。检查更新只读取公开的版本信息，不上传本机资料；连不上时可以直接打开发布页手动下载。":
+    "New versions are published on GitHub Releases. Checking for updates only reads public version information and never uploads local data. If GitHub is unreachable, open the release page and download manually.",
+  检查新版本: "Check for a new version",
+  "正在检查…": "Checking…",
+  打开发布页: "Open release page",
+  发现新版本: "New version available",
+  当前: "current",
+  下载安装包: "Download installer",
+  "网页版打开时就会用上新版本；上面的「检查应用更新」可以手动触发。":
+    "The web app picks up new versions when you reopen it; use “Check for updates” above to trigger it manually.",
+  "这个版本没有对应平台的安装包，请到发布页选择。":
+    "This release has no installer for your platform; choose one on the release page.",
+  更新说明: "Release notes",
+  已是最新版本: "You are on the latest version",
+  预发布: "pre-release",
+  "没能查到这个版本：": "Could not check the latest version: ",
+  "可以打开发布页手动核对。": "Open the release page to check manually.",
   申请保留本机数据: "Request persistent storage",
   安装方法与数据说明: "Installation and data storage",
   "免登录使用，人物和事件保存在当前设备。首次打开并完成离线准备后，可以断网查看和编辑。":
@@ -1386,9 +1446,32 @@ const EN: Record<string, string> = {
   "这会替换当前未提交内容。确定载入": "This replaces the current unsubmitted input. Load",
   "测试材料吗？": "test material?",
   已填入测试材料: "Test material loaded",
+  人物卡片: "Person cards",
   请先选择有效月份: "Choose a valid month first",
   图形布局: "Graph layout",
   自动布局: "Automatic layout",
+  布局说明: "What each layout means",
+  "关系全是亲属时自动按家族树画，其余情况画成一张关系网，省得你自己挑。":
+    "When every relation is kinship it draws a family tree automatically; otherwise it draws a network, so you don't have to choose.",
+  "同一个圈层的人聚成一簇，只使用你已经确认的关系圈，标签和场景集合不参与。":
+    "People in the same circle gather into one cluster. It uses only the relationship circles you confirmed — labels and scene collections do not take part.",
+  "拓扑社区是算法自己算出来的「谁和谁来往更密」，不需要你事先分组；同一个社区的人会聚成一簇，跨社区的连线用虚线标出。它只是看一眼的结构，不会写回档案，也不会变成圈层。":
+    "Topological communities are worked out by the app itself, based on who is more densely connected — you don't group anyone in advance. Each community becomes a cluster, and links between communities are dashed. It is a view, not an archive change: nothing is written back and no circle is created.",
+  "按世代分层排列，配偶同层、子女在父母下一层，同一代人用同一种颜色。":
+    "Arranged in generations: spouses share a row, children sit below their parents, and each generation keeps one colour.",
+  "第 {n} 代": "Generation {n}",
+  把预览放大到全屏: "Enlarge the preview to full screen",
+  "拖动画布，滚轮或双指缩放": "Drag to pan; scroll or pinch to zoom",
+  只看这次新增: "Only what's new",
+  和已有档案一起看: "Show alongside the archive",
+  这次新增: "New this time",
+  已有档案: "Already in your archive",
+  "新关系画实线，档案里已有的关系画成灰虚线；这次要更新的人会带上淡色底圈。":
+    "Relations from this draft are solid; relations already in your archive are dashed grey. People you are updating get a soft halo.",
+  "预览里的圈层来自你已经确认的关系圈，以及这次录入的圈层草稿；它们都还没入库。":
+    "Circles in the preview come from the relationship circles you already confirmed plus the circle drafts in this intake. None of it is saved yet.",
+  "预览是这次录入可能长成的样子，点人连线、改关系词都会实时反映在上面。":
+    "The preview shows what this intake could become. Linking people and editing relation words update it live.",
   家族树: "Family tree",
   "家族树按世代排列；配偶同层，子女位于父母下一层。":
     "The family tree is arranged by generation: spouses share a row and children sit below their parents.",
@@ -1415,10 +1498,8 @@ const EN: Record<string, string> = {
   试试这些: "try one of these",
   "点「测试连接」，通过后再点「保存模型配置」。密钥只保存在这台设备的浏览器里。":
     "Press “Test connection”; once it passes, press “Save model settings”. Keys are stored only in this device's browser.",
-  "「一键接受」不会自动接受这条；点「确认入库」会一并保存并保留待核验标记，不会丢。":
-    "One-click accept skips this row. Pressing “Confirm and save” still stores it with an unverified mark — nothing is dropped.",
-  "条证据未对齐关系仍待确认，可逐条查看或接受；确认入库时会一并保存并保留待核验标记":
-    "relation(s) with unaligned evidence stay pending; review or accept them one by one. Confirm-and-save stores them with an unverified mark",
+  "这条的来源对不上，第一次「一键接受待确认」会跳过它；再点一次就会连它一起接受。点「确认入库」也会保存，并保留待核验标记。":
+    "The source for this one does not line up, so the first “Accept all pending” skips it. Tap again to accept it too — or press “Confirm and save”, which stores it with a needs-review marker.",
   "条事件没有有效日期，已记为「时间待定」入库，可稍后在日历补时间":
     "event(s) lack a valid date; saved as date-to-be-decided. You can add a date later in the calendar",
   "时间待定；入库后可在日历补时间，原话保留在时间表述里。":
@@ -1543,8 +1624,6 @@ const EN: Record<string, string> = {
   首选: "Preferred",
   "目标侧潜在入口 · 尚未验证你能联系到此人":
     "Potential route on the target side · no verified path from you to this person yet",
-  "未找到本人到目标的已验证路径；AI 已核对档案，当前候选仅是目标侧潜在线索。":
-    "No verified path from you to the target was found. The AI checked your archive; these candidates are only leads on the target side.",
   "AI 已理解问题，请选择目标人物后继续":
     "The AI understood the question — pick the target person to continue",
 

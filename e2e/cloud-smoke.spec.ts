@@ -1,4 +1,11 @@
-import { acceptAllDraftItems, clickVisible, expect, openApp, test } from "./fixtures";
+import {
+  acceptAllDraftItems,
+  clickVisible,
+  expect,
+  openApp,
+  openAskForHelp,
+  test,
+} from "./fixtures";
 
 test.describe("Cloudflare 公开版本", () => {
   test.skip(!process.env.PLAYWRIGHT_BASE_URL, "仅在 PLAYWRIGHT_BASE_URL 指向公开部署时运行");
@@ -24,7 +31,7 @@ test.describe("Cloudflare 公开版本", () => {
 
     await clickVisible(page, page.getByRole("button", { name: /^设置/ }));
     await page.getByRole("button", { name: /载入.*(?:50 人|合成数据)/ }).click();
-    await expect(page.getByText("当前已载入：50 人 · 80 条关系")).toBeVisible();
+    await expect(page.getByText("当前已载入：51 人 · 91 条关系")).toBeVisible();
 
     await clickVisible(page, page.getByRole("button", { name: /^录入/ }));
     await intake.getByRole("textbox").fill("请整理当前人物库的全部圈层");
@@ -38,8 +45,7 @@ test.describe("Cloudflare 公开版本", () => {
     await page.getByRole("tab", { name: "关系网" }).click();
     await expect(page.getByText("校园伙伴", { exact: true }).first()).toBeVisible();
 
-    await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
-    const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+    const recommendation = await openAskForHelp(page);
     await recommendation.getByRole("textbox").fill("帮我看一下租房合同中的违约条款");
     await recommendation.getByRole("button", { name: "本地筛选候选" }).click();
     await expect(recommendation.locator("ol li").first()).toContainText("本地分");
@@ -48,8 +54,8 @@ test.describe("Cloudflare 公开版本", () => {
       recommendation.getByRole("textbox", { name: "可编辑的候选比较与求助话术" }),
     ).not.toHaveValue("");
 
-    await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-    const assistant = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+    await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
+    const assistant = page.getByTestId("today-assistant");
     await assistant.getByRole("textbox").fill("Open-Meteo 现在适合做无密钥天气查询吗？");
     await assistant.getByRole("button", { name: "发送问题" }).click();
     await expect(assistant).toContainText("Open-Meteo 提供无需密钥的天气预报接口");

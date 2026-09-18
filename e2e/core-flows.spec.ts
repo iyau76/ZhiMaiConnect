@@ -4,6 +4,7 @@ import {
   expandReviewFolds,
   expect,
   openApp,
+  openAskForHelp,
   readIndexedDbStore,
   seedIndexedDb,
   test,
@@ -215,7 +216,7 @@ test("批量接受只确认来源对齐关系，名称子串误配保持可见�
   await expect(relationCards).toHaveCount(2);
   await expect(relationCards.first()).toContainText("原依据已保留");
 
-  await page.getByRole("button", { name: /一键接受已对齐项/ }).click();
+  await page.getByRole("button", { name: /一键接受待确认/ }).click();
   const acceptAllDialog = page.getByTestId("intake-accept-all-dialog");
   await expect(acceptAllDialog).toBeVisible();
   await acceptAllDialog.getByTestId("intake-accept-all-confirm").click();
@@ -266,8 +267,8 @@ test("事件草稿按月或年录入时不要求选择具体日期，并能解�
 test("人物改名会传播到 Fact、关系、事件和提醒的持久化引用", async ({ page }) => {
   await openApp(page);
   await page.getByRole("button", { name: "离线演示草稿" }).click();
-  await page.waitForSelector('[data-draft-kind="person"]', { state: "attached" });
   await expandReviewFolds(page);
+  await page.waitForSelector('[data-draft-kind="person"]', { state: "attached" });
   const personDrafts = page.locator('[data-draft-kind="person"]');
   await personDrafts.nth(1).getByPlaceholder("汇报对象").fill("唐悦");
   await personDrafts.first().getByPlaceholder("姓名").fill("唐悦（摄影社）");
@@ -358,6 +359,7 @@ test("更新已有档案时，姓名变更会按预览实际写入", async ({ pa
       "唐悦是我的大学摄影社搭档，生日 3 月 12 日，微信 tangyue_photo，喜欢人像摄影。2026 年 8 月 29 日和唐悦一起讨论校园记忆展。",
     );
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
+  await expandReviewFolds(page);
   const target = page.getByRole("combobox", { name: "选择新建人物或更新已有档案" });
   await target.selectOption("existing-tangyue");
   await expect(target).toHaveValue("existing-tangyue");
@@ -367,6 +369,7 @@ test("更新已有档案时，姓名变更会按预览实际写入", async ({ pa
   );
   await page.reload();
   await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
+  await expandReviewFolds(page);
   await expect(target).toHaveValue("existing-tangyue");
   await acceptAllDraftItems(page);
   await page.getByRole("button", { name: "确认入库" }).click();
@@ -398,8 +401,8 @@ test("补充并重新整理会保留人工字段及其来源", async ({ page, mo
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
 
   const person = page.locator('[data-draft-kind="person"]');
-  await page.waitForSelector('[data-draft-kind="person"]', { state: "attached" });
   await expandReviewFolds(page);
+  await page.waitForSelector('[data-draft-kind="person"]', { state: "attached" });
   await person.getByRole("combobox", { name: "亲密度", exact: true }).selectOption("4");
   await expect(person.getByText(/亲密度\s*·\s*人工填写/)).toBeVisible();
   await person.getByPlaceholder("和我的关系").fill("");
@@ -465,7 +468,7 @@ test("人物卡可以手动新建圈层并把未分圈层人物加入其中", as
 
 test("模型配置名称不重复，并可由用户显式保存到当前浏览器", async ({ page }) => {
   await openApp(page);
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await clickVisible(page, page.getByRole("button", { name: /^模型配置/ }));
   const panel = page.getByTestId("model-config-panel");
   const openaiPreset = panel.locator('[data-provider-preset-id="builtin-openai"]');
   const geminiPreset = panel.locator('[data-provider-preset-id="builtin-gemini"]');
@@ -483,7 +486,7 @@ test("模型配置名称不重复，并可由用户显式保存到当前浏览�
 
   await page.evaluate(() => sessionStorage.removeItem("openglass.session-api-keys"));
   await openApp(page);
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await clickVisible(page, page.getByRole("button", { name: /^模型配置/ }));
   // 「知脉免费体验」现在排在第一位并默认使用中，要看自己的密钥得先点回那套配置。
   const reopened = page.getByTestId("model-config-panel");
   await clickVisible(
@@ -711,8 +714,7 @@ test("本地候选排序后才请求 AI，并产出可编辑求助话术", async
     ],
   });
 
-  await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
-  const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+  const recommendation = await openAskForHelp(page);
   await expect(recommendation).toBeVisible();
   await recommendation.getByRole("textbox").fill("帮我看一下租房合同中的违约条款");
   await page.getByRole("button", { name: "本地筛选候选" }).click();
@@ -722,6 +724,8 @@ test("本地候选排序后才请求 AI，并产出可编辑求助话术", async
   expect(mockNetwork.visionRequests).toHaveLength(0);
 
   await page.getByRole("button", { name: "生成比较与话术" }).click();
+  await expect(page.getByTestId("ask-for-help-answer")).toContainText("陈安");
+  await page.getByRole("button", { name: "改文字" }).click();
   const editable = page.getByRole("textbox", { name: "可编辑的候选比较与求助话术" });
   await expect(editable).toContainText("陈安你好");
   await expect(editable).toContainText("为什么不是赵宇");
@@ -789,14 +793,13 @@ test("目标人物引荐只返回真实可达路径，断开的高亲密度同�
     ],
   });
 
-  await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
-  const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+  const recommendation = await openAskForHelp(page);
   await recommendation.getByRole("textbox").fill("我想找贾母办事，应该通过谁联系？");
   await recommendation.getByRole("button", { name: "本地筛选候选" }).click();
   await expect(recommendation).toContainText("本地只召回了问题中出现的人名，不猜测谁是目标");
   await recommendation.getByRole("combobox", { name: "选择目标人物" }).selectOption("jia-mu");
 
-  await expect(recommendation.getByText(/已验证可达路径/)).toBeVisible();
+  await expect(recommendation).toContainText("下面是你能真正联系上的路径");
   await expect(recommendation.locator("ol li")).toHaveCount(1);
   await expect(recommendation.locator("ol li").first()).toContainText("贾琏");
   await expect(recommendation.locator("ol li").first()).toContainText("我 → 贾琏 → 贾母");
@@ -844,10 +847,9 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
     ],
   });
 
-  await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
-  const recommendation = page.getByRole("heading", { name: "这事该拜托谁" }).locator("..");
+  const recommendation = await openAskForHelp(page);
   await recommendation.getByRole("textbox").fill("帮我看一下租房合同中的违约条款");
-  await recommendation.getByRole("switch", { name: /AI 全库分析/ }).click();
+  await expect(recommendation.getByRole("switch", { name: /AI 全库分析/ })).toBeChecked();
   await recommendation.getByRole("button", { name: "AI 全库分析", exact: true }).click();
 
   const trace = recommendation.getByRole("status");
@@ -855,13 +857,15 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
   await expect(trace).toContainText(/\d+ 步/);
   await expect(recommendation.locator("ol li").first()).toContainText("陈安");
   await expect(recommendation.locator("ol li").first()).toContainText(/\d+ 本地锁定分/);
+  await expect(page.getByTestId("ask-for-help-answer")).toBeVisible();
+  await page.getByRole("button", { name: "改文字" }).click();
   await expect(
     recommendation.getByRole("textbox", { name: "可编辑的候选比较与求助话术" }),
   ).not.toHaveValue(/赵宇/);
 
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  await expect(page.getByText("问一问", { exact: true })).toBeVisible();
-  await clickVisible(page, page.getByRole("button", { name: /^提醒/ }));
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
+  await expect(page.getByTestId("today-assistant")).toBeVisible();
+  await clickVisible(page, page.getByRole("button", { name: /^人物关系/ }));
   await expect(recommendation.getByRole("textbox").first()).toHaveValue(
     "帮我看一下租房合同中的违约条款",
   );
@@ -878,8 +882,8 @@ test("AI 全库分析会渐进读取档案，并用 DSH 式单行轨迹展示过
 
 test("AI 助理问一问会展示流式轨迹并调用受控网页检索工具", async ({ page, mockNetwork }) => {
   await openApp(page);
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const questionCard = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
+  const questionCard = page.getByTestId("today-assistant");
   await questionCard.getByRole("textbox").fill("Open-Meteo 现在适合做无密钥天气查询吗？");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 
@@ -890,7 +894,7 @@ test("AI 助理问一问会展示流式轨迹并调用受控网页检索工具",
 
   await clickVisible(page, page.getByRole("button", { name: /^日历/ }));
   await expect(page.getByText("公历 · 农历")).toBeVisible();
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
   await expect(questionCard).toContainText("Open-Meteo 现在适合做无密钥天气查询吗？");
   await expect(questionCard).toContainText("Open-Meteo 提供无需密钥的天气预报接口");
   await expect(questionCard.getByRole("status")).toContainText("回答完成");
@@ -915,8 +919,8 @@ test("AI 助理修改人物时必须先批准，批准前人物库保持不变",
     ],
   });
   await openApp(page);
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const questionCard = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
+  const questionCard = page.getByTestId("today-assistant");
   await questionCard.getByRole("textbox").fill("把合成测试人物的职位改成品牌总监");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 
@@ -952,8 +956,8 @@ test("AI 助理修改人物关系时同样必须先批准", async ({ page }) => 
     ],
   });
   await openApp(page);
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const questionCard = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
+  const questionCard = page.getByTestId("today-assistant");
   await questionCard.getByRole("textbox").fill("把甲和乙的关系改成前同事");
   await questionCard.getByRole("button", { name: "发送问题" }).click();
 

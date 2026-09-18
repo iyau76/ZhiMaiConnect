@@ -98,8 +98,8 @@ test("503 后可从中断轮次继续，并保留已完成的档案工具结果"
     });
   });
 
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const assistant = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
+  const assistant = page.getByTestId("today-assistant");
   await assistant.getByRole("textbox").fill("唐悦喜欢什么？请先查档案再回答。");
   await assistant.getByRole("button", { name: "发送问题" }).click();
 
@@ -109,7 +109,7 @@ test("503 后可从中断轮次继续，并保留已完成的档案工具结果"
   await expect(resume).toBeVisible();
   await page.reload();
   await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
   await expect(resume).toBeVisible();
   await expect(assistant).toContainText("已保留前 2 轮和 2 条工具结果");
   await resume.click();
@@ -159,14 +159,14 @@ test("离开问一问页面后运行继续，返回时只恢复同一条账本�
     });
   });
 
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const assistant = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
+  const assistant = page.getByTestId("today-assistant");
   await assistant.getByRole("textbox").fill("离开页面后继续分析这个问题");
   await assistant.getByRole("button", { name: "发送问题" }).click();
   await expect(assistant).toContainText("模型正在分析第 1 轮");
 
   await clickVisible(page, page.getByRole("button", { name: /^设置/ }));
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
   await expect(assistant).toContainText("离开页面后继续分析这个问题");
   await expect(assistant).toContainText("模型正在分析第 1 轮");
   await expect(assistant.getByRole("button", { name: /从第 .* 轮继续/u })).toHaveCount(0);
@@ -211,8 +211,8 @@ test("首轮请求中刷新页面，可从预先保存的第 1 轮断点恢复",
     });
   });
 
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
-  const assistant = page.getByText("问一问", { exact: true }).locator("..").locator("..");
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
+  const assistant = page.getByTestId("today-assistant");
   await assistant.getByRole("textbox").fill("请保存这个尚未返回的问题");
   await assistant.getByRole("button", { name: "发送问题" }).click();
   await expect(assistant).toContainText("模型正在分析第 1 轮");
@@ -220,7 +220,7 @@ test("首轮请求中刷新页面，可从预先保存的第 1 轮断点恢复",
   await page.reload({ waitUntil: "domcontentloaded" });
   releaseAbandonedRequest();
   await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
-  await clickVisible(page, page.getByRole("button", { name: /^AI 助理/ }));
+  await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
   const resume = assistant.getByRole("button", { name: "从第 1 轮继续" });
   await expect(assistant).toContainText("请保存这个尚未返回的问题");
   await expect(resume).toBeVisible();
@@ -280,11 +280,8 @@ test("关闭浏览器后从同一档案恢复暂停中的运行", async () => {
     });
     const firstPage = activeContext.pages()[0] ?? (await activeContext.newPage());
     await openApp(firstPage);
-    await clickVisible(firstPage, firstPage.getByRole("button", { name: /^AI 助理/ }));
-    const firstAssistant = firstPage
-      .getByText("问一问", { exact: true })
-      .locator("..")
-      .locator("..");
+    await clickVisible(firstPage, firstPage.getByRole("button", { name: /^今天/ }));
+    const firstAssistant = firstPage.getByTestId("today-assistant");
     await firstAssistant.getByRole("textbox").fill("浏览器关闭后继续回答这个问题");
     await firstAssistant.getByRole("button", { name: "发送问题" }).click();
     await expect(firstAssistant).toContainText("上游模型连续 3 次暂时不可用", {
@@ -317,11 +314,8 @@ test("关闭浏览器后从同一档案恢复暂停中的运行", async () => {
     });
     const reopenedPage = activeContext.pages()[0] ?? (await activeContext.newPage());
     await openApp(reopenedPage);
-    await clickVisible(reopenedPage, reopenedPage.getByRole("button", { name: /^AI 助理/ }));
-    const reopenedAssistant = reopenedPage
-      .getByText("问一问", { exact: true })
-      .locator("..")
-      .locator("..");
+    await clickVisible(reopenedPage, reopenedPage.getByRole("button", { name: /^今天/ }));
+    const reopenedAssistant = reopenedPage.getByTestId("today-assistant");
     await expect(reopenedAssistant).toContainText("浏览器关闭后继续回答这个问题");
     await reopenedAssistant.getByRole("button", { name: "从第 1 轮继续" }).click();
     await expect(reopenedAssistant).toContainText("这条回答复用了关闭浏览器前保存的运行断点", {

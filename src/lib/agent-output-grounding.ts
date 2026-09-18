@@ -107,7 +107,10 @@ function fallbackOutreach(task: string, candidate: CandidateRecommendation, targ
   return `你好，我最近在处理“${cleanTask}”。想到你可能有相关经验，想先听听你的判断；如果你不方便，直接告诉我就好。`;
 }
 
-/** Render the recommendation decision from locked local data, never model prose. */
+/**
+ * 用本地锁定的结果渲染回答。写给用户看，不是写给开发者看：
+ * 标题说「要办的事」，条目说「为什么是 Ta / 档案里写了什么 / 要注意什么」。
+ */
 export function renderGroundedRecommendation(options: {
   task: string;
   candidates: CandidateRecommendation[];
@@ -119,27 +122,29 @@ export function renderGroundedRecommendation(options: {
 }) {
   const { candidates } = options;
   const { mode } = options;
+  const target = cleanArchiveText(options.targetName, 80) || "指定的人";
   const heading =
     mode === "connection"
-      ? `已验证可达路径（目标：${cleanArchiveText(options.targetName, 80) || "指定人物"}）`
+      ? `## 想找到${target}，可以先找这几位`
       : mode === "target_side"
-        ? `目标侧潜在入口（未验证本人可达；目标：${cleanArchiveText(options.targetName, 80) || "指定人物"}）`
-        : "本地证据排序";
+        ? `## 还没找到能带你认识${target}的人`
+        : "## 从档案里的证据看，这几位比较合适";
   const rows = candidates.map((candidate, index) => {
+    const name = cleanArchiveText(candidate.person.name, 80);
     const facts = [
-      `${index + 1}. ${cleanArchiveText(candidate.person.name, 80)} — ${candidate.score} 分（${candidate.confidence}置信度）`,
-      `理由：${candidate.reasons.map((item) => cleanArchiveText(item, 300)).join("；") || "暂无直接理由"}`,
-      `证据：${candidate.evidence.map((item) => cleanArchiveText(item, 400)).join("；") || "暂无"}`,
-      `风险：${candidate.risks.map((item) => cleanArchiveText(item, 300)).join("；") || "未发现明显风险"}`,
+      `**${index + 1}. ${name}** · 匹配度 ${candidate.score}（${candidate.confidence}把握）`,
+      `- 为什么是 Ta：${candidate.reasons.map((item) => cleanArchiveText(item, 300)).join("；") || "暂时没有直接理由"}`,
+      `- 档案里的依据：${candidate.evidence.map((item) => cleanArchiveText(item, 400)).join("；") || "暂无"}`,
+      `- 要注意：${candidate.risks.map((item) => cleanArchiveText(item, 300)).join("；") || "暂时没发现明显问题"}`,
     ];
     if (candidate.mode === "connection" && candidate.path) {
       facts.push(
-        `已验证路径：我 → ${candidate.path.personNames.map((name) => cleanArchiveText(name, 80)).join(" → ")}`,
+        `- 你能通过谁找到 Ta：我 → ${candidate.path.personNames.map((name) => cleanArchiveText(name, 80)).join(" → ")}`,
       );
     }
     if (candidate.mode === "target_side") {
       facts.push(
-        `目标侧关系：${candidate.targetEntry?.labels.map((label) => cleanArchiveText(label, 80)).join("、") || "关系已记录"}；该分数只表示目标侧关联强度，不是可达概率。`,
+        `- 和你找的人是什么关系：${candidate.targetEntry?.labels.map((label) => cleanArchiveText(label, 80)).join("、") || "关系已记录"}；这只是${target}身边的人，能不能联系上还得你自己确认。`,
       );
     }
     return facts.join("\n");
@@ -147,8 +152,8 @@ export function renderGroundedRecommendation(options: {
 
   const noRows =
     mode === "target_side"
-      ? `没有发现本人到 ${cleanArchiveText(options.targetName, 80) || "目标"} 的已验证路径，目标侧也没有足够的已确认关系证据。`
-      : "现有档案没有形成合格候选；请补充能力、互动或联系方式证据后再试。";
+      ? `档案里还没有你和${target}之间说得清的联系路径，${target}那边也没有足够明确的关系记录。`
+      : `档案里暂时没有合适的人选。可以先补几条信息：谁做过类似的事、最近和谁联系过、谁的联系方式还在。`;
   const draft = candidates[0]
     ? safeOutreachDraft({
         draft: options.outreachDraft,
@@ -162,14 +167,14 @@ export function renderGroundedRecommendation(options: {
     cleanArchiveText(options.safetyNotice, 1_000),
     heading,
     mode === "target_side" && rows.length
-      ? `未发现本人到 ${cleanArchiveText(options.targetName, 80) || "目标"} 的已验证路径。以下人物仅在目标侧有关系证据。`
+      ? `档案里没有你和${target}之间的直接联系路径。下面是${target}身边的人：`
       : "",
     rows.length ? rows.join("\n\n") : noRows,
     mode === "target_side" && rows.length
-      ? "下一步应先补充你到上述人物的真实联系渠道，不能把目标侧关系当作已经存在的引荐路径。"
+      ? "下一步：先确认你能通过谁真正联系到上面的人，别把「和 Ta 有关系」当成「你能请动 Ta」。"
       : "",
     draft && mode !== "target_side"
-      ? `给第一名 ${cleanArchiveText(candidates[0]?.person.name, 80)} 的可编辑话术（尚未发送）：\n${draft}`
+      ? `## 给${cleanArchiveText(candidates[0]?.person.name, 80)}的第一句话（还没发送，可以改）\n\n> ${draft}`
       : "",
   ]
     .filter(Boolean)

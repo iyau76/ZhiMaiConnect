@@ -40,6 +40,8 @@ export interface RecommendationSessionState {
   presetId: string;
   aiArchiveMode: boolean;
   includeInferredPaths: boolean;
+  /** 旧会话没有这个字段，缺省表示待确认的关系不参与引荐。 */
+  includePendingPaths?: boolean;
   selectedTargetId: string;
   trace: AgentTraceEvent[];
   notice: string;
