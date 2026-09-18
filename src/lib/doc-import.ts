@@ -19,6 +19,19 @@ export const IMPORT_LIMITS = {
   maxImageEdge: 1_600,
 } as const;
 
+/**
+ * 单个文件提取文本的上限：跟随 Agent 预算档位的输入 token 折算，留 20% 余量给
+ * 提示词与其它材料。中文约 1 字 ≈ 1 token（estimateAgentTokens 的口径），
+ * 所以 deep（输入 120000）能进约 96,000 字，不再固定卡在 8,000。
+ * 档位没保存或数值异常时退回 IMPORT_LIMITS.maxExtractedCharacters。
+ */
+export function extractionCharacterLimit(inputTokens: number) {
+  if (!Number.isFinite(inputTokens) || inputTokens <= 0) {
+    return IMPORT_LIMITS.maxExtractedCharacters;
+  }
+  return Math.max(IMPORT_LIMITS.maxExtractedCharacters, Math.floor(inputTokens * 0.8));
+}
+
 const TEXT_EXT = [
   ".txt",
   ".md",

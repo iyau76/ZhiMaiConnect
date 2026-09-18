@@ -1,2 +1,1 @@
-f13ba80b063be4dce26ca64bb16601a48beb047a9e6fb0734700769773afa2b7  ZhiMai-Connect-0.3.2-win-x64-setup.exe
-c5eb53174274fc9b160a388055c11fdf17b48db7fdd07e38dfd90d385238a075  ZhiMai-Connect-0.3.2-test.apk
+56d4959faf793325f4cccc83282b8f2cac04cf1d27527b779ab812bfb8c180f1  ZhiMai-Connect-0.3.3-test.apk

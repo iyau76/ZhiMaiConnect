@@ -45,7 +45,7 @@ import { LocalCaptureInbox } from "@/components/local-capture-inbox";
 import { saveCapture, type LocalCapture } from "@/lib/local-capture-store";
 import { usePwaState } from "@/lib/pwa-client";
 import { startRecording, transcribeAudio, type Recorder } from "@/lib/audio-client";
-import { IMPORT_LIMITS, importFiles } from "@/lib/doc-import";
+import { extractionCharacterLimit, IMPORT_LIMITS, importFiles } from "@/lib/doc-import";
 import {
   claimIntakeJob,
   getIntakeJob,
@@ -382,7 +382,8 @@ function decorateDraft(result: Draft, sourceSummary: string, material: string): 
 }
 
 function buildPrompt(text: string, known: string[]) {
-  const sourceMaterial = text.slice(0, IMPORT_LIMITS.maxExtractedCharacters);
+  const extractionLimit = extractionCharacterLimit(resolveSavedAgentBudget().maxInputTokens);
+  const sourceMaterial = text.slice(0, extractionLimit);
   const sections: IntakePromptSections = {
     knownContext: known.join("、").slice(0, 1_000),
     sourceMaterial,
@@ -3749,7 +3750,7 @@ export function IntakePanel({
           {t("支持 JPG/PNG 等图片、PDF、DOCX、TXT、MD、CSV、JSON；一次最多")}{" "}
           {IMPORT_LIMITS.maxFiles} {t("个，单个不超过")} {IMPORT_LIMITS.maxFileBytes / 1024 / 1024}{" "}
           MB，PDF {t("最多读取")} {IMPORT_LIMITS.maxPdfPages} {t("页，每个文件最多提取")}{" "}
-          {IMPORT_LIMITS.maxExtractedCharacters.toLocaleString()}{" "}
+          {extractionCharacterLimit(resolveSavedAgentBudget().maxInputTokens).toLocaleString()}{" "}
           {t("个字符。也可以 Ctrl/⌘+V 粘贴。")}
         </p>
         <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">

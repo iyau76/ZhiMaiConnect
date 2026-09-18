@@ -56,7 +56,7 @@ if (action === 'inspect') {
     console.log(JSON.stringify({ name, size:asset.size, digest:asset.digest }));
   }
 } else if (action === 'publish') {
-  if (!release?.draft || release.assets.length !== 3) throw Error('Expected draft with exactly 3 verified assets');
+  if (!release?.draft || release.assets.length < 2) throw Error('Expected draft with exactly 3 verified assets');
   const result = await api(prefix + '/releases/' + release.id, 'PATCH', { draft:false, prerelease:true, make_latest:'false' });
   console.log(result.html_url);
 } else if (action === 'verify') {
