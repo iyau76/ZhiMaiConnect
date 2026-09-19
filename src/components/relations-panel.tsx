@@ -93,6 +93,7 @@ import {
   buildFamilyTreeLayout,
   familyTreeEdgeKind,
   isFamilyTreeRelation,
+  selectFamilyTreePeople,
 } from "@/lib/family-tree-layout";
 import {
   relationCategory,
@@ -873,13 +874,21 @@ export function RelationsPanel({
       familyTreeRelations.some((relation) =>
         ["parent", "spouse"].includes(familyTreeEdgeKind(relation) ?? ""),
       ));
-  const familyTree = useMemo(
+  const familyTreePeople = useMemo(
     () =>
-      buildFamilyTreeLayout({
+      selectFamilyTreePeople({
         people: visiblePeople,
         relations: familyTreeRelations,
       }),
     [familyTreeRelations, visiblePeople],
+  );
+  const familyTree = useMemo(
+    () =>
+      buildFamilyTreeLayout({
+        people: familyTreePeople,
+        relations: familyTreeRelations,
+      }),
+    [familyTreePeople, familyTreeRelations],
   );
 
   /**
@@ -2552,6 +2561,13 @@ export function RelationsPanel({
                 <span>
                   {t("当前仅显示")} {familyTreeRelations.length} {t("条亲属关系，隐藏")}{" "}
                   {graphVisibility.visible.length - familyTreeRelations.length} {t("条非亲属关系")}
+                </span>
+              )}
+              {visiblePeople.length > familyTree.nodes.length && (
+                <span data-testid="family-tree-excluded-people">
+                  {tFormat("另有 {n} 位没有亲属关系的人物未显示在家族树中。", {
+                    n: visiblePeople.length - familyTree.nodes.length,
+                  })}
                 </span>
               )}
             </div>

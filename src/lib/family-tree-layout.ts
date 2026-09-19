@@ -158,6 +158,22 @@ function maximumConstraintPath(
   return best;
 }
 
+/** Keep only people who participate in at least one kinship edge. */
+export function selectFamilyTreePeople(input: {
+  people: Array<Pick<PersonRecord, "id" | "name">>;
+  relations: RelationRecord[];
+}) {
+  const candidateIds = new Set(input.people.map((person) => person.id));
+  const includedIds = new Set<string>();
+  for (const relation of input.relations) {
+    if (!candidateIds.has(relation.fromId) || !candidateIds.has(relation.toId)) continue;
+    if (!familyTreeEdgeKind(relation)) continue;
+    includedIds.add(relation.fromId);
+    includedIds.add(relation.toId);
+  }
+  return input.people.filter((person) => includedIds.has(person.id));
+}
+
 /**
  * Build a deterministic generational family-tree projection.
  *

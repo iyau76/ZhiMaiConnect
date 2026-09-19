@@ -1479,6 +1479,8 @@ const EN: Record<string, string> = {
   家族树: "Family tree",
   "家族树按世代排列；配偶同层，子女位于父母下一层。":
     "The family tree is arranged by generation: spouses share a row and children sit below their parents.",
+  "另有 {n} 位没有亲属关系的人物未显示在家族树中。":
+    "{n} people without kinship edges are omitted from the family tree.",
   当前仅显示: "Showing",
   "条亲属关系，隐藏": "kinship relations; hidden",
   条非亲属关系: "non-kinship relations",

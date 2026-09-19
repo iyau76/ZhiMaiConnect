@@ -5,6 +5,7 @@ import {
   buildFamilyTreeLayout,
   familyTreeGenerationDelta,
   isFamilyTreeRelation,
+  selectFamilyTreePeople,
 } from "./family-tree-layout";
 
 function person(id: string, name: string): PersonRecord {
@@ -85,6 +86,47 @@ describe("family tree layout", () => {
     expect(layout.edges.map((edge) => edge.relationId)).toEqual(["parent"]);
     expect(isFamilyTreeRelation(relations[0])).toBe(false);
     expect(isFamilyTreeRelation(relations[1])).toBe(true);
+  });
+
+  it("omits people who have no kinship edge from the family tree", () => {
+    const people = [person("jiamu", "贾母"), person("baoyu", "贾宝玉"), person("xiren", "袭人")];
+    const relations = [
+      relation("jiamu-baoyu", "jiamu", "baoyu", "parent_of", "祖孙"),
+      relation("baoyu-xiren", "baoyu", "xiren", "custom", "近侍"),
+    ];
+
+    const familyTreePeople = selectFamilyTreePeople({ people, relations });
+    const layout = buildFamilyTreeLayout({ people: familyTreePeople, relations });
+
+    expect(familyTreePeople.map((item) => item.id)).toEqual(["jiamu", "baoyu"]);
+    expect(layout.nodes.map((node) => node.id)).toEqual(["baoyu", "jiamu"]);
+    expect(layout.edges.map((edge) => edge.relationId)).toEqual(["jiamu-baoyu"]);
+  });
+
+  it("connects the Ningguo and Shi branches back to Jia Mu's generation", () => {
+    const people = [
+      person("jiamu", "贾母"),
+      person("jiadaishan", "贾代善"),
+      person("jiadaihua", "贾代化"),
+      person("jiajing", "贾敬"),
+      person("shinai", "史鼐"),
+      person("xiangyun", "史湘云"),
+    ];
+    const relations = [
+      relation("daishan-jiamu", "jiadaishan", "jiamu", "spouse_of", "夫妻"),
+      relation("daihua-daishan", "jiadaihua", "jiadaishan", "sibling_of", "兄弟"),
+      relation("daihua-jing", "jiadaihua", "jiajing", "parent_of", "父子"),
+      relation("jiamu-shinai", "jiamu", "shinai", "uncle_aunt_of", "姑侄"),
+      relation("shinai-xiangyun", "shinai", "xiangyun", "uncle_aunt_of", "叔侄女"),
+    ];
+
+    const layout = buildFamilyTreeLayout({ people, relations });
+    const generation = new Map(layout.nodes.map((node) => [node.id, node.generation]));
+
+    expect(generation.get("jiadaihua")).toBe(generation.get("jiadaishan"));
+    expect(generation.get("jiajing")).toBe((generation.get("jiadaihua") ?? 0) + 1);
+    expect(generation.get("shinai")).toBe((generation.get("jiamu") ?? 0) + 1);
+    expect(generation.get("xiangyun")).toBe((generation.get("shinai") ?? 0) + 1);
   });
 
   it("uses a directed aunt relation when the parent chain is incomplete", () => {
