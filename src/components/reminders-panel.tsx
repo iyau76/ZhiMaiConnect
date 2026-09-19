@@ -18,6 +18,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { HelpHint } from "@/components/help-hint";
 import { SourceBadge } from "@/components/source-badge";
 import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
@@ -334,11 +335,13 @@ export function RemindersPanel({
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Clock3 className="size-4 text-primary" aria-hidden="true" />
           {t("长期未联系")}
+          <HelpHint
+            label={t("长期未联系")}
+            text={t("这里只依据本地的共同事件记录计算：超过 90 天没有共同事件的人会出现在这里。")}
+          />
         </h2>
         {stale.length === 0 ? (
-          <p className="mt-3 text-xs text-muted-foreground">
-            {t("暂无超过 90 天未互动的人物；这里只依据本地共同事件记录计算。")}
-          </p>
+          <p className="mt-3 text-xs text-muted-foreground">{t("暂无超过 90 天未互动的人物。")}</p>
         ) : (
           <ul className="mt-3 grid gap-2 sm:grid-cols-2">
             {stale.map((item) => (
@@ -372,6 +375,10 @@ export function RemindersPanel({
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <Gift className="size-4 text-primary" aria-hidden="true" />
           {t("我的待办")}
+          <HelpHint
+            label={t("我的待办")}
+            text={t("填写日期的待办会同步显示在日历；不填日期时只保留在本页。")}
+          />
         </h2>
         <div className="mt-3 flex flex-wrap gap-2">
           <Input
@@ -392,9 +399,6 @@ export function RemindersPanel({
             {t("添加")}
           </Button>
         </div>
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          {t("填写日期的待办会同步显示在日历；不填日期时只保留在本页。")}
-        </p>
 
         <ul className="mt-4 space-y-1.5">
           {[...open, ...done].map((record) => (

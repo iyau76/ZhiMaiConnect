@@ -116,6 +116,31 @@ export function AboutControls() {
           {result.reason} · {t("可以打开发布页手动核对。")}
         </p>
       )}
+
+      <details className="text-sm text-muted-foreground">
+        <summary className="cursor-pointer py-2">{t("其它安装方法与数据说明")}</summary>
+        <ul className="list-disc space-y-2 pl-5">
+          <li>
+            {t("Android Chrome / 桌面 Chrome、Edge：打开浏览器菜单，选择安装应用或添加到主屏幕。")}
+          </li>
+          <li>
+            {t("iPhone：在浏览器分享菜单中选择添加到主屏幕。系统分享接收能力以浏览器支持为准。")}
+          </li>
+          <li>
+            {t(
+              "不同设备、浏览器和网站地址各有独立的本地资料。换设备或换网址前，在设置中导出 JSON 完整备份。",
+            )}
+          </li>
+          <li>
+            {t(
+              "清理站点数据会删除资料和待整理材料。完整备份不包含未提交材料，请先整理或另存原文件。",
+            )}
+          </li>
+          <li>
+            {t("安装仍需网站可访问；AI 需要模型服务联网。当前没有云同步或关闭应用后的定时通知。")}
+          </li>
+        </ul>
+      </details>
     </section>
   );
 }
