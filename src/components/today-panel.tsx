@@ -4,6 +4,7 @@ import {
   Cake,
   CircleAlert,
   FileClock,
+  History,
   Inbox,
   ListTodo,
   PauseCircle,
@@ -14,7 +15,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { HelpHint } from "@/components/help-hint";
 import { TodayAssistant } from "@/components/today-assistant";
 import {
   indexedDbAgentRunLedger,
@@ -230,11 +230,11 @@ export function TodayPanel({
                 ? `${projection.urgent.length} ${t("件事值得先看")}`
                 : t("今天可以从一条记录开始")}
             </h2>
-            {total > 0 && (
-              <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-                {`${t("这里汇总了")} ${total} ${t("条来自人物、事件、提醒、计划和 Agent 运行的记录。点开就回到原处。")}`}
-              </p>
-            )}
+            <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+              {total > 0
+                ? `${t("这里汇总了")} ${total} ${t("条来自人物、事件、提醒、计划和 Agent 运行的记录。点开就回到原处。")}`
+                : t("记下刚发生的事、今天要联系的人，或者载入演示资料看看完整流程。")}
+            </p>
           </div>
           <Button onClick={onOpenIntake} className="shrink-0 rounded-full px-5">
             <PenLine className="size-4" aria-hidden="true" />
@@ -245,18 +245,15 @@ export function TodayPanel({
 
       <section className="rounded-2xl border border-border bg-card p-4 md:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-start gap-3">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <FileClock className="size-4" aria-hidden="true" />
             </span>
             <div>
-              <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-                {t("见面前，先把这个人想起来")}
-                <HelpHint
-                  label={t("见面前，先把这个人想起来")}
-                  text={t("输入一句“明天要见唐悦”，生成可保存、能追溯来源的见面简报。")}
-                />
-              </h2>
+              <h2 className="text-sm font-semibold">{t("见面前，先把这个人想起来")}</h2>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                {t("输入一句“明天要见唐悦”，生成可保存、能追溯来源的见面简报。")}
+              </p>
             </div>
           </div>
           <div className="flex min-w-0 flex-1 gap-2 lg:max-w-xl">
@@ -292,15 +289,10 @@ export function TodayPanel({
       ) : total === 0 ? (
         <section className="flex flex-col items-center rounded-2xl border border-dashed border-border py-14 text-center">
           <Inbox className="size-8 text-primary" aria-hidden="true" />
-          <h2 className="mt-3 flex items-center gap-1.5 text-sm font-medium">
-            {t("今天还没有待处理事项")}
-            <HelpHint
-              label={t("今天还没有待处理事项")}
-              text={t(
-                "人物生日、带日期的事件和提醒、行动计划与未完成的 Agent 任务会自动出现在这里。",
-              )}
-            />
-          </h2>
+          <h2 className="mt-3 text-sm font-medium">{t("今天还没有待处理事项")}</h2>
+          <p className="mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">
+            {t("人物生日、带日期的事件和提醒、行动计划与未完成的 Agent 任务会自动出现在这里。")}
+          </p>
         </section>
       ) : (
         <div className="space-y-6">
@@ -334,6 +326,11 @@ export function TodayPanel({
           />
         </div>
       )}
+
+      <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <History className="size-3" aria-hidden="true" />
+        {t("今天页只读取现有记录；修改仍在对应的人物、日历、提醒或计划中完成。")}
+      </p>
 
       <TodayAssistant
         preset={preset}

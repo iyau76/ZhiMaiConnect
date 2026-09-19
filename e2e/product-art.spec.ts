@@ -42,10 +42,11 @@ for (const { width, theme } of [
     await expect(welcome).toHaveCount(0);
     const input = page.getByRole("textbox", { name: "录入材料", exact: true });
     await input.scrollIntoViewIfNeeded();
+    await expect(page.getByTestId("intake-empty-art")).toHaveJSProperty("naturalWidth", 400);
     await page.screenshot({ path: testInfo.outputPath("intake.png") });
     const before = await input.boundingBox();
     await input.fill("小雨是我的大学同学。");
-    // 录入页空状态插画已按 UI 减法移除，这里守住当时真正要防的回归：输入前后录入框不跳动。
+    await expect(page.getByTestId("intake-empty-art")).toHaveCount(0);
     const after = await input.boundingBox();
     expect(Math.abs(before!.y - after!.y)).toBeLessThan(2);
 

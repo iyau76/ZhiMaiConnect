@@ -5,6 +5,7 @@ import type { LifeEventRecord, RelationRecord } from "./face-db";
 import {
   buildFamilyTreeLayout,
   familyTreeEdgeKind,
+  familyTreeGenerationDelta,
   isFamilyTreeRelation,
 } from "./family-tree-layout";
 import { RELATION_PREDICATES, relationCategoryFor } from "./relation-ontology";
@@ -180,19 +181,33 @@ describe("PR #3 family-tree edge completeness", () => {
   });
 
   it.each([
-    "grandparent_of",
-    "great_grandparent_of",
-    "uncle_aunt_of",
-    "in_law_of",
-    "clan_of",
-  ] as const)("does not force %s endpoints into the same generation", (predicate) => {
+    ["grandparent_of", 2],
+    ["great_grandparent_of", 3],
+    ["uncle_aunt_of", 1],
+  ] as const)("applies the directed generation distance for %s", (predicate, distance) => {
     const layout = buildFamilyTreeLayout({
       people,
-      relations: [relation("parent_of", "parent"), relation(predicate, "extended")],
+      relations: [relation(predicate, "extended")],
     });
-    expect(layout.edges).toHaveLength(2);
-    expect(layout.nodes.find((node) => node.id === "a")?.generation).toBe(0);
-    expect(layout.nodes.find((node) => node.id === "b")?.generation).toBe(1);
+    expect(layout.edges).toHaveLength(1);
+    expect(familyTreeGenerationDelta(relation(predicate, "extended"))).toBe(distance);
+    expect(layout.nodes.find((node) => node.id === "b")?.generation).toBe(distance);
+  });
+
+  it("only applies in-law generation when the qualifier names a parent-in-law", () => {
+    expect(
+      familyTreeGenerationDelta({
+        ...relation("in_law_of", "parent-in-law"),
+        qualifiers: { inLawRole: "mother_in_law" },
+      }),
+    ).toBe(1);
+    expect(
+      familyTreeGenerationDelta({
+        ...relation("in_law_of", "sibling-in-law"),
+        qualifiers: { inLawRole: "sibling_in_law" },
+      }),
+    ).toBe(0);
+    expect(familyTreeGenerationDelta(relation("clan_of", "clan"))).toBeNull();
   });
 
   it("also keeps legacy label-only kinship and excludes social relationships", () => {

@@ -2,7 +2,6 @@ import { ImagePlus, Loader2, Plus, RotateCcw, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { HelpHint } from "@/components/help-hint";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -365,14 +364,10 @@ export function PersonProfileDialog({
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{t("编辑人员资料")}</DialogTitle>
-          <DialogDescription className="flex items-center gap-1.5">
-            {t("按需填写，AI 会整理成字段。")}
-            <HelpHint
-              label={t("编辑人员资料")}
-              text={t(
-                "写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、关系、喜好、送礼记录等字段；圈层也可以在人物卡中手动选择或新建。",
-              )}
-            />
+          <DialogDescription>
+            {t(
+              "写一段自然语言描述，点「AI 自动整理」，会自动拆成生日、关系、喜好、送礼记录等字段；圈层也可以在人物卡中手动选择或新建。",
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -429,7 +424,7 @@ export function PersonProfileDialog({
 
           <div className="space-y-1.5">
             <Label htmlFor="person-profile-notes" className="text-xs text-muted-foreground">
-              {t("随便写一段")}
+              {t("随便写一段（AI 会整理）")}
             </Label>
             <Textarea
               id="person-profile-notes"
@@ -487,13 +482,10 @@ export function PersonProfileDialog({
           <div className="space-y-2 rounded-lg border border-border p-2.5">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  {t("圈层")}
-                  <HelpHint
-                    label={t("圈层")}
-                    text={t("人物可以属于多个圈层；保存后会立即用于关系网的圈层布局。")}
-                  />
-                </Label>
+                <Label className="text-xs text-muted-foreground">{t("圈层")}</Label>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {t("人物可以属于多个圈层；保存后会立即用于关系网的圈层布局。")}
+                </p>
               </div>
               {selectedCircleIds.length === 0 && pendingCircleNames.length === 0 && (
                 <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
@@ -571,13 +563,10 @@ export function PersonProfileDialog({
           <div className="space-y-2 rounded-lg border border-border p-2.5">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  {t("身份与昵称历史")}
-                  <HelpHint
-                    label={t("身份与昵称历史")}
-                    text={t("保留平台账号、曾用昵称和生效时间，改名不会覆盖旧身份。")}
-                  />
-                </Label>
+                <Label className="text-xs text-muted-foreground">{t("身份与昵称历史")}</Label>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {t("保留平台账号、曾用昵称和生效时间，改名不会覆盖旧身份。")}
+                </p>
               </div>
               <Button
                 size="sm"
@@ -660,12 +649,9 @@ export function PersonProfileDialog({
                 </span>
               )}
             </div>
-            <div className="flex justify-end">
-              <HelpHint
-                label={t("标签分组")}
-                text={t("这里只使用你确认过的标签；AI 整理出的标签会在保存前供你检查。")}
-              />
-            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {t("这里只使用你确认过的标签；AI 整理出的标签会在保存前供你检查。")}
+            </p>
             <div className="flex flex-wrap gap-1.5">
               {PRESET_TAGS.map((raw) => {
                 const label = t(raw);

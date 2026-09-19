@@ -21,6 +21,7 @@ export function ReviewFold({
   count,
   summary,
   defaultOpen = false,
+  attention = false,
   stateKey,
   className,
   tone = "border",
@@ -30,6 +31,8 @@ export function ReviewFold({
   count?: number;
   summary?: string;
   defaultOpen?: boolean;
+  /** Bring this section into view automatically when it needs a user decision. */
+  attention?: boolean;
   /** 同一分区在重挂载间保持展开状态的键；缺省用标题。重复实例（如逐人物的详细字段）必须传唯一键。 */
   stateKey?: string;
   className?: string;
@@ -41,6 +44,11 @@ export function ReviewFold({
   useEffect(() => {
     foldOpenStates.set(memoryKey, open);
   }, [memoryKey, open]);
+  useEffect(() => {
+    if (!attention) return;
+    setOpen(true);
+    foldOpenStates.set(memoryKey, true);
+  }, [attention, memoryKey]);
   return (
     <Collapsible
       open={open}
@@ -51,6 +59,7 @@ export function ReviewFold({
         className,
       )}
       data-review-fold
+      data-review-attention={attention ? "true" : undefined}
     >
       <CollapsibleTrigger
         data-review-fold-trigger
