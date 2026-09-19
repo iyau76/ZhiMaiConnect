@@ -14,7 +14,7 @@ test.describe("Cloudflare 公开版本", () => {
     test.setTimeout(90_000);
     await openApp(page);
 
-    const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
+    const intake = page.getByTestId("intake-panel");
     await intake
       .getByRole("textbox")
       .fill(
@@ -30,7 +30,8 @@ test.describe("Cloudflare 公开版本", () => {
     await page.getByRole("button", { name: "撤销最近一次录入" }).click();
 
     await clickVisible(page, page.getByRole("button", { name: /^设置/ }));
-    await page.getByRole("button", { name: /载入.*(?:50 人|合成数据)/ }).click();
+    // 演示库按钮文案会随合成数据规模变化（现在是「载入完整 51 人演示库」），这里只锚定「载入完整…演示库」。
+    await page.getByRole("button", { name: /载入完整 .*演示库/ }).click();
     await expect(page.getByText("当前已载入：51 人 · 91 条关系")).toBeVisible();
 
     await clickVisible(page, page.getByRole("button", { name: /^录入/ }));
@@ -49,10 +50,13 @@ test.describe("Cloudflare 公开版本", () => {
     await recommendation.getByRole("textbox").fill("帮我看一下租房合同中的违约条款");
     await recommendation.getByRole("button", { name: "本地筛选候选" }).click();
     await expect(recommendation.locator("ol li").first()).toContainText("本地分");
-    await recommendation.getByRole("button", { name: "生成比较与话术" }).click();
-    await expect(
-      recommendation.getByRole("textbox", { name: "可编辑的候选比较与求助话术" }),
-    ).not.toHaveValue("");
+    await page.getByRole("button", { name: "生成比较与话术" }).click();
+    await expect(page.getByTestId("ask-for-help-answer")).toContainText("陈安");
+    // 生成后先按排版展示，点「改文字」才切到可编辑文本框（与 core-flows 的本地用例同一路径）。
+    await page.getByRole("button", { name: "改文字" }).click();
+    await expect(page.getByRole("textbox", { name: "可编辑的候选比较与求助话术" })).not.toHaveValue(
+      "",
+    );
 
     await clickVisible(page, page.getByRole("button", { name: /^今天/ }));
     const assistant = page.getByTestId("today-assistant");

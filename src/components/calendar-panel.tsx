@@ -797,10 +797,6 @@ export function CalendarPanel({
               </Button>
             )}
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("记不清哪天，可以写「去年夏天」，我们会整理到时间轴；复杂说法由 AI 辅助理解。")}
-          </p>
-
           <div className="mt-3 flex flex-wrap gap-1.5">
             {PRECISIONS.map((item) => (
               <button

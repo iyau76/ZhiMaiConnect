@@ -19,9 +19,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
-import intakeArt from "@/assets/art/web/intake.webp";
-
 import { DraftGraph } from "@/components/draft-graph";
+import { HelpHint } from "@/components/help-hint";
 import { ReviewFold } from "@/components/review-fold";
 import { AgentRunInspector } from "@/components/agent-run-inspector";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
@@ -69,6 +68,16 @@ import {
 } from "@/lib/face-db";
 import type { ArchiveMutationPlan } from "@/lib/archive-mutation-plan";
 import { matchIdentity } from "@/lib/identity-match";
+import {
+  addableCircles,
+  effectiveCircles,
+  membershipEntry,
+  metadataRepair,
+  newCircleRow,
+  resolvePersonRef,
+  savedCircleRow,
+} from "@/lib/intake-circle-membership";
+
 import { parseFuzzyLocal } from "@/lib/fuzzy-date";
 import { getLang, t, tFormat } from "@/lib/i18n";
 import { isSelfReference, SELF_PERSON_ID } from "@/lib/person-identity";
@@ -83,8 +92,6 @@ import {
   diffIngestPerson,
   isValidIsoDate,
   makeExtractionAudit,
-  makeOfflineDemoCandidate,
-  OFFLINE_DEMO_MATERIAL,
   type ExtractionAudit,
   type IngestAuditFields as DraftAuditFields,
   type IngestCandidate as Draft,
@@ -2360,20 +2367,6 @@ export function IntakePanel({
     return true;
   };
 
-  const loadOfflineDemoDraft = async () => {
-    await replaceIntakeMaterial({
-      material: OFFLINE_DEMO_MATERIAL,
-      nextDraft: prepareIdentityDecisions(
-        enforceSensitiveFieldGrounding(makeOfflineDemoCandidate(), OFFLINE_DEMO_MATERIAL),
-        existingPeople,
-        existingEvents,
-      ),
-      confirmMessage: t("这会替换当前未提交内容。确定载入合成的离线演示草稿吗？"),
-      successMessage: t("已载入离线演示预置草稿（合成数据）"),
-      reason: "replaced_by_offline_demo",
-    });
-  };
-
   const loadRelationshipTestSample = async (sample: RelationshipTestSample) => {
     await replaceIntakeMaterial({
       material: sample.material,
@@ -3345,6 +3338,94 @@ export function IntakePanel({
     (person) => person.name?.trim() && !person.targetPersonId,
   );
 
+  const [newCircleName, setNewCircleName] = useState("");
+  const circleChangeCount = (draft?.collections ?? []).reduce(
+    (total, collection) => total + collection.memberships.length,
+    (draft?.collections ?? []).length,
+  );
+
+  /** 圈层成员状态的唯一来源：投影规则放在 lib 里，组件只提供当前数据。 */
+  const circleProjection = (person: DraftPerson) => ({
+    person,
+    drafts: draft?.collections,
+    collections: existingCollections,
+    memberships: existingCollectionMemberships,
+    createNewSentinel: CREATE_NEW_PERSON,
+    unnamedLabel: t("未命名圈层"),
+  });
+  const circlesOfPerson = (person: DraftPerson) => effectiveCircles(circleProjection(person));
+  const addableCirclesFor = (person: DraftPerson) => addableCircles(circleProjection(person));
+
+  const groundingWarningsOf = (person: DraftPerson) =>
+    (draft?._groundingWarnings ?? []).filter((item) => item.personDraftId === person._draftId);
+
+  const upsertCircleMembership = (
+    person: DraftPerson,
+    targetCollectionId: string,
+    action: "add" | "remove",
+    circleName?: string,
+  ) => {
+    const { existingId } = resolvePersonRef(person, CREATE_NEW_PERSON);
+    setDraft((current) => {
+      if (!current) return current;
+      const rows = current.collections ?? [];
+      const existingRow = rows.find((row) => row.targetCollectionId === targetCollectionId);
+      const saved = existingCollections.find((row) => row.id === targetCollectionId);
+      const membership = membershipEntry({ person, existingId, action });
+      if (existingRow) {
+        const backed = Boolean(saved);
+        // 只动成员的新建草稿：把人移出后整行没有意义，直接丢掉这行草稿
+        if (action === "remove" && !backed) {
+          return {
+            ...current,
+            collections: rows.filter((row) => row.targetCollectionId !== targetCollectionId),
+          };
+        }
+        return {
+          ...current,
+          collections: rows.map((row) =>
+            row.targetCollectionId === targetCollectionId
+              ? mergeDraftPatch(row, {
+                  memberships: [
+                    ...row.memberships.filter(
+                      (item) =>
+                        item.personDraftId !== person._draftId &&
+                        !(existingId !== null && item.personId === existingId),
+                    ),
+                    membership,
+                  ],
+                  // 只加成员时不要顺手清掉用户没编辑过的圈层元数据
+                  ...metadataRepair(row, saved),
+                })
+              : row,
+          ),
+        };
+      }
+      const draftId = `draft:collection:${crypto.randomUUID()}`;
+      const row = saved
+        ? savedCircleRow({
+            targetCollectionId,
+            draftId,
+            memberships: [membership],
+            saved,
+            unnamedLabel: t("未命名圈层"),
+          })
+        : newCircleRow({
+            targetCollectionId,
+            draftId,
+            membership,
+            name: circleName,
+            unnamedLabel: t("未命名圈层"),
+          });
+      return { ...current, collections: [...rows, row] };
+    });
+  };
+
+  const createCircleForPerson = (person: DraftPerson, name: string) => {
+    upsertCircleMembership(person, `collection:${crypto.randomUUID()}`, "add", name);
+    toast.success(`${t("已加入圈层")}：${name}`);
+  };
+
   /**
    * 「用免费体验试试」：先把档位切过去，等它真的生效了再自动重跑一次整理，
    * 用户不用回头再点一遍主按钮。如果已经在免费档上，直接重跑。
@@ -3387,17 +3468,17 @@ export function IntakePanel({
           <AlertDialogHeader>
             <AlertDialogTitle>
               {acceptUnresolvedStage && countUnresolvedRelations() > 0
-                ? t("连来源对不上的关系一起接受")
+                ? t("来源可能对不上的关系也一起接受")
                 : t("接受待确认条目")}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {acceptUnresolvedStage && countUnresolvedRelations() > 0
                 ? t(
-                    "再把来源对不上的关系一起接受吗？它们在档案里会保留待核验标记，之后随时可以改。",
+                    "再把来源可能对不上的关系也一起接受吗？它们在档案里会保留待核验标记，之后随时可以改。",
                   )
                 : countUnresolvedRelations() > 0
                   ? t(
-                      "来源对得上的条目这次会被接受；来源对不上的关系先留着，你再看一眼，它们不会丢，点「确认入库」同样能保存。",
+                      "来源能对齐的条目这次会被接受；来源可能对不上的关系先留着，你再看一眼，它们不会丢，点「确认入库」同样能保存。",
                     )
                   : t("待确认条目都会被接受，AI 生成的内容仍会保留待核验标记。")}
             </AlertDialogDescription>
@@ -3508,32 +3589,16 @@ export function IntakePanel({
         </AlertDialogContent>
       </AlertDialog>
       <div className="relative rounded-2xl border border-border bg-card/60 p-5">
-        {stashLoaded && !raw.trim() && !draft && !attached.length && (
-          <img
-            src={intakeArt}
-            alt=""
-            width={400}
-            height={400}
-            loading="lazy"
-            decoding="async"
-            data-testid="intake-empty-art"
-            className="pointer-events-none absolute right-5 top-5 size-24 rounded-xl object-cover sm:size-28"
-          />
-        )}
-        <h2 className="flex min-h-24 flex-wrap content-start items-baseline gap-2.5 pr-28 sm:min-h-28 sm:pr-32 md:min-h-0">
-          <span className="font-display text-xl leading-none tracking-tight">
-            {t("随手写，AI 来整理")}
-          </span>
-          <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
-            Intake
-          </span>
-        </h2>
-        <p className="mt-2 hidden pr-32 text-[11px] leading-relaxed text-muted-foreground md:block">
-          {t(
-            "不用一格一格填表。把你知道的人和事一口气写下来，人物、关系、待办会自动拆好，缺的内容会提醒你补。",
-          )}
-        </p>
-
+        <div>
+          <h2 className="flex min-h-24 flex-wrap content-start items-baseline gap-2.5 sm:min-h-28 md:min-h-0">
+            <span className="font-display text-xl leading-none tracking-tight">
+              {t("随手写，AI 来整理")}
+            </span>
+            <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
+              Intake
+            </span>
+          </h2>
+        </div>
         <Textarea
           aria-label={t("录入材料")}
           value={raw}
@@ -3559,11 +3624,11 @@ export function IntakePanel({
           onSelect={(sample) => void loadRelationshipTestSample(sample)}
         />
 
-        <p className="mt-1.5 text-[10px] text-muted-foreground">
-          {stashedAt
-            ? `${t("已自动暂存")} · ${new Date(stashedAt).toLocaleTimeString()} · ${t("保留到你手动清除")}`
-            : t("材料自动保存在本机，可离线填写，稍后继续")}
-        </p>
+        {stashedAt && (
+          <p className="mt-1.5 text-[10px] text-muted-foreground">
+            {`${t("输入内容已自动暂存")} · ${new Date(stashedAt).toLocaleTimeString()} · ${t("保留到你手动清除")}`}
+          </p>
+        )}
         {stashError && (
           <p role="alert" className="mt-2 text-sm text-destructive">
             {t(stashError)}
@@ -3683,24 +3748,6 @@ export function IntakePanel({
               </>
             )}
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            className="rounded-full px-4"
-            onClick={() => void loadOfflineDemoDraft()}
-            disabled={
-              busy ||
-              !!reading ||
-              recording ||
-              transcribing ||
-              saving ||
-              approvingProposal ||
-              !proposalArtifactsLoaded
-            }
-          >
-            <Sparkles className="size-3.5" aria-hidden="true" />
-            {t("离线演示草稿")}
-          </Button>
           <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <input
               type="checkbox"
@@ -3755,18 +3802,20 @@ export function IntakePanel({
             </Button>
           )}
         </div>
-        <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
-          {t("支持 JPG/PNG 等图片、PDF、DOCX、TXT、MD、CSV、JSON；一次最多")}{" "}
-          {IMPORT_LIMITS.maxFiles} {t("个，单个不超过")} {IMPORT_LIMITS.maxFileBytes / 1024 / 1024}{" "}
-          MB，PDF {t("最多读取")} {IMPORT_LIMITS.maxPdfPages} {t("页，每个文件最多提取")}{" "}
-          {extractionCharacterLimit(resolveSavedAgentBudget().maxInputTokens).toLocaleString()}{" "}
-          {t("个字符。也可以 Ctrl/⌘+V 粘贴。")}
-        </p>
-        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-          {t(
-            "联网录音停止后使用当前转写服务；离线录音先保存在待整理材料中。转写文字会追加到输入框。",
-          )}
-        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+          <span>{t("材料格式与上限")}</span>
+          <HelpHint
+            label={t("材料格式与上限")}
+            text={`${t("支持 JPG/PNG 等图片、PDF、DOCX、TXT、MD、CSV、JSON；一次最多")} ${IMPORT_LIMITS.maxFiles} ${t("个，单个不超过")} ${IMPORT_LIMITS.maxFileBytes / 1024 / 1024} MB，PDF ${t("最多读取")} ${IMPORT_LIMITS.maxPdfPages} ${t("页，每个文件最多提取")} ${extractionCharacterLimit(resolveSavedAgentBudget().maxInputTokens).toLocaleString()} ${t("个字符。也可以 Ctrl/⌘+V 粘贴。")}`}
+          />
+          <span className="ml-1">{t("录音与转写")}</span>
+          <HelpHint
+            label={t("录音与转写")}
+            text={t(
+              "联网录音停止后使用当前转写服务；离线录音先保存在待整理材料中。转写文字会追加到输入框。",
+            )}
+          />
+        </div>
         {transcribing && (
           <p
             className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"
@@ -3826,74 +3875,6 @@ export function IntakePanel({
         )}
       </div>
 
-      {intakeState && (
-        <section
-          className="space-y-3 rounded-2xl border border-border bg-card/60 p-4"
-          data-testid="intake-semantic-state"
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">{t("本次理解与解析")}</span>
-            <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
-              {intakeState.phase}
-            </span>
-            <span className="text-[10px] text-muted-foreground">
-              {intakeState.tasks.filter((task) => task.status === "proposed").length} /{" "}
-              {intakeState.tasks.length} {t("项已形成待确认结果")}
-            </span>
-          </div>
-          <details data-testid="intake-semantic-tasks-fold">
-            <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
-              {t("查看逐项解析过程")}
-            </summary>
-            <div className="mt-2 flex flex-wrap gap-1.5" data-testid="intake-semantic-tasks">
-              {intakeState.tasks.map((task) => (
-                <span
-                  key={task.task.id}
-                  className={cn(
-                    "rounded-full border px-2 py-1 text-[10px]",
-                    task.status === "needs_input"
-                      ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-200"
-                      : "border-border text-muted-foreground",
-                  )}
-                >
-                  {task.task.domain} · {task.task.intent} · {task.status}
-                </span>
-              ))}
-            </div>
-          </details>
-          {resolutionIssues.length > 0 && (
-            <div className="space-y-2" data-testid="intake-resolution-issues">
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                {t("以下条目需要补充或消歧；其它条目仍可继续核对和批准。")}
-              </p>
-              {resolutionIssues.map((issue, index) => {
-                const task = issue.taskId
-                  ? intakeState.tasks.find((item) => item.task.id === issue.taskId)
-                  : undefined;
-                return (
-                  <div
-                    key={`${issue.taskId ?? issue.stage}-${issue.path ?? issue.code}-${index}`}
-                    className="rounded-xl border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px]"
-                    data-resolution-task={issue.taskId ?? "plan"}
-                  >
-                    <p className="font-medium text-foreground">
-                      {task ? `${task.task.domain} · ${task.task.intent}` : issue.stage}：
-                      {issue.message}
-                    </p>
-                    {issue.candidates?.length ? (
-                      <p className="mt-1 text-muted-foreground">
-                        {t("可选档案")}：
-                        {issue.candidates.map((candidate) => candidate.label).join("、")}
-                      </p>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-      )}
-
       {proposal && (
         <section
           ref={proposalRef}
@@ -3944,10 +3925,6 @@ export function IntakePanel({
           className="min-w-0 space-y-4 rounded-2xl border border-border bg-card/60 p-5 disabled:opacity-80"
           disabled={saving || approvingProposal}
         >
-          {draft.summary && (
-            <p className="text-[11px] leading-relaxed text-muted-foreground">{draft.summary}</p>
-          )}
-
           <div className="rounded-xl border border-border bg-background/60 p-3">
             <p className="text-sm font-medium">{t("入库前变更预览（Diff）")}</p>
             <div className="mt-2 grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-2">
@@ -3983,6 +3960,10 @@ export function IntakePanel({
               <div>
                 <span className="font-medium text-foreground">{t("新提醒")}</span> ·{" "}
                 {draft.reminders?.length ?? 0}
+              </div>
+              <div>
+                <span className="font-medium text-foreground">{t("圈层变更")}</span> ·{" "}
+                {circleChangeCount}
               </div>
             </div>
             {personUpdates.some(({ changes }) => changes.length > 0) && (
@@ -4029,9 +4010,8 @@ export function IntakePanel({
                 {pendingReviewCount > 0 && (
                   <Button
                     type="button"
-                    variant="secondary"
                     size="sm"
-                    className="h-7 rounded-full px-3 text-[10px]"
+                    className="h-7 rounded-full bg-red-600 px-3 text-[10px] font-medium text-white hover:bg-red-700"
                     onClick={acceptAllPendingItems}
                   >
                     <Check className="size-3" aria-hidden="true" />
@@ -4101,47 +4081,29 @@ export function IntakePanel({
             </ReviewFold>
           )}
 
-          {(draft._groundingWarnings?.length ?? 0) > 0 && (
-            <details
-              className="group rounded-xl border border-amber-500/50 bg-amber-500/10 text-xs"
-              role="alert"
+          {resolutionIssues.length > 0 && (
+            <div
+              className="space-y-1.5 rounded-xl border border-amber-500/40 bg-amber-500/5 px-3 py-2"
+              data-testid="intake-resolution-issues"
             >
-              <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 font-medium text-amber-800 marker:content-none dark:text-amber-200">
-                <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
-                <span>
-                  {t("AI 推断值待核验")} · {draft._groundingWarnings?.length}
-                </span>
-                <span className="ml-auto text-[10px] font-normal text-muted-foreground">
-                  {t("查看待核验项")}
-                </span>
-                <ArrowRight
-                  className="size-3.5 shrink-0 transition-transform group-open:rotate-90"
-                  aria-hidden="true"
-                />
-              </summary>
-              <div className="border-t border-amber-500/25 px-3 pb-3 pt-2">
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  {t(
-                    "这些值会保留在 AI 草稿中，感叹号表示未找到充分原文证据；请辨别真伪，编辑后会标记为人工来源。",
-                  )}
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {t("以下条目需要补充或消歧；其它条目仍可继续核对和批准。")}
+              </p>
+              {resolutionIssues.map((issue, index) => (
+                <p
+                  key={`${issue.taskId ?? issue.stage}-${issue.path ?? issue.code}-${index}`}
+                  className="text-[11px] text-foreground"
+                  data-resolution-task={issue.taskId ?? "plan"}
+                >
+                  {issue.message}
+                  {issue.candidates?.length
+                    ? `（${t("可选档案")}：${issue.candidates
+                        .map((candidate) => candidate.label)
+                        .join("、")}）`
+                    : ""}
                 </p>
-                <ul className="mt-2 space-y-1 text-[11px]">
-                  {draft._groundingWarnings?.map((item, index) => (
-                    <li key={`${item.personDraftId}-${item.field}-${index}`}>
-                      {item.personName} · {sensitiveFieldLabel(item.field)}：
-                      <span>{item.rejectedValue}</span>{" "}
-                      <span
-                        className="font-bold text-amber-700 dark:text-amber-300"
-                        title={t("AI 推断，待核验")}
-                        aria-label={t("AI 推断，待核验")}
-                      >
-                        !
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </details>
+              ))}
+            </div>
           )}
 
           {relationReviewAttention && (
@@ -4169,7 +4131,7 @@ export function IntakePanel({
           )}
 
           {gaps.length > 0 && (
-            <ReviewFold title={t("这些必要信息还缺")} count={gaps.length} tone="warning">
+            <ReviewFold title={t("如果还能提供这些信息会更好")} count={gaps.length} tone="warning">
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {gaps.map((gap) => (
                   <span
@@ -4272,6 +4234,69 @@ export function IntakePanel({
                       </span>
                     ))}
                   </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] text-muted-foreground">{t("圈层")}</span>
+                    {circlesOfPerson(person).map((collection) => (
+                      <span
+                        key={collection.id}
+                        className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[10px]"
+                      >
+                        {collection.name}
+                        <button
+                          type="button"
+                          aria-label={t("移出圈层")}
+                          className="text-muted-foreground hover:text-destructive"
+                          onClick={() => upsertCircleMembership(person, collection.id, "remove")}
+                        >
+                          <X className="size-3" aria-hidden="true" />
+                        </button>
+                      </span>
+                    ))}
+                    <select
+                      value=""
+                      onChange={(event) => {
+                        if (event.target.value)
+                          upsertCircleMembership(person, event.target.value, "add");
+                      }}
+                      aria-label={t("加入已有圈层")}
+                      className="h-7 rounded-md border border-input bg-background px-1.5 text-[11px]"
+                    >
+                      <option value="">{t("加入已有圈层…")}</option>
+                      {addableCirclesFor(person).map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {row.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Input
+                      value={newCircleName}
+                      onChange={(event) => setNewCircleName(event.target.value)}
+                      placeholder={t("新建圈层")}
+                      className="h-7 w-28 text-[11px]"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-[10px]"
+                      disabled={!newCircleName.trim()}
+                      onClick={() => {
+                        createCircleForPerson(person, newCircleName.trim());
+                        setNewCircleName("");
+                      }}
+                    >
+                      {t("新建")}
+                    </Button>
+                  </div>
+                  {groundingWarningsOf(person).length > 0 && (
+                    <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px] text-amber-700 dark:text-amber-300">
+                      <TriangleAlert className="size-3 shrink-0" aria-hidden="true" />
+                      {t("AI 推断，未找到原文依据：")}
+                      {groundingWarningsOf(person)
+                        .map((item) => `${sensitiveFieldLabel(item.field)}：${item.rejectedValue}`)
+                        .join("；")}
+                    </p>
+                  )}
                   {(() => {
                     const filledCount = filledDetailCount(person);
                     return (
@@ -4733,7 +4758,7 @@ export function IntakePanel({
                         <p className="text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
                           {relation._relationReason}
                           {relation._audit?.confirmationStatus !== "accepted" &&
-                            ` ${t("这条的来源对不上，第一次「一键接受待确认」会跳过它；再点一次就会连它一起接受。点「确认入库」也会保存，并保留待核验标记。")}`}
+                            ` ${t("这条的来源可能对不上，第一次「一键接受待确认」会跳过它；再点一次也会一起接受。点「确认入库」也会保存，并保留待核验标记。")}`}
                         </p>
                       )}
                       <Input

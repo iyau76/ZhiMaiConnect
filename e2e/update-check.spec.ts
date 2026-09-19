@@ -1,5 +1,15 @@
+import { APP_VERSION } from "../src/lib/app-version";
 import { expect, openApp, test } from "./fixtures";
 import { clickVisible } from "./fixtures";
+
+/**
+ * 版本号只从 APP_VERSION 推导，避免每次发版都要回来改测试里的字面量。
+ * 「更高一版」用于构造"查到更新"，等同当前版本用于构造"已是最新"。
+ */
+function higherVersion(version: string) {
+  const [major, minor, patch] = version.split(".").map(Number);
+  return `${major}.${minor}.${patch + 1}`;
+}
 
 /**
  * 「检查新版本」以 GitHub Releases 为更新源。
@@ -30,18 +40,19 @@ async function openSettings(page: Parameters<typeof openApp>[0]) {
 }
 
 test("检查新版本：查到更新时给出新版本号", async ({ page }) => {
+  const nextVersion = higherVersion(APP_VERSION);
   await page.route("https://api.github.com/**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify([githubRelease("v0.3.2")]),
+      body: JSON.stringify([githubRelease(`v${nextVersion}`)]),
     }),
   );
   await openSettings(page);
 
-  await expect(page.getByTestId("app-version")).toContainText("0.3.1");
+  await expect(page.getByTestId("app-version")).toContainText(APP_VERSION);
   await page.getByRole("button", { name: "检查新版本" }).click();
-  await expect(page.getByTestId("update-available")).toContainText("v0.3.2");
+  await expect(page.getByTestId("update-available")).toContainText(`v${nextVersion}`);
   // 网页版没有安装包，要给的是「重开即更新」这句人话，而不是让人去下载 exe
   await expect(page.getByTestId("update-no-asset")).toContainText("网页版");
   await expect(page.getByRole("link", { name: /打开发布页/ })).toHaveAttribute(
@@ -55,7 +66,7 @@ test("检查新版本：已经最新时明确说清楚", async ({ page }) => {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify([githubRelease("v0.3.1")]),
+      body: JSON.stringify([githubRelease(`v${APP_VERSION}`)]),
     }),
   );
   await openSettings(page);

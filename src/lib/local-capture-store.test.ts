@@ -20,7 +20,10 @@ describe("local capture inbox", () => {
       files: [],
     });
     expect(first.id).not.toBe(second.id);
-    expect((await listCaptures()).map((item) => item.id)).toEqual([first.id, second.id]);
+    const listed = await listCaptures();
+    expect(listed.map((item) => item.id)).toEqual([first.id, second.id]);
+    // 顺序在重复读取之间必须稳定，不能因为毫秒相同就来回调换。
+    expect((await listCaptures()).map((item) => item.id)).toEqual(listed.map((item) => item.id));
     await removeCapture(first.id);
     expect(await listCaptures()).toEqual([second]);
     await removeCapture(first.id);

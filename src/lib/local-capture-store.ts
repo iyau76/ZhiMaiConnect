@@ -49,14 +49,24 @@ async function transact<T>(
 
 export async function saveCapture(input: Omit<LocalCapture, "id" | "createdAt">) {
   validateCapture(input);
-  const capture: LocalCapture = { ...input, id: crypto.randomUUID(), createdAt: Date.now() };
+  const existing = (await transact("readonly", (store) => store.getAll())) as LocalCapture[];
+  const newest = existing.reduce((latest, item) => Math.max(latest, item.createdAt), 0);
+  const capture: LocalCapture = {
+    ...input,
+    id: crypto.randomUUID(),
+    // 同一毫秒里连续保存也要分得出先后：收件箱按时间排序，时间戳只增不减。
+    createdAt: Math.max(Date.now(), newest + 1),
+  };
   await transact("readwrite", (store) => store.add(capture));
   return capture;
 }
 
 export async function listCaptures(): Promise<LocalCapture[]> {
   const records = await transact("readonly", (store) => store.getAll());
-  return (records as LocalCapture[]).sort((a, b) => a.createdAt - b.createdAt);
+  // 时间戳仍然相同（例如两个标签页同时保存）时用 id 兜底，保证刷新前后顺序一致。
+  return (records as LocalCapture[]).sort(
+    (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
 }
 
 export async function removeCapture(id: string) {
