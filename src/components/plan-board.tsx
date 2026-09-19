@@ -13,7 +13,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { AgentRunInspector } from "@/components/agent-run-inspector";
-import { HelpHint } from "@/components/help-hint";
 import { TaskEditor } from "@/components/task-editor";
 import { ReasoningDisclosure } from "@/components/reasoning-disclosure";
 import { SourceBadge } from "@/components/source-badge";
@@ -391,13 +390,12 @@ export function PlanBoard({
             <span className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
               Agent Plan
             </span>
-            <HelpHint
-              label={t("行动规划")}
-              text={t(
-                "写下目标后，智能体会按需读取人物、关系和事件，形成可编辑草案；只有你批准的行动项才会写入计划。",
-              )}
-            />
           </h2>
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+            {t(
+              "写下目标后，智能体会按需读取人物、关系和事件，形成可编辑草案；只有你批准的行动项才会写入计划。",
+            )}
+          </p>
         </header>
 
         <div className="flex flex-col gap-2 sm:flex-row">

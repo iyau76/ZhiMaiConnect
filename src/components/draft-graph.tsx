@@ -3,7 +3,6 @@
 import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { HelpHint } from "@/components/help-hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { t } from "@/lib/i18n";
@@ -728,14 +727,11 @@ export function DraftGraph({
   return (
     <div className="space-y-3 rounded-xl border border-border bg-background/50 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex items-center gap-1.5">
+        <div className="space-y-0.5">
           <p className="text-xs font-medium">{t("关系网预览")}</p>
-          <HelpHint
-            label={t("关系网预览")}
-            text={t(
-              "预览是这次录入可能长成的样子，点人连线、改关系词都会实时反映在上面。新关系画实线，档案里已有的关系画成灰虚线；这次要更新的人会带上淡色底圈。预览里的圈层来自你已经确认的关系圈，以及这次录入的圈层草稿；它们都还没入库。",
-            )}
-          />
+          <p className="text-[11px] text-muted-foreground">
+            {t("预览是这次录入可能长成的样子，点人连线、改关系词都会实时反映在上面。")}
+          </p>
         </div>
         <div
           className="flex flex-wrap items-center gap-1"
@@ -1157,6 +1153,15 @@ export function DraftGraph({
           </div>
         )}
       </div>
+
+      <p className="text-[11px] text-muted-foreground">
+        {t("新关系画实线，档案里已有的关系画成灰虚线；这次要更新的人会带上淡色底圈。")}
+      </p>
+      {hasCircleGroups && (
+        <p className="text-[11px] text-muted-foreground">
+          {t("预览里的圈层来自你已经确认的关系圈，以及这次录入的圈层草稿；它们都还没入库。")}
+        </p>
+      )}
     </div>
   );
 }

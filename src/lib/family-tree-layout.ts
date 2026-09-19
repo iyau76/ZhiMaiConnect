@@ -40,6 +40,20 @@ export interface FamilyTreeLayout {
   size: number;
 }
 
+interface GenerationConstraint {
+  fromId: string;
+  toId: string;
+  delta: number;
+  priority: number;
+}
+
+interface GroupGenerationConstraint {
+  from: string;
+  to: string;
+  delta: number;
+  priority: number;
+}
+
 function predicateOf(relation: RelationRecord) {
   return relation.predicate ?? inferRelationSemantics(relation.label).predicate;
 }
@@ -55,6 +69,39 @@ export function familyTreeEdgeKind(relation: RelationRecord): FamilyTreeEdgeKind
   if (predicate === "spouse_of") return "spouse";
   // Keep every accepted kinship edge visible, even without a generational rule.
   return isFamilyTreeRelation(relation) ? "kinship" : null;
+}
+
+/**
+ * Directed generational distance encoded by a kinship edge.
+ *
+ * The `from` endpoint is the older side for parent/uncle/grandparent
+ * predicates. A null result means the relationship does not guarantee a
+ * generational order and must not move either endpoint.
+ */
+export function familyTreeGenerationDelta(relation: RelationRecord): number | null {
+  const predicate = predicateOf(relation);
+  if (predicate === "parent_of" || predicate === "step_parent_of") return 1;
+  if (predicate === "grandparent_of") return 2;
+  if (predicate === "great_grandparent_of") return 3;
+  if (predicate === "uncle_aunt_of") return 1;
+  if (predicate === "in_law_of") {
+    if (
+      relation.qualifiers?.inLawRole === "father_in_law" ||
+      relation.qualifiers?.inLawRole === "mother_in_law"
+    )
+      return 1;
+    if (relation.qualifiers?.inLawRole === "sibling_in_law") return 0;
+    return null;
+  }
+  if (
+    predicate === "spouse_of" ||
+    predicate === "sibling_of" ||
+    predicate === "half_sibling_of" ||
+    predicate === "step_sibling_of" ||
+    predicate === "cousin_of"
+  )
+    return 0;
+  return null;
 }
 
 function createDisjointSet(ids: string[]) {
@@ -92,6 +139,25 @@ function orderKeyFor(
     .join("|");
 }
 
+function maximumConstraintPath(
+  from: string,
+  to: string,
+  constraints: GroupGenerationConstraint[],
+  seen = new Set<string>(),
+): number | null {
+  if (from === to) return 0;
+  if (seen.has(from)) return null;
+  seen.add(from);
+  let best: number | null = null;
+  for (const constraint of constraints) {
+    if (constraint.from !== from) continue;
+    const rest = maximumConstraintPath(constraint.to, to, constraints, seen);
+    if (rest === null) continue;
+    best = Math.max(best ?? Number.NEGATIVE_INFINITY, constraint.delta + rest);
+  }
+  return best;
+}
+
 /**
  * Build a deterministic generational family-tree projection.
  *
@@ -109,9 +175,11 @@ export function buildFamilyTreeLayout(input: {
   const nameById = new Map(people.map((person) => [person.id, person.name]));
   const { find, union } = createDisjointSet(ids);
   const familyEdges: FamilyTreeLayoutEdge[] = [];
+  const generationConstraints: GenerationConstraint[] = [];
 
   for (const relation of input.relations) {
     if (!idSet.has(relation.fromId) || !idSet.has(relation.toId)) continue;
+    const predicate = predicateOf(relation);
     const kind = familyTreeEdgeKind(relation);
     if (!kind) continue;
     familyEdges.push({
@@ -124,70 +192,82 @@ export function buildFamilyTreeLayout(input: {
     });
     // Generic kinship can span generations. It must not collapse a parent and
     // child into one row or manufacture missing parents to complete a pedigree.
-    if (kind === "spouse" || kind === "sibling") union(relation.fromId, relation.toId);
+    const generationDelta = familyTreeGenerationDelta(relation);
+    if (
+      kind === "spouse" ||
+      kind === "sibling" ||
+      predicate === "cousin_of" ||
+      generationDelta === 0
+    )
+      union(relation.fromId, relation.toId);
+    if (generationDelta !== null && generationDelta > 0) {
+      generationConstraints.push({
+        fromId: relation.fromId,
+        toId: relation.toId,
+        delta: generationDelta,
+        priority: kind === "parent" ? 0 : 1,
+      });
+    }
   }
 
   const parentsByChild = new Map<string, string[]>();
-  const childrenByParent = new Map<string, string[]>();
   for (const edge of familyEdges) {
     if (edge.kind !== "parent") continue;
     parentsByChild.set(edge.toId, [...(parentsByChild.get(edge.toId) ?? []), edge.fromId]);
-    childrenByParent.set(edge.fromId, [...(childrenByParent.get(edge.fromId) ?? []), edge.toId]);
-  }
-
-  const groupParentEdges: Array<{ from: string; to: string }> = [];
-  const groupChildren = new Map<string, Set<string>>();
-  const groupIndegree = new Map<string, number>();
-  for (const edge of familyEdges) {
-    if (edge.kind !== "parent") continue;
-    const from = find(edge.fromId);
-    const to = find(edge.toId);
-    if (from === to) continue;
-    groupParentEdges.push({ from, to });
-    const children = groupChildren.get(from) ?? new Set<string>();
-    children.add(to);
-    groupChildren.set(from, children);
   }
 
   const groups = [...new Set(ids.map((id) => find(id)))].sort();
-  const groupIds = new Set(groups);
-  for (const group of groups) groupIndegree.set(group, 0);
-  for (const edge of groupParentEdges) {
-    if (groupIds.has(edge.to)) {
-      groupIndegree.set(edge.to, (groupIndegree.get(edge.to) ?? 0) + 1);
-    }
-  }
-
   const generationByGroup = new Map<string, number>(groups.map((group) => [group, 0]));
-  const queue = groups.filter((group) => (groupIndegree.get(group) ?? 0) === 0);
-  const visited = new Set<string>();
-  while (queue.length) {
-    const group = queue.shift()!;
-    if (visited.has(group)) continue;
-    visited.add(group);
-    for (const child of groupChildren.get(group) ?? []) {
-      generationByGroup.set(
-        child,
-        Math.max(generationByGroup.get(child) ?? 0, (generationByGroup.get(group) ?? 0) + 1),
-      );
-      const remaining = (groupIndegree.get(child) ?? 0) - 1;
-      groupIndegree.set(child, remaining);
-      if (remaining === 0) queue.push(child);
+  const groupConstraints = new Map<string, GroupGenerationConstraint>();
+  for (const constraint of generationConstraints) {
+    const from = find(constraint.fromId);
+    const to = find(constraint.toId);
+    if (from === to) continue;
+    const grouped = { from, to, delta: constraint.delta, priority: constraint.priority };
+    const key = `${from}\u0000${to}`;
+    const existing = groupConstraints.get(key);
+    if (
+      !existing ||
+      grouped.priority < existing.priority ||
+      (grouped.priority === existing.priority && existing.delta < grouped.delta)
+    ) {
+      groupConstraints.set(key, grouped);
     }
   }
 
-  // Malformed or cyclic family data still gets a stable display instead of an
-  // empty graph. Repeated relaxation converges for normal disconnected trees.
+  // Parent chains are the primary structure. Accept an extended kinship rule
+  // only when it does not create a positive cycle that would repeatedly push a
+  // whole branch down the tree.
+  const acceptedConstraints: GroupGenerationConstraint[] = [];
+  const orderedConstraints = [...groupConstraints.values()].sort(
+    (left, right) =>
+      left.priority - right.priority ||
+      right.delta - left.delta ||
+      left.from.localeCompare(right.from) ||
+      left.to.localeCompare(right.to),
+  );
+  for (const constraint of orderedConstraints) {
+    const reverse = maximumConstraintPath(constraint.to, constraint.from, acceptedConstraints);
+    if (reverse !== null && reverse + constraint.delta > 0) continue;
+    acceptedConstraints.push(constraint);
+  }
+
+  // The accepted graph is acyclic, so this converges within one pass per
+  // group even for disconnected family components.
   for (let pass = 0; pass < groups.length; pass += 1) {
     let changed = false;
-    for (const edge of groupParentEdges) {
-      const next = (generationByGroup.get(edge.from) ?? 0) + 1;
-      if ((generationByGroup.get(edge.to) ?? 0) < next) {
-        generationByGroup.set(edge.to, next);
+    for (const constraint of acceptedConstraints) {
+      const next = (generationByGroup.get(constraint.from) ?? 0) + constraint.delta;
+      if ((generationByGroup.get(constraint.to) ?? 0) < next) {
+        generationByGroup.set(constraint.to, next);
         changed = true;
       }
     }
     if (!changed) break;
+  }
+  const minimumGeneration = Math.min(0, ...generationByGroup.values());
+  for (const group of groups) {
+    generationByGroup.set(group, (generationByGroup.get(group) ?? 0) - minimumGeneration);
   }
 
   const generationById = new Map(ids.map((id) => [id, generationByGroup.get(find(id)) ?? 0]));

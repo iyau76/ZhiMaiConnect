@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { PersonRecord, RelationRecord } from "./face-db";
-import { buildFamilyTreeLayout, isFamilyTreeRelation } from "./family-tree-layout";
+import {
+  buildFamilyTreeLayout,
+  familyTreeGenerationDelta,
+  isFamilyTreeRelation,
+} from "./family-tree-layout";
 
 function person(id: string, name: string): PersonRecord {
   return {
@@ -81,5 +85,44 @@ describe("family tree layout", () => {
     expect(layout.edges.map((edge) => edge.relationId)).toEqual(["parent"]);
     expect(isFamilyTreeRelation(relations[0])).toBe(false);
     expect(isFamilyTreeRelation(relations[1])).toBe(true);
+  });
+
+  it("uses a directed aunt relation when the parent chain is incomplete", () => {
+    const people = [person("wang-furen", "王夫人"), person("wang-xifeng", "王熙凤")];
+    const aunt = relation("aunt", "wang-furen", "wang-xifeng", "uncle_aunt_of", "姑母");
+
+    const layout = buildFamilyTreeLayout({ people, relations: [aunt] });
+    const byId = new Map(layout.nodes.map((node) => [node.id, node]));
+
+    expect(familyTreeGenerationDelta(aunt)).toBe(1);
+    expect(byId.get("wang-furen")?.generation).toBe(0);
+    expect(byId.get("wang-xifeng")?.generation).toBe(1);
+    expect(byId.get("wang-furen")?.y).toBeLessThan(byId.get("wang-xifeng")?.y ?? 0);
+  });
+
+  it("applies ancestry depth without collapsing extended kin into one row", () => {
+    const people = [person("elder", "长辈"), person("younger", "晚辈")];
+    const grandparent = relation("grandparent", "elder", "younger", "grandparent_of", "祖孙");
+
+    const layout = buildFamilyTreeLayout({ people, relations: [grandparent] });
+    const byId = new Map(layout.nodes.map((node) => [node.id, node]));
+
+    expect(byId.get("younger")?.generation).toBe((byId.get("elder")?.generation ?? 0) + 2);
+  });
+
+  it("ignores a reversed extended edge instead of inflating a valid parent chain", () => {
+    const people = [person("jiamu", "贾母"), person("jiazheng", "贾政"), person("baoyu", "贾宝玉")];
+    const relations = [
+      relation("jiamu-jiazheng", "jiamu", "jiazheng", "parent_of", "母子"),
+      relation("jiazheng-baoyu", "jiazheng", "baoyu", "parent_of", "父子"),
+      relation("reversed-aunt", "baoyu", "jiamu", "uncle_aunt_of", "姑母"),
+    ];
+
+    const layout = buildFamilyTreeLayout({ people, relations });
+    const byId = new Map(layout.nodes.map((node) => [node.id, node]));
+
+    expect(byId.get("jiamu")?.generation).toBe(0);
+    expect(byId.get("jiazheng")?.generation).toBe(1);
+    expect(byId.get("baoyu")?.generation).toBe(2);
   });
 });

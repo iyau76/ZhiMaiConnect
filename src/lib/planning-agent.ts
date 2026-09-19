@@ -76,6 +76,67 @@ export class PlanningContractError extends Error {
   }
 }
 
+export type PlanningErrorCode =
+  | "final_parse"
+  | "final_contract"
+  | "final_tool"
+  | "no_draft"
+  | "budget"
+  | "model"
+  | "tool"
+  | "runtime";
+
+export class PlanningAgentError extends PlanningContractError {
+  readonly code: PlanningErrorCode;
+  readonly phase?: string;
+  readonly needsInput: boolean;
+  readonly run: AgentRun;
+  readonly budget: AgentBudget;
+
+  constructor(input: {
+    code: PlanningErrorCode;
+    message: string;
+    phase?: string;
+    needsInput: boolean;
+    run: AgentRun;
+    budget: AgentBudget;
+    issues?: PlanningContractIssue[];
+  }) {
+    super(input.message, input.issues ?? []);
+    this.code = input.code;
+    this.phase = input.phase;
+    this.needsInput = input.needsInput;
+    this.run = input.run;
+    this.budget = input.budget;
+  }
+}
+
+function planningFailureCode(error: unknown): PlanningErrorCode {
+  if (error instanceof PlanningAgentError) return error.code;
+  if (error instanceof PlanningContractError) {
+    return error.issues.some((issue) => issue.code === "invalid_json")
+      ? "final_parse"
+      : "final_contract";
+  }
+  if (error instanceof Error) {
+    if (error.message.includes("最终草案轮仍请求工具")) return "final_tool";
+    if (error.message.includes("没有形成草案")) return "no_draft";
+    if (error.message.includes("达到运行预算") || error.message.includes("达到工具预算")) {
+      return "budget";
+    }
+    if (error.message.includes("模型调用失败")) return "model";
+    if (error.message.includes("工具执行失败")) return "tool";
+  }
+  return "runtime";
+}
+
+function planningFailurePhase(code: PlanningErrorCode) {
+  if (code === "budget" || code === "model" || code === "tool" || code === "runtime") {
+    return code;
+  }
+  return "final";
+}
+
 const opaquePersonRefSchema = z
   .string()
   .regex(/^ref_[a-f0-9]{32}$/u, "必须是本轮工具返回的 opaque person ref");
@@ -717,6 +778,16 @@ export async function runPlanningAgent(options: {
     });
     saveAgentRunBestEffort(run, runtime.recorder.events());
     trace({ kind: "error", text: error instanceof Error ? error.message : "行动规划失败" });
-    throw error;
+    if (error instanceof PlanningAgentError) throw error;
+    const code = planningFailureCode(error);
+    throw new PlanningAgentError({
+      code,
+      message: error instanceof Error ? error.message : "行动规划失败",
+      phase: planningFailurePhase(code),
+      needsInput: code === "no_draft",
+      run,
+      budget: runtime.contextBudget.snapshot().limits,
+      issues: error instanceof PlanningContractError ? error.issues : [],
+    });
   }
 }

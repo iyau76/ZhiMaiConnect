@@ -1,7 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
 
-import { INTAKE_DRAFT_KEY, seedIntakeDraft } from "./fixtures";
-
 test.skip(
   process.env.PLAYWRIGHT_PWA_TEST !== "1",
   "PWA uses the production build, not the Vite development server",
@@ -13,13 +11,15 @@ async function installedPage(page: Page) {
   await page.addInitScript(() => localStorage.setItem("openglass.welcomeSeen", "1"));
   await page.goto("/?view=settings");
   await expect(page.locator('[data-app-hydrated="true"]')).toBeVisible();
-  // 设置页不再展示「离线资源已就绪」卡片，改为直接等到 Service Worker 接管本页：
-  // 下面「断网冷启动仍然可用」的用例真正依赖的正是这个前提。
+  await expect(page.getByTestId("pwa-ready")).toContainText("离线资源已就绪", { timeout: 60_000 });
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
-  });
-  await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller), undefined, {
-    timeout: 30_000,
+    if (!navigator.serviceWorker.controller)
+      await new Promise<void>((resolve) =>
+        navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), {
+          once: true,
+        }),
+      );
   });
 }
 
@@ -39,17 +39,16 @@ test("manifest, offline cold navigation, local edit and non-expiring input", asy
   await expect
     .poll(() =>
       page.evaluate(
-        (key) => JSON.parse(localStorage.getItem(key) ?? "null")?.raw,
-        INTAKE_DRAFT_KEY,
+        () => JSON.parse(localStorage.getItem("zhimai.intake.draft.v1") ?? "null")?.raw,
       ),
     )
     .toContain("许星");
   // An old timestamp must no longer erase unsubmitted material.
-  await page.evaluate((key) => {
-    const draft = JSON.parse(localStorage.getItem(key)!);
+  await page.evaluate(() => {
+    const draft = JSON.parse(localStorage.getItem("zhimai.intake.draft.v1")!);
     draft.at = Date.now() - 7 * 86400_000;
-    localStorage.setItem(key, JSON.stringify(draft));
-  }, INTAKE_DRAFT_KEY);
+    localStorage.setItem("zhimai.intake.draft.v1", JSON.stringify(draft));
+  });
   const cdp = await context.newCDPSession(page);
   await cdp.send("Network.clearBrowserCache");
   await context.setOffline(true);
@@ -69,8 +68,7 @@ test("manifest, offline cold navigation, local edit and non-expiring input", asy
   await expect
     .poll(() =>
       next.evaluate(
-        (key) => JSON.parse(localStorage.getItem(key) ?? "null")?.raw,
-        INTAKE_DRAFT_KEY,
+        () => JSON.parse(localStorage.getItem("zhimai.intake.draft.v1") ?? "null")?.raw,
       ),
     )
     .toContain("离线补记");
@@ -80,7 +78,7 @@ test("manifest, offline cold navigation, local edit and non-expiring input", asy
     "离线补记：许星负责摄影。",
   );
   // Existing local approval + archive path remains usable offline.
-  await seedIntakeDraft(next);
+  await next.getByRole("button", { name: "离线演示草稿", exact: true }).click();
   await next.getByRole("button", { name: "确认入库", exact: true }).click();
   await expect(next.getByRole("button", { name: "确认入库", exact: true })).toHaveCount(0);
   await next.goto("/?view=people");
@@ -161,7 +159,7 @@ test("mobile navigation and offline files stay local; private requests are not c
   );
   await nav.getByRole("button", { name: "更多" }).click();
   await nav.getByRole("button", { name: "设置", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "关于与更新" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "安装到手机或电脑" })).toBeVisible();
   await page.screenshot({ path: "test-results/pwa-mobile-settings.png" });
   const width = await page.evaluate(() => ({
     body: document.documentElement.scrollWidth,

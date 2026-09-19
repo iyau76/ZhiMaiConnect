@@ -842,8 +842,6 @@ export function AskForHelpPanel({
           </div>
         )}
         {candidates.length > 0 && (
-          // 顺序由数据层锁定（rankCandidates / rankConnectionPaths 等），卡片、正文与话术读同一份数组。
-          // 需要改排序时改生成处，不要在这里单独重排，否则正文编号和联系话术会对不上人。
           <ol className="mt-3 grid gap-2 lg:grid-cols-3">
             {candidates.map((candidate, index) => (
               <li

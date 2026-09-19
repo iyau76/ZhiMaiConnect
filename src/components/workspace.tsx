@@ -24,7 +24,6 @@ import { PreflightPanel } from "@/components/preflight-panel";
 import { RemindersPanel } from "@/components/reminders-panel";
 import { TodayPanel } from "@/components/today-panel";
 import { AboutControls } from "@/components/about-controls";
-import intakeArt from "@/assets/art/web/intake.webp";
 import { PwaNotice, PwaSettings } from "@/components/pwa-controls";
 
 import { RelationsPanel } from "@/components/relations-panel";
@@ -100,7 +99,6 @@ const HEADINGS: Record<
       "到期提醒、近期事件和未完成任务会从原记录自动汇总。",
       "点任意一项，就能回到对应的人物卡、事件、提醒或计划。",
       "底部的「问一问」可以带上人物库，直接问一句该怎么办。",
-      "今天页只读取现有记录；修改仍在对应的人物、日历、提醒或计划中完成。",
     ],
   },
   intake: {
@@ -144,7 +142,6 @@ const HEADINGS: Record<
     points: [
       "紫点是生日，黄点是节日，灰点是你自己的记录。",
       "点某一天写下和谁做了什么，以后翻回来一目了然。",
-      "记不清哪天，可以写「去年夏天」，我们会整理到时间轴；复杂说法由 AI 辅助理解。",
     ],
   },
   plan: {
@@ -413,6 +410,7 @@ export function Workspace() {
         <RelationsPanel
           preset={activePreset}
           active={view === "people"}
+          onOpenIntake={() => openView("intake")}
           onOpenEvent={(eventId) =>
             openTodayTarget({ view: "calendar", recordType: "event", recordId: eventId })
           }
@@ -502,6 +500,11 @@ export function Workspace() {
 
           <div className="space-y-4">
             <LanguageToggle />
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              {t(
+                "人物档案默认只存在本机；使用云端 AI 时，仅发送当前任务所需内容，提交前请确认。AI 结论需人工复核。",
+              )}
+            </p>
           </div>
         </aside>
 
@@ -518,22 +521,20 @@ export function Workspace() {
 
           <main className="mobile-app-main min-w-0 flex-1 px-4 py-5 md:px-8 md:py-10">
             <PwaNotice />
-            <header className="mb-4 flex max-w-3xl items-start justify-between gap-4 md:mb-7">
-              <div className="min-w-0">
-                <p className="hidden text-[11px] uppercase tracking-[0.28em] text-muted-foreground md:block">
-                  {heading.kicker}
-                </p>
-                <h1 className="mt-2 font-display text-3xl leading-[1.15] tracking-tight md:text-5xl">
-                  {t(heading.a)}
-                  <span className="italic text-primary">{t(heading.b)}</span>
-                </h1>
-                <PageGuide
-                  id={view}
-                  title={t(heading.guide)}
-                  points={heading.points.map(t)}
-                  className="mt-3.5"
-                />
-              </div>
+            <header className="mb-4 max-w-3xl md:mb-7">
+              <p className="hidden text-[11px] uppercase tracking-[0.28em] text-muted-foreground md:block">
+                {heading.kicker}
+              </p>
+              <h1 className="mt-2 font-display text-3xl leading-[1.15] tracking-tight md:text-5xl">
+                {t(heading.a)}
+                <span className="italic text-primary">{t(heading.b)}</span>
+              </h1>
+              <PageGuide
+                id={view}
+                title={t(heading.guide)}
+                points={heading.points.map(t)}
+                className="mt-3.5"
+              />
             </header>
 
             {NAV.map((item) => {

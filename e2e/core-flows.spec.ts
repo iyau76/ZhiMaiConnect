@@ -7,7 +7,6 @@ import {
   openAskForHelp,
   readIndexedDbStore,
   seedIndexedDb,
-  seedIntakeDraft,
   test,
 } from "./fixtures";
 
@@ -16,7 +15,7 @@ const NOW = new Date("2026-08-20T10:00:00+08:00").getTime();
 test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page, mockNetwork }) => {
   await openApp(page);
 
-  const intake = page.getByTestId("intake-panel");
+  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
   await intake
     .getByRole("textbox")
     .fill(
@@ -30,18 +29,16 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
   await expect(intakeTrace).toContainText("整理轨迹");
   await expect(intakeTrace).toContainText("整理完成");
   await expect(intakeTrace).toContainText(/\d+ 步/);
-  // AI 推断但没有原文依据的值直接标在对应人物卡上，不再单独汇总一个折叠区。
-  const personWarning = page
-    .locator('[data-draft-kind="person"]')
-    .getByText(/AI 推断，未找到原文依据/);
-  await expect(personWarning).toContainText("亲密度：5");
-  await expect(personWarning).toContainText(/手冲咖啡/);
+  await expect(page.getByText("AI 推断值待核验 · 2")).toBeVisible();
+  const warningDetails = page.locator("details").filter({ hasText: "AI 推断值待核验" });
+  await expect(warningDetails).not.toHaveAttribute("open", "");
+  await warningDetails.locator("summary").click();
+  await expect(warningDetails).toHaveAttribute("open", "");
+  await expect(warningDetails.getByText(/手冲咖啡/)).toBeVisible();
   const name = page.getByPlaceholder("姓名");
   await expect(name).toHaveValue("唐悦");
   await page.getByRole("combobox", { name: "亲密度", exact: true }).selectOption("4");
-  // 手工改过的字段不再是「AI 推断」，没有依据的那条继续留着提醒。
-  await expect(personWarning).not.toContainText("亲密度：5");
-  await expect(personWarning).toContainText(/手冲咖啡/);
+  await expect(page.getByText("AI 推断值待核验 · 1")).toBeVisible();
 
   const batch = page.getByRole("button", { name: /批量接受低风险高置信事件/ });
   await batch.click();
@@ -119,7 +116,7 @@ test("录入文字后可复核 AI 草稿、编辑并确认入库", async ({ page
 
 test("待确认条目是软提醒，直接入库后关系仍保留 pending 状态", async ({ page }) => {
   await openApp(page);
-  await seedIntakeDraft(page);
+  await page.getByRole("button", { name: "离线演示草稿" }).click();
   await expect(page.getByText(/待确认 \d+/, { exact: true })).toBeVisible();
   await expect(page.getByText(/待确认是软提醒/)).toBeVisible();
 
@@ -135,7 +132,7 @@ test("待确认条目是软提醒，直接入库后关系仍保留 pending 状�
 
 test("录入批准在写入中断后可跨刷新续交且不会重跑模型或重复人物", async ({ page, mockNetwork }) => {
   await openApp(page);
-  const intake = page.getByTestId("intake-panel");
+  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
   await intake
     .getByRole("textbox")
     .fill("唐悦是我的大学摄影社搭档，生日 3 月 12 日，微信 tangyue_photo。");
@@ -181,7 +178,11 @@ test("录入批准在写入中断后可跨刷新续交且不会重跑模型或�
 test("批量接受只确认来源对齐关系，名称子串误配保持可见且可单独处理", async ({ page }) => {
   await openApp(page);
   await page.evaluate(() => sessionStorage.removeItem("openglass.cloud-transfer-consents"));
-  await page.getByTestId("intake-panel").getByRole("textbox").fill("尤二姐是尤氏继母的女儿。");
+  await page
+    .getByRole("heading", { name: /随手写，AI 来整理/ })
+    .locator("..")
+    .getByRole("textbox")
+    .fill("尤二姐是尤氏继母的女儿。");
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
   const cloudConsent = page.getByRole("dialog").filter({ hasText: "发送给云模型" });
   await expect(cloudConsent).toBeVisible();
@@ -237,7 +238,7 @@ test("批量接受只确认来源对齐关系，名称子串误配保持可见�
 
 test("事件草稿按月或年录入时不要求选择具体日期，并能解析原始时间表述", async ({ page }) => {
   await openApp(page);
-  await seedIntakeDraft(page);
+  await page.getByRole("button", { name: "离线演示草稿" }).click();
   await page.waitForSelector("[data-review-fold-trigger]");
   await expandReviewFolds(page);
   await page.waitForSelector('[data-draft-kind="event"]', { state: "attached" });
@@ -265,7 +266,7 @@ test("事件草稿按月或年录入时不要求选择具体日期，并能解�
 
 test("人物改名会传播到 Fact、关系、事件和提醒的持久化引用", async ({ page }) => {
   await openApp(page);
-  await seedIntakeDraft(page);
+  await page.getByRole("button", { name: "离线演示草稿" }).click();
   await expandReviewFolds(page);
   await page.waitForSelector('[data-draft-kind="person"]', { state: "attached" });
   const personDrafts = page.locator('[data-draft-kind="person"]');
@@ -351,7 +352,8 @@ test("更新已有档案时，姓名变更会按预览实际写入", async ({ pa
   await openApp(page);
 
   await page
-    .getByTestId("intake-panel")
+    .getByRole("heading", { name: /随手写，AI 来整理/ })
+    .locator("..")
     .getByRole("textbox")
     .fill(
       "唐悦是我的大学摄影社搭档，生日 3 月 12 日，微信 tangyue_photo，喜欢人像摄影。2026 年 8 月 29 日和唐悦一起讨论校园记忆展。",
@@ -390,7 +392,8 @@ test("更新已有档案时，姓名变更会按预览实际写入", async ({ pa
 test("补充并重新整理会保留人工字段及其来源", async ({ page, mockNetwork }) => {
   await openApp(page);
   await page
-    .getByTestId("intake-panel")
+    .getByRole("heading", { name: /随手写，AI 来整理/ })
+    .locator("..")
     .getByRole("textbox")
     .fill(
       "唐悦是我的大学摄影社搭档，生日 3 月 12 日，微信 tangyue_photo，喜欢人像摄影。2026 年 8 月 29 日和唐悦一起讨论校园记忆展。",
@@ -984,7 +987,7 @@ test("AI 录入可检索并更新已有事件，确认前不覆盖原记录", as
     ],
   });
   await openApp(page);
-  const intake = page.getByTestId("intake-panel");
+  const intake = page.getByRole("heading", { name: /随手写，AI 来整理/ }).locator("..");
   await intake.getByRole("textbox").fill("把团队聚餐改到 9 月 2 日");
   await page.getByRole("button", { name: "AI 整理成档案" }).click();
 
